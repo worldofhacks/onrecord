@@ -20,3 +20,30 @@ Posture: mvp (see posture.md). Deadline: MVP checkpoint tonight 23:59.
 - T-003: review APPROVED w/ 3 Important forward-compat findings (internal-id resolver, doc-length getter, mutable postings exposure) — fix round via test-agent contract extension before merge
 - T-008: review REJECTED (1 Critical key-leak via unhandled httpx errors + 2 Important) — test-extension + fix round dispatched
 - T-004: review REJECTED (1 Critical: id-space collision with T-003 contract — resolved by orchestrator adjudication + T-003 contract extension; T-004 code needs no change if reconciled contract lands; re-verify at wave merge)
+- T-006: impl DONE (00bb196, 16/16; orchestrator gates re-run green)
+- T-007: tests-written (9 failing, 841a3e0; fixture traps pre-validated to have teeth)
+- T-009: review APPROVED w/ 1 Important (criterion-drift on resume) — fix round before tonight's judging session
+- T-005: test-design review FIX-FIRST (math verified correct incl. mutation battery; 5 Important runner-contract gaps — additive fix round pre-freeze)
+- T-008: fix DONE (cc9b823, 13/13; gates re-run green) — re-review dispatched
+- T-006: review APPROVED-with-Critical (real karaoke-tag captions corrupt 83% of parses; entities undecoded) — reality-fixture test extension + fix round; NOTE corpus curation: 'Loudoun' resolved channel is multi-city, relabel/exclude at snapshot
+- T-003: fix DONE (180644f, 24/24; gates re-run green) — re-review dispatched
+- T-008: review-passed (re-review APPROVED; sentinel-key leak repro clean on all error paths)
+- T-005: tests frozen post-hardening (28 red, a63c416); implementer dispatched
+- T-003: review-passed (re-review APPROVED; residual noted: present-term postings live-by-reference — follow-up before BM25 mutation, non-blocking)
+- T-004: review-passed by adjudication (its Critical was the T-003 contract gap, now fixed+re-reviewed; wave-merge integration re-verifies real composition)
+- T-009: fix DONE (980e48a, 16/16; gates re-run green) — re-review dispatched
+- T-009: review-passed (re-review APPROVED; criterion-drift guard verified live)
+- T-007: impl DONE (6d940d2, 9/9; orchestrator gates re-run green)
+- T-005: impl DONE (bd152b5, 28/28; orchestrator gates re-run green)
+- T-005: review-passed (APPROVED 0C/0I/3m — graded harness locked)
+- T-007: review REJECTED (Critical: ToC rows eaten as Item headings — live-confirmed on DLR/HUT; Important: per-ticker isolation unenforced) — test extension + fix round; NOTE: re-pull 10-K/10-Q sections post-fix, 8-K bodies usable
+- T-006: fix DONE (ca1dee3, 19/19; gates re-run green) — re-review dispatched
+- T-006: re-review REJECTED (markup/entities fixed; rollup dup persists — prev_full not reset on settle branch, 80% corruption; 1-line fix verified by reviewer) — multi-cycle test pin + fix round 2
+- T-006: fix round 2 DONE (9e51ff2, 20/20; gates re-run green) — final re-review dispatched
+- T-007: fix DONE (b525c9b, 11/11; gates re-run green) — re-review dispatched
+- T-006: review-passed (final APPROVED; parser-caused corruption 83%→0% on real 20-video sample)
+- T-007: re-review REJECTED round 2 (new distinct defect: CSS-bold headings invisible — DLR sections empty, HUT item7 missing) — pin + fix attempt 2/3
+- T-007: fix round 2 DONE (f63c79f, 12/12; gates re-run green) — final re-review dispatched
+- T-007: review-passed (round-3 APPROVED; DLR 157K/89K chars, HUT 155K/93K — live-verified)
+- WAVE 2: all 8 tickets review-passed — integration dispatched; EDGAR re-pull (fixed parser) launched
+- WAVE 2: COMPLETE — T-002/T-003/T-004/T-005/T-006/T-007/T-008/T-009 merged --no-ff into swarm/onrecord-mvp, zero conflicts (disjoint file scopes held; shared empty tests/unit/ingest/__init__.py auto-merged across T-006/T-007/T-008). Gates green: build OK; pytest 173 passed (baseline 14, +159 across 8 suites); ruff check + format clean. Cross-ticket composition check (real analyzer, real InvertedIndex.build over 10 real EDGAR VST 8-K Docs, real boolean_search AND/OR + phrase_search, no injection) PASS — every SearchResult.doc_id resolved via index.get_doc, all snippets non-empty; dual-space get_doc and analyzer-default contracts from the T-003/T-004 adjudication hold under real composition. Architecture skim vs docs/superpowers/specs/2026-08-11-onrecord-design.md §3: no undeclared cross-module deps (ingest/* depend only on onrecord.types; index/search default-inject the real analyzer; eval/pooling.py's rank_bm25 use matches spec §4.1 pooling protocol) — no drift beyond the already-adjudicated id-space/analyzer-injection changes. No fix tickets filed.
