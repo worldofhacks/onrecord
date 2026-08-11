@@ -1,0 +1,646 @@
+# corpus/registry.yaml
+#
+# Single source of truth for onrecord's corpus adapters (design spec Sec 2.2).
+# Adding scale = adding registry lines, never code.
+#
+# youtube_channels: T1 county/city meeting channels (yt-dlp captions). `id` is
+#   the best-known official YouTube handle/URL for the channel; yt-dlp resolves
+#   handles/URLs directly, so exact channel IDs are not required. Entries with
+#   `verified: false` are best-guess handles that have not been confirmed
+#   against the live channel yet -- an honest placeholder, not a fabricated
+#   certainty. Verify (and flip to `verified: true`) before an ingest adapter
+#   depends on one in anger.
+# tickers: T2 earnings-call universe, grouped by sector (design spec Sec 2.2).
+# docket_sources: T3 regulatory dockets + FERC + RTO interconnection queues.
+
+youtube_channels:
+- id: https://www.youtube.com/@LoudounCountyBoardofSupervisors
+  name: Loudoun County Board of Supervisors
+  jurisdiction: Loudoun County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@PrinceWilliamCountyBoardofSupervisors
+  name: Prince William County Board of Supervisors
+  jurisdiction: Prince William County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@FairfaxCountyBoardofSupervisors
+  name: Fairfax County Board of Supervisors
+  jurisdiction: Fairfax County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@SpotsylvaniaCountyBoardofSupervisors
+  name: Spotsylvania County Board of Supervisors
+  jurisdiction: Spotsylvania County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@StaffordCountyBoardofSupervisors
+  name: Stafford County Board of Supervisors
+  jurisdiction: Stafford County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@FauquierCountyBoardofSupervisors
+  name: Fauquier County Board of Supervisors
+  jurisdiction: Fauquier County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@CulpeperCountyBoardofSupervisors
+  name: Culpeper County Board of Supervisors
+  jurisdiction: Culpeper County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@HenricoCountyBoardofSupervisors
+  name: Henrico County Board of Supervisors
+  jurisdiction: Henrico County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@ChesterfieldCountyBoardofSupervisors
+  name: Chesterfield County Board of Supervisors
+  jurisdiction: Chesterfield County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@HanoverCountyBoardofSupervisors
+  name: Hanover County Board of Supervisors
+  jurisdiction: Hanover County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@LouisaCountyBoardofSupervisors
+  name: Louisa County Board of Supervisors
+  jurisdiction: Louisa County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@CarolineCountyBoardofSupervisors
+  name: Caroline County Board of Supervisors
+  jurisdiction: Caroline County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@OrangeCountyBoardofSupervisors
+  name: Orange County Board of Supervisors
+  jurisdiction: Orange County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@PittsylvaniaCountyBoardofSupervisors
+  name: Pittsylvania County Board of Supervisors
+  jurisdiction: Pittsylvania County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@MecklenburgCountyBoardofSupervisors
+  name: Mecklenburg County Board of Supervisors
+  jurisdiction: Mecklenburg County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@FrederickCountyBoardofSupervisors
+  name: Frederick County Board of Supervisors
+  jurisdiction: Frederick County, VA
+  state: VA
+  verified: false
+- id: https://www.youtube.com/@AbileneCityCouncilProjectStargate
+  name: Abilene City Council (Project Stargate)
+  jurisdiction: Abilene, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@SanAntonioCityCouncil
+  name: San Antonio City Council
+  jurisdiction: San Antonio, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@CPSEnergyBoardofTrustees
+  name: CPS Energy Board of Trustees
+  jurisdiction: San Antonio, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@EllisCountyCommissionersCourt
+  name: Ellis County Commissioners Court
+  jurisdiction: Ellis County, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@TempleCityCouncil
+  name: Temple City Council
+  jurisdiction: Temple, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@FortWorthCityCouncil
+  name: Fort Worth City Council
+  jurisdiction: Fort Worth, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@LancasterCityCouncil
+  name: Lancaster City Council
+  jurisdiction: Lancaster, TX
+  state: TX
+  verified: false
+- id: https://www.youtube.com/@DouglasCountyBoardofCommissioners
+  name: Douglas County Board of Commissioners
+  jurisdiction: Douglas County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@NewtonCountyBoardofCommissioners
+  name: Newton County Board of Commissioners
+  jurisdiction: Newton County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@FayetteCountyBoardofCommissioners
+  name: Fayette County Board of Commissioners
+  jurisdiction: Fayette County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@BartowCountyBoardofCommissioners
+  name: Bartow County Board of Commissioners
+  jurisdiction: Bartow County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@CowetaCountyBoardofCommissioners
+  name: Coweta County Board of Commissioners
+  jurisdiction: Coweta County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@WaltonCountyBoardofCommissioners
+  name: Walton County Board of Commissioners
+  jurisdiction: Walton County, GA
+  state: GA
+  verified: false
+- id: https://www.youtube.com/@NewAlbanyCityCouncil
+  name: New Albany City Council
+  jurisdiction: New Albany, OH
+  state: OH
+  verified: false
+- id: https://www.youtube.com/@LickingCountyCommissioners
+  name: Licking County Commissioners
+  jurisdiction: Licking County, OH
+  state: OH
+  verified: false
+- id: https://www.youtube.com/@ColumbusCityCouncil
+  name: Columbus City Council
+  jurisdiction: Columbus, OH
+  state: OH
+  verified: false
+- id: https://www.youtube.com/@UnionCountyCommissioners
+  name: Union County Commissioners
+  jurisdiction: Union County, OH
+  state: OH
+  verified: false
+- id: https://www.youtube.com/@MaricopaCountyBoardofSupervisors
+  name: Maricopa County Board of Supervisors
+  jurisdiction: Maricopa County, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@ChandlerCityCouncil
+  name: Chandler City Council
+  jurisdiction: Chandler, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@MesaCityCouncil
+  name: Mesa City Council
+  jurisdiction: Mesa, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@GoodyearCityCouncil
+  name: Goodyear City Council
+  jurisdiction: Goodyear, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@BuckeyeCityCouncil
+  name: Buckeye City Council
+  jurisdiction: Buckeye, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@PeoriaCityCouncil
+  name: Peoria City Council
+  jurisdiction: Peoria, AZ
+  state: AZ
+  verified: false
+- id: https://www.youtube.com/@CouncilBluffsCityCouncil
+  name: Council Bluffs City Council
+  jurisdiction: Council Bluffs, IA
+  state: IA
+  verified: false
+- id: https://www.youtube.com/@AltoonaCityCouncil
+  name: Altoona City Council
+  jurisdiction: Altoona, IA
+  state: IA
+  verified: false
+- id: https://www.youtube.com/@WestDesMoinesCityCouncil
+  name: West Des Moines City Council
+  jurisdiction: West Des Moines, IA
+  state: IA
+  verified: false
+- id: https://www.youtube.com/@CedarRapidsCityCouncil
+  name: Cedar Rapids City Council
+  jurisdiction: Cedar Rapids, IA
+  state: IA
+  verified: false
+- id: https://www.youtube.com/@SarpyCountyBoardofCommissioners
+  name: Sarpy County Board of Commissioners
+  jurisdiction: Sarpy County, NE
+  state: NE
+  verified: false
+- id: https://www.youtube.com/@OmahaPublicPowerDistrictBoard
+  name: Omaha Public Power District Board
+  jurisdiction: Sarpy County, NE
+  state: NE
+  verified: false
+- id: https://www.youtube.com/@DeKalbCountyBoard
+  name: DeKalb County Board
+  jurisdiction: DeKalb County, IL
+  state: IL
+  verified: false
+- id: https://www.youtube.com/@MountPleasantCommonCouncil
+  name: Mount Pleasant Common Council
+  jurisdiction: Mount Pleasant, WI
+  state: WI
+  verified: false
+- id: https://www.youtube.com/@PortWashingtonCommonCouncil
+  name: Port Washington Common Council
+  jurisdiction: Port Washington, WI
+  state: WI
+  verified: false
+- id: https://www.youtube.com/@StJosephCountyCommissioners
+  name: St. Joseph County Commissioners
+  jurisdiction: St. Joseph County, IN
+  state: IN
+  verified: false
+- id: https://www.youtube.com/@KansasCityCouncil
+  name: Kansas City Council
+  jurisdiction: Kansas City, MO
+  state: MO
+  verified: false
+- id: https://www.youtube.com/@MemphisCityCouncil
+  name: Memphis City Council
+  jurisdiction: Memphis, TN
+  state: TN
+  verified: false
+- id: https://www.youtube.com/@MemphisLightGasandWaterBoard
+  name: Memphis Light Gas and Water Board
+  jurisdiction: Memphis, TN
+  state: TN
+  verified: false
+- id: https://www.youtube.com/@RichlandParishPoliceJury
+  name: Richland Parish Police Jury
+  jurisdiction: Richland Parish, LA
+  state: LA
+  verified: false
+- id: https://www.youtube.com/@MadisonCountyBoardofSupervisors
+  name: Madison County Board of Supervisors
+  jurisdiction: Madison County, MS
+  state: MS
+  verified: false
+- id: https://www.youtube.com/@BessemerCityCouncil
+  name: Bessemer City Council
+  jurisdiction: Bessemer, AL
+  state: AL
+  verified: false
+- id: https://www.youtube.com/@HuntsvilleCityCouncil
+  name: Huntsville City Council
+  jurisdiction: Huntsville, AL
+  state: AL
+  verified: false
+- id: https://www.youtube.com/@BerkeleyCountyCouncil
+  name: Berkeley County Council
+  jurisdiction: Berkeley County, SC
+  state: SC
+  verified: false
+- id: https://www.youtube.com/@WakeCountyBoardofCommissioners
+  name: Wake County Board of Commissioners
+  jurisdiction: Wake County, NC
+  state: NC
+  verified: false
+- id: https://www.youtube.com/@TheDallesCityCouncil
+  name: The Dalles City Council
+  jurisdiction: The Dalles, OR
+  state: OR
+  verified: false
+- id: https://www.youtube.com/@MorrowCountyCourt
+  name: Morrow County Court
+  jurisdiction: Morrow County, OR
+  state: OR
+  verified: false
+- id: https://www.youtube.com/@GrantCountyPUDCommission
+  name: Grant County PUD Commission
+  jurisdiction: Grant County, WA
+  state: WA
+  verified: false
+- id: https://www.youtube.com/@QuincyCityCouncil
+  name: Quincy City Council
+  jurisdiction: Quincy, WA
+  state: WA
+  verified: false
+- id: https://www.youtube.com/@StoreyCountyCommission
+  name: Storey County Commission
+  jurisdiction: Storey County, NV
+  state: NV
+  verified: false
+- id: https://www.youtube.com/@RenoCityCouncil
+  name: Reno City Council
+  jurisdiction: Reno, NV
+  state: NV
+  verified: false
+- id: https://www.youtube.com/@CheyenneCityCouncil
+  name: Cheyenne City Council
+  jurisdiction: Cheyenne, WY
+  state: WY
+  verified: false
+- id: https://www.youtube.com/@EagleMountainCityCouncil
+  name: Eagle Mountain City Council
+  jurisdiction: Eagle Mountain, UT
+  state: UT
+  verified: false
+- id: https://www.youtube.com/@PryorMayesCountyCommission
+  name: Pryor/Mayes County Commission
+  jurisdiction: Mayes County, OK
+  state: OK
+  verified: false
+- id: https://www.youtube.com/@StillwaterCityCouncil
+  name: Stillwater City Council
+  jurisdiction: Stillwater, OK
+  state: OK
+  verified: false
+- id: https://www.youtube.com/@EllendaleStarkCountyCommission
+  name: Ellendale/Stark County Commission
+  jurisdiction: Stark County, ND
+  state: ND
+  verified: false
+tickers:
+- symbol: VST
+  sector: utilities_ipp
+- symbol: CEG
+  sector: utilities_ipp
+- symbol: NRG
+  sector: utilities_ipp
+- symbol: TLN
+  sector: utilities_ipp
+- symbol: NEE
+  sector: utilities_ipp
+- symbol: SO
+  sector: utilities_ipp
+- symbol: D
+  sector: utilities_ipp
+- symbol: DUK
+  sector: utilities_ipp
+- symbol: AEP
+  sector: utilities_ipp
+- symbol: ETR
+  sector: utilities_ipp
+- symbol: EXC
+  sector: utilities_ipp
+- symbol: PPL
+  sector: utilities_ipp
+- symbol: EVRG
+  sector: utilities_ipp
+- symbol: WEC
+  sector: utilities_ipp
+- symbol: OGE
+  sector: utilities_ipp
+- symbol: AES
+  sector: utilities_ipp
+- symbol: PNW
+  sector: utilities_ipp
+- symbol: IDA
+  sector: utilities_ipp
+- symbol: POR
+  sector: utilities_ipp
+- symbol: ES
+  sector: utilities_ipp
+- symbol: FE
+  sector: utilities_ipp
+- symbol: CNP
+  sector: utilities_ipp
+- symbol: XEL
+  sector: utilities_ipp
+- symbol: SRE
+  sector: utilities_ipp
+- symbol: MSFT
+  sector: hyperscaler_ai
+- symbol: GOOGL
+  sector: hyperscaler_ai
+- symbol: AMZN
+  sector: hyperscaler_ai
+- symbol: META
+  sector: hyperscaler_ai
+- symbol: ORCL
+  sector: hyperscaler_ai
+- symbol: NVDA
+  sector: hyperscaler_ai
+- symbol: AMD
+  sector: hyperscaler_ai
+- symbol: INTC
+  sector: hyperscaler_ai
+- symbol: TSM
+  sector: hyperscaler_ai
+- symbol: MU
+  sector: hyperscaler_ai
+- symbol: CRWV
+  sector: neocloud_miner_pivot
+- symbol: NBIS
+  sector: neocloud_miner_pivot
+- symbol: IREN
+  sector: neocloud_miner_pivot
+- symbol: APLD
+  sector: neocloud_miner_pivot
+- symbol: WULF
+  sector: neocloud_miner_pivot
+- symbol: CIFR
+  sector: neocloud_miner_pivot
+- symbol: HUT
+  sector: neocloud_miner_pivot
+- symbol: CORZ
+  sector: neocloud_miner_pivot
+- symbol: GLXY
+  sector: neocloud_miner_pivot
+- symbol: HIVE
+  sector: neocloud_miner_pivot
+- symbol: BTDR
+  sector: neocloud_miner_pivot
+- symbol: BITF
+  sector: neocloud_miner_pivot
+- symbol: DLR
+  sector: dc_reit_land
+- symbol: EQIX
+  sector: dc_reit_land
+- symbol: IRM
+  sector: dc_reit_land
+- symbol: TPL
+  sector: dc_reit_land
+- symbol: VMC
+  sector: dc_reit_land
+- symbol: PWR
+  sector: builders_ec
+- symbol: EME
+  sector: builders_ec
+- symbol: MTZ
+  sector: builders_ec
+- symbol: FIX
+  sector: builders_ec
+- symbol: IESC
+  sector: builders_ec
+- symbol: STRL
+  sector: builders_ec
+- symbol: ACM
+  sector: builders_ec
+- symbol: J
+  sector: builders_ec
+- symbol: DY
+  sector: builders_ec
+- symbol: VRT
+  sector: power_equipment_cooling
+- symbol: ETN
+  sector: power_equipment_cooling
+- symbol: GEV
+  sector: power_equipment_cooling
+- symbol: POWL
+  sector: power_equipment_cooling
+- symbol: HUBB
+  sector: power_equipment_cooling
+- symbol: NVT
+  sector: power_equipment_cooling
+- symbol: MOD
+  sector: power_equipment_cooling
+- symbol: ROK
+  sector: power_equipment_cooling
+- symbol: TT
+  sector: power_equipment_cooling
+- symbol: JCI
+  sector: power_equipment_cooling
+- symbol: CARR
+  sector: power_equipment_cooling
+- symbol: GNRC
+  sector: power_equipment_cooling
+- symbol: CAT
+  sector: power_equipment_cooling
+- symbol: KMI
+  sector: gas_midstream_fuel
+- symbol: WMB
+  sector: gas_midstream_fuel
+- symbol: ET
+  sector: gas_midstream_fuel
+- symbol: BE
+  sector: gas_midstream_fuel
+- symbol: PLUG
+  sector: gas_midstream_fuel
+- symbol: OKLO
+  sector: nuclear_smr_uranium
+- symbol: SMR
+  sector: nuclear_smr_uranium
+- symbol: LEU
+  sector: nuclear_smr_uranium
+- symbol: CCJ
+  sector: nuclear_smr_uranium
+- symbol: UEC
+  sector: nuclear_smr_uranium
+- symbol: DNN
+  sector: nuclear_smr_uranium
+- symbol: BWXT
+  sector: nuclear_smr_uranium
+- symbol: NNE
+  sector: nuclear_smr_uranium
+- symbol: ITRI
+  sector: grid_copper_fiber_materials
+- symbol: FCX
+  sector: grid_copper_fiber_materials
+- symbol: SCCO
+  sector: grid_copper_fiber_materials
+- symbol: GLW
+  sector: grid_copper_fiber_materials
+- symbol: LUMN
+  sector: grid_copper_fiber_materials
+- symbol: CCOI
+  sector: grid_copper_fiber_materials
+- symbol: MLM
+  sector: grid_copper_fiber_materials
+- symbol: AWK
+  sector: grid_copper_fiber_materials
+- symbol: SMCI
+  sector: servers_networking
+- symbol: DELL
+  sector: servers_networking
+- symbol: HPE
+  sector: servers_networking
+- symbol: ANET
+  sector: servers_networking
+- symbol: CIEN
+  sector: servers_networking
+- symbol: COHR
+  sector: servers_networking
+- symbol: ALAB
+  sector: servers_networking
+- symbol: MRVL
+  sector: servers_networking
+docket_sources:
+- name: Virginia State Corporation Commission
+  regulator: VA SCC
+  url: https://scc.virginia.gov/
+- name: Georgia Public Service Commission (Georgia Power load-growth dockets)
+  regulator: GA PSC
+  url: https://psc.ga.gov/
+- name: Public Utilities Commission of Ohio (AEP data-center tariff)
+  regulator: OH PUCO
+  url: https://puco.ohio.gov/
+- name: Texas Public Utility Commission
+  regulator: TX PUCT
+  url: https://www.puc.texas.gov/
+- name: Arizona Corporation Commission
+  regulator: AZ ACC
+  url: https://www.azcc.gov/
+- name: Pennsylvania Public Utility Commission
+  regulator: PA PUC
+  url: https://www.puc.pa.gov/
+- name: Public Utilities Commission of Nevada
+  regulator: NV PUCN
+  url: https://puc.nv.gov/
+- name: South Carolina Public Service Commission
+  regulator: SC PSC
+  url: https://psc.sc.gov/
+- name: North Carolina Utilities Commission
+  regulator: NC UC
+  url: https://www.ncuc.gov/
+- name: Missouri Public Service Commission
+  regulator: MO PSC
+  url: https://psc.mo.gov/
+- name: Oklahoma Corporation Commission
+  regulator: OK CC
+  url: https://occ.ok.gov/
+- name: Louisiana Public Service Commission
+  regulator: LA PSC
+  url: https://lpsc.louisiana.gov/
+- name: Mississippi Public Service Commission
+  regulator: MS PSC
+  url: https://www.psc.ms.gov/
+- name: Public Service Commission of Wisconsin
+  regulator: WI PSC
+  url: https://psc.wi.gov/
+- name: Minnesota Public Utilities Commission
+  regulator: MN PUC
+  url: https://mn.gov/puc/
+- name: Indiana Utility Regulatory Commission
+  regulator: IN URC
+  url: https://www.in.gov/iurc/
+- name: Wyoming Public Service Commission
+  regulator: WY PSC
+  url: https://psc.wyo.gov/
+- name: North Dakota Public Service Commission
+  regulator: ND PSC
+  url: https://www.psc.nd.gov/
+- name: Tennessee Valley Authority Board (Memphis load)
+  regulator: TVA Board
+  url: https://www.tva.com/about-tva/leadership/board-of-directors
+- name: Federal Energy Regulatory Commission (Talen/AWS co-location; large-load & interconnection reform
+    dockets)
+  regulator: FERC
+  url: https://www.ferc.gov/
+- name: PJM Interconnection — Large-Load Interconnection Queue
+  regulator: PJM (RTO)
+  url: https://www.pjm.com/planning/service-requests
+- name: MISO — Large-Load Interconnection Queue
+  regulator: MISO (RTO)
+  url: https://www.misoenergy.org/planning/generator-interconnection/
+- name: ERCOT — Large-Load Interconnection Queue
+  regulator: ERCOT (RTO)
+  url: https://www.ercot.com/gridinfo/resource
+- name: SPP — Large-Load Interconnection Queue
+  regulator: SPP (RTO)
+  url: https://www.spp.org/engineering/generator-interconnection/
+- name: CAISO — Large-Load Interconnection Queue
+  regulator: CAISO (RTO)
+  url: https://www.caiso.com/participate/generator-interconnection
+- name: NYISO — Large-Load Interconnection Queue
+  regulator: NYISO (RTO)
+  url: https://www.nyiso.com/interconnections
