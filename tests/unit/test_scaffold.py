@@ -109,7 +109,9 @@ def _require_module_spec(name: str, fail_message: str):
 def test_onrecord_package_importable():
     # spec(T-001:AC-1)
     spec = importlib.util.find_spec("onrecord")
-    assert spec is not None, "onrecord package missing (importlib.util.find_spec returned None)"
+    assert spec is not None, (
+        "onrecord package missing (importlib.util.find_spec returned None)"
+    )
 
 
 def test_make_setup_installs_deps_and_onrecord_imports():
@@ -154,10 +156,10 @@ def test_make_setup_installs_deps_and_onrecord_imports():
 def test_doc_dataclass_is_frozen_with_exact_fields():
     # spec(T-001:AC-1) -- frozen interface contract (onrecord/types.py::Doc)
     _require_module_spec("onrecord.types", "onrecord package missing")
-    from onrecord.types import Doc  # noqa: PLC0415
+    from onrecord.types import Doc
 
     assert is_dataclass(Doc), "Doc must be a dataclass"
-    assert getattr(Doc, "__dataclass_params__").frozen, (
+    assert Doc.__dataclass_params__.frozen, (
         "Doc must be declared @dataclass(frozen=True)"
     )
 
@@ -167,7 +169,9 @@ def test_doc_dataclass_is_frozen_with_exact_fields():
         f"Doc fields {tuple(field_map.keys())} do not match expected {expected_order}"
     )
     for name in DOC_REQUIRED_FIELDS:
-        assert field_map[name].default is MISSING, f"Doc.{name} must be required (no default)"
+        assert field_map[name].default is MISSING, (
+            f"Doc.{name} must be required (no default)"
+        )
     for name in DOC_OPTIONAL_FIELDS:
         assert field_map[name].default is None, f"Doc.{name} must default to None"
 
@@ -186,10 +190,10 @@ def test_doc_dataclass_is_frozen_with_exact_fields():
 def test_searchresult_dataclass_is_frozen_with_exact_fields():
     # spec(T-001:AC-1) -- frozen interface contract (onrecord/types.py::SearchResult)
     _require_module_spec("onrecord.types", "onrecord package missing")
-    from onrecord.types import SearchResult  # noqa: PLC0415
+    from onrecord.types import SearchResult
 
     assert is_dataclass(SearchResult), "SearchResult must be a dataclass"
-    assert getattr(SearchResult, "__dataclass_params__").frozen, (
+    assert SearchResult.__dataclass_params__.frozen, (
         "SearchResult must be declared @dataclass(frozen=True)"
     )
 
@@ -277,8 +281,12 @@ def test_registry_tickers_meet_scale_and_schema():
     # spec(T-001:AC-3)
     data = _load_registry_yaml()
     tickers = data.get("tickers")
-    assert isinstance(tickers, list), "registry.yaml must have a top-level 'tickers' list"
-    assert len(tickers) >= TICKER_MIN, f"expected >= {TICKER_MIN} tickers, found {len(tickers)}"
+    assert isinstance(tickers, list), (
+        "registry.yaml must have a top-level 'tickers' list"
+    )
+    assert len(tickers) >= TICKER_MIN, (
+        f"expected >= {TICKER_MIN} tickers, found {len(tickers)}"
+    )
     for i, tk in enumerate(tickers):
         assert isinstance(tk, dict), f"tickers[{i}] must be a mapping"
         missing = REQUIRED_TICKER_KEYS - set(tk.keys())
@@ -300,7 +308,7 @@ def test_registry_docket_sources_meet_scale():
 def test_registry_loadable_via_onrecord_registry_load():
     # spec(T-001:AC-3)
     _require_module_spec("onrecord.registry", "onrecord.registry module missing")
-    from onrecord import registry  # noqa: PLC0415
+    from onrecord import registry
 
     assert hasattr(registry, "load"), "onrecord.registry must expose a load() function"
     loaded = registry.load()
@@ -313,7 +321,9 @@ def test_registry_loadable_via_onrecord_registry_load():
         "onrecord.registry.load() result missing 'youtube_channels'"
     )
     assert tickers is not _MISSING, "onrecord.registry.load() result missing 'tickers'"
-    assert dockets is not _MISSING, "onrecord.registry.load() result missing 'docket_sources'"
+    assert dockets is not _MISSING, (
+        "onrecord.registry.load() result missing 'docket_sources'"
+    )
 
     assert len(channels) >= YOUTUBE_CHANNEL_MIN, (
         f"onrecord.registry.load(): expected >= {YOUTUBE_CHANNEL_MIN} youtube "
