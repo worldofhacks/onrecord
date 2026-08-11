@@ -76,8 +76,8 @@ Retrieval units: speaker-turn groups (transcripts), ~60-90s caption windows (vid
 
 | Version | When | Contents |
 |---|---|---|
-| corpus-v1 | **tonight (MVP)** | 3 county channels (Loudoun, Prince William, Maricopa; trailing 18mo) + 5 tickers × 4 qtrs + 1 PUC docket sample — proves all three adapter families |
-| corpus-v2 | Wed | ~20 T1 channels + top 40 T2 tickers |
+| corpus-v1 | **tonight (MVP)** | **≥2,500 primary docs** (MVP requires "a few thousand documents" loaded Day 1): 6-10 county channels' full caption archives (Loudoun, Prince William, Spotsylvania, Fairfax, Maricopa, New Albany, Memphis, Mount Pleasant…) + EDGAR 10-K/10-Q/8-K pulls for top ~40 tickers + sample earnings transcripts + 1 PUC docket — all three adapter families proven at thousands-scale |
+| corpus-v2 | Wed | ~20 T1 channels + top 40 T2 tickers with full transcript depth |
 | corpus-v3 | Thu-Fri | full T1+T2, core T3 dockets + queues |
 | corpus-v4 | Sat freeze | T4 + stragglers; **final reported metrics run on this freeze** |
 
@@ -116,15 +116,29 @@ Snapshots are immutable; the harness re-runs per version and the scoreboard is t
 
 ## 7. Repo layout, commands, deliverables
 
-Layout and testing strategy: see `docs/presearch.md` §13/§15. Commands: `make setup | test | eval | ingest V=2 | demo` — clean-clone-to-running is one command (`make setup && make demo`), verified by actually cloning fresh.
+Layout and testing strategy: see `docs/presearch.md` §13/§15. Commands: `make setup | test | eval | ingest V=2 | demo` — clean-clone-to-running is one command (`make setup && make demo`), verified by actually cloning fresh. The frozen corpus snapshot ships in-repo compressed (gzipped JSONL; LFS if >100MB) so a clean clone runs **offline** — no network, no API keys required for the graded core path.
 
 **Deliverables map:** GitHub repo (this) · demo video (mechanics + harness run) · Pre-Search doc (`docs/presearch.md`) · AI Development Log (`docs/AI-LOG.md`, started tonight) · AI Cost Analysis (`docs/cost-analysis.md`, tracked from first API call) · eval harness (`make eval`) · metrics report (README, reproducible) · self-eval report · RAG eval scripts + numbers · social post (@GauntletAI).
 
 ## 8. Timeline
 
+### 8.1 MVP checklist — exact 1:1 mapping (all seven, none skipped)
+
+| # | Assignment MVP requirement (verbatim intent) | Where it's met tonight |
+|---|---|---|
+| 1 | Day-1 design doc committed (analysis pipeline, index representation, ranking, judgment set) | This spec: §3 analyzer, §3 index representation, §3 BM25 ranking plan, §4 judgment-set protocol — committed `fa09ead`+ |
+| 2 | Corpus chosen and loaded (a few thousand documents) | corpus-v1 = **≥2,500 primary docs** loaded + normalized (§2.4) |
+| 3 | Hand-built relevance-judgment set started (≥5 queries with labeled relevant docs) | `evalsets/judgments.jsonl`, ≥5 queries, pooled + blind-judged (§4.1) |
+| 4 | Inverted index with document frequencies and term positions | §3: postings carry df, tf, AND positions |
+| 5 | Boolean retrieval (AND/OR) returning documents end-to-end | §3: query → analyzer → postings merge → ranked doc list w/ metadata, via CLI |
+| 6 | Metrics harness stubbed with precision@k / recall on labeled queries (red) | `make eval` prints precision@k + recall@k (plus MRR/NDCG stubs), failing/red tonight by design (§4.2) |
+| 7 | Runnable from a clean clone with one command | `make setup && make demo`, verified by an actual fresh clone; corpus snapshot in-repo, offline (§7) |
+
+### 8.2 Week timeline
+
 | When | Checkpoint | Contents |
 |---|---|---|
-| **Tue night** | **MVP** | spec committed ✓, corpus-v1, ≥5 labeled queries, inverted index, boolean retrieval, red harness, one-command run |
+| **Tue night** | **MVP** | all seven items in §8.1 |
 | Wed | — | corpus-v2, BM25 + full metrics + differential green |
 | **Thu night** | **Early** | ≥15 queries, k1/b sweep, property + robustness suites, corpus-v3 |
 | Fri | — | RAG: chunking sweep, 3 modes, grounded answers + refusal |
