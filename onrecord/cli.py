@@ -6,8 +6,13 @@ docstring, points 3/4):
 - `search "QUERY" [--op AND|OR] [--phrase] [--k N] [--source TYPE]
   [--index DIR]`: `--index` defaults to `artifacts/index`, `--op` defaults
   to `AND`, `--k` defaults to 10 (top-K truncation happens after
-  retrieval). `--source` filters the retrieved hits by `Doc.source_type`
-  (a post-retrieval metadata filter, not a query-term restriction).
+  retrieval). `--k` must be a positive integer (`>= 1`): `--k 0` or a
+  negative `--k` is a usage error -- stderr contains the substring `--k`,
+  exit code 2 (the same convention `--op`'s invalid-choice validation
+  already uses) -- rather than silently falling through to Python's
+  negative-slice semantics on `results[:k]`. `--source` filters the
+  retrieved hits by `Doc.source_type` (a post-retrieval metadata filter,
+  not a query-term restriction).
   `--phrase` runs `phrase_search` instead of `boolean_search`/`--op`. On
   >=1 result: a one-line summary containing `results for "QUERY"`,
   followed by one block per ranked result (rank starting at 1) with
@@ -143,6 +148,24 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def _positive_int(value: str) -> int:
+    """argparse `type=` for `--k`: must parse as an int and be `>= 1`.
+
+    Raising `argparse.ArgumentTypeError` makes argparse itself report the
+    usual usage-error convention (message naming `--k`, exit code 2) --
+    the same path `--op`'s `choices=[...]` validation already uses --
+    rather than silently falling through to Python's negative-slice
+    semantics on `results[:k]`.
+    """
+    try:
+        ivalue = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--k must be an integer, got {value!r}") from exc
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"--k must be >= 1, got {ivalue}")
+    return ivalue
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m onrecord.cli",
@@ -159,7 +182,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--phrase", action="store_true", help="Run an exact-phrase query instead of --op boolean"
     )
     search_p.add_argument(
-        "--k", type=int, default=DEFAULT_K, help=f"Max results (default: {DEFAULT_K})"
+        "--k",
+        type=_positive_int,
+        default=DEFAULT_K,
+        help=f"Max results, must be >= 1 (default: {DEFAULT_K})",
     )
     search_p.add_argument("--source", default=None, help="Filter results to this Doc.source_type")
     search_p.add_argument(

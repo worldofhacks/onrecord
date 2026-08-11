@@ -14,10 +14,13 @@ the committed `corpus/v1/corpus.jsonl.gz` snapshot itself): one JSON object
 per line, keys == `onrecord.types.Doc` field names exactly. The three
 optional fields (`ticker`, `jurisdiction`, `speaker`) may be omitted or
 `null`. A row is malformed -- skipped, with a logged warning, run continues
--- when the line is not valid JSON, or any *required* field (`id`, `text`,
-`source_type`, `venue_type`, `date`, `deep_link`) is missing or `null`. An
-unrecognized extra key is ignored, not fatal. A blank/whitespace-only line
-is skipped silently (not counted as malformed, not logged).
+-- when the line is not valid JSON, OR the line is valid JSON but doesn't
+decode to a JSON object (a list, bare number/string, or bare `null` --
+anything whose Python type isn't `dict`; never an uncaught exception), OR
+any *required* field (`id`, `text`, `source_type`, `venue_type`, `date`,
+`deep_link`) is missing or `null`. An unrecognized extra key is ignored,
+not fatal. A blank/whitespace-only line is skipped silently (not counted
+as malformed, not logged).
 
 `load_corpus_snapshot` (below) reads that same row schema back out of a
 gzipped snapshot -- shared by `onrecord.cli`'s offline clean-clone fallback
@@ -60,6 +63,15 @@ def _parse_jsonl_lines(lines: Iterable[str], source_label: str) -> Iterator[Doc]
             row = json.loads(line)
         except json.JSONDecodeError:
             logger.warning("%s:%d: skipping malformed row (invalid JSON)", source_label, lineno)
+            continue
+
+        if not isinstance(row, dict):
+            logger.warning(
+                "%s:%d: skipping malformed row (valid JSON but not an object: %s)",
+                source_label,
+                lineno,
+                type(row).__name__,
+            )
             continue
 
         missing = [field for field in REQUIRED_FIELDS if row.get(field) is None]
