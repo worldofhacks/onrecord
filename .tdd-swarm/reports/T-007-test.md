@@ -3,13 +3,18 @@
 **Status:** DONE (frozen failing tests written, confirmed RED against the
 current empty stub, confirmed GREEN against a throwaway correct
 implementation built outside the worktree's tracked files, then reverted).
-**Update (post-review):** review REJECTED the implementation on live-data
-evidence (`.tdd-swarm/reports/T-007-review.md`); suite extended with 2 more
-adversarial tests per the reviewer's findings — see "Update: review-driven
-extension" below.
+**Update (post-review, round 1):** review REJECTED the implementation on
+live-data evidence (`.tdd-swarm/reports/T-007-review.md`); suite extended
+with 2 more adversarial tests per the reviewer's findings — see "Update:
+review-driven extension" below.
+**Update (post-review, round 2):** re-review confirmed the round-1 fix
+(ToC stubs + per-ticker isolation) but found a DISTINCT, still-open defect
+on the SAME live filings (CSS-inline-bold headings silently produce no
+marker at all); suite extended again — see "Update 2: round-2
+review-driven extension" below.
 
 **Test file:** `tests/unit/ingest/test_edgar.py` (+ `tests/unit/ingest/__init__.py`)
-**Fixtures:** `tests/fixtures/edgar/{10k.html, 10k_with_toc.html, 8k.html, ex99_1.html, ex10_1.html, submissions.json, company_tickers.json, submissions_good.json}`
+**Fixtures:** `tests/fixtures/edgar/{10k.html, 10k_with_toc.html, 10k_css_bold.html, 8k.html, ex99_1.html, ex10_1.html, submissions.json, company_tickers.json, submissions_good.json}`
 
 **Run command:**
 ```
@@ -72,7 +77,8 @@ module docstring — treat it as part of the frozen contract):
 |---|---|---|
 | AC-1 | `test_parse_10k_extracts_item1a_and_item7_with_correct_ids_and_deep_links` | 10-K fixture (Items 1, 1A, 7, 8) → exactly `item1a` + `item7` Docs, correct `id`/`deep_link`/`source_type="filing"`/`venue_type="coached"`/`date`, correct content per section, no cross-bleed between sections |
 | AC-1 (adversarial) | `test_parse_10k_ignores_item_heading_mentioned_mid_sentence` | Item 1's body contains "...discussed in Item 1A below..." mid-sentence (not a heading); Item 7's body contains "...presented in Item 8 of this report..." mid-sentence. Asserts the real Item 1A body marker is present (not short-circuited by the fake mention) and Item 7's tail marker (placed between the fake "Item 8" mention and the real Item 8 heading) survives — i.e. Item 7 isn't truncated early. Verified against a naive last-match-wins non-anchored regex: it actually loses the Item-7 tail marker, confirming the trap has teeth. |
-| AC-1 (adversarial, post-review) | `test_parse_10k_prefers_real_heading_over_table_of_contents_stub` | `10k_with_toc.html`: a realistic hyperlinked Table of Contents (`<p><a href="#...">...<b>Item 1A.</b>...</a></p>` rows — same shape confirmed on the live DLR 10-K) sits BEFORE the real headings (each preceded by a plain `<a id="...">` target). Asserts the real, paragraphs-long section content wins (real marker tokens present, `len(text) > 200`), not the ToC row's heading-plus-page-number stub. |
+| AC-1 (adversarial, post-review r1) | `test_parse_10k_prefers_real_heading_over_table_of_contents_stub` | `10k_with_toc.html`: a realistic hyperlinked Table of Contents (`<p><a href="#...">...<b>Item 1A.</b>...</a></p>` rows — same shape confirmed on the live DLR 10-K) sits BEFORE the real headings (each preceded by a plain `<a id="...">` target). Asserts the real, paragraphs-long section content wins (real marker tokens present, `len(text) > 200`), not the ToC row's heading-plus-page-number stub. |
+| AC-1 (adversarial, post-review r2) | `test_parse_10k_recognizes_css_bold_headings_without_tag_bold` | `10k_css_bold.html`: real Item 1A/Item 7 headings bolded purely via inline CSS (`style="font-weight:bold"` on the `<p>`, `font-weight:700` on a nested `<span>`, `font-weight:bolder`) with NO `<b>`/`<strong>` tag anywhere in the document (fixture self-asserts this). Asserts both sections still come back with substantive real content — same live shape confirmed on DLR's real Item 1A + Item 7 headings and HUT's real Item 7 heading. |
 | AC-4 | `test_parse_10k_strips_tags_scripts_and_decodes_entities` | Same 10-K fixture (nested `<table>`s, a `<script>` block placed *inside* the Item 1A section, `&amp;`/`&nbsp;` entities): no `<`/`>` in output, script payload never leaks, no literal `&amp;`/`&nbsp;` remains, `&amp;` decodes to a real `&`, nested-table cell text survives as plain text |
 | AC-2 | `test_parse_8k_produces_body_and_exhibit_docs` | 8-K body fixture + separate EX-99.1 exhibit fixture, each parsed independently → one `body` Doc + one `ex-99.1` Doc, correct ids/links, no smearing between the two, tags/scripts/entities cleaned in the 8-K body too |
 | AC-2 | `test_parse_8k_body_not_split_by_internal_item_headings` | 8-K's own Item 2.02 / Item 9.01 headings must NOT trigger a 10-K-style split — content from both survives in the single `body` Doc |
@@ -82,9 +88,10 @@ module docstring — treat it as part of the frozen contract):
 | AC-5 | `test_fetch_filings_unknown_ticker_skips_without_raising_and_other_tickers_proceed` | Ticker absent from the `company_tickers.json` fixture → `fetch_filings("BAD", ...)` returns `[]`, logs a warning mentioning "BAD", raises nothing; a subsequent call for `"GOOD"` against the *same* transport instance still succeeds — proves failures don't poison later calls |
 | AC-5 (adversarial, post-review) | `test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed` | `company_tickers.json`'s new `"BADCIK"` entry has `"cik_str": "N/A"` (malformed/corrupt data, distinct from an absent ticker). Asserts `fetch_filings("BADCIK", ...)` itself does not raise (pinned at the `fetch_filings` contract level, not by driving the CLI/`main()`, since `main()`'s per-ticker loop has no try/except of its own) and a subsequent `fetch_filings("GOOD", ...)` on the same transport still succeeds |
 
-11 test items total: the original 9 stay green; 2 new ones (added post-review)
-are RED against the current implementation for the exact root causes the
-reviewer confirmed on live data (see "Update: review-driven extension" below).
+12 test items total: the original 9 + the 2 round-1 additions (11) all stay
+green against the current (round-1-fixed) implementation; 1 new round-2
+addition is RED for the exact root cause the round-2 reviewer confirmed on
+the SAME live filings (see "Update 2: round-2 review-driven extension" below).
 
 ## Verification performed
 
@@ -262,3 +269,99 @@ against the last commit at hand-off):
   around `fetch_filings`'s per-ticker body, as the throwaway patch does),
   not a narrow `except ValueError` — the point of AC-5 is "no exception
   escapes," not "this one specific exception type is handled."
+
+## Update 2: round-2 review-driven extension
+
+Commit `b525c9b` fixed round 1's Critical-1 (ToC stubs) and Important-1
+(CLI isolation) — round-2 re-review confirmed both fixed (11/11 T-007
+tests pass, 25/25 full suite, all local gates green) by re-deriving the
+exact same live DLR/HUT filings through the patched `parse_filing_html`.
+But that same re-derivation surfaced a **distinct, still-open Critical-2**
+on those same two filings: DLR's real Item 1A **and** Item 7 headings, and
+HUT's real Item 7 heading, are all styled `<p style="...font-weight:bold;
+...">ITEM 1A. RISK FACTORS</p>` — bold via **inline CSS on the `<p>`
+itself**, with **no `<b>`/`<strong>` tag anywhere in the paragraph**.
+`_SectionExtractor`'s bold tracking only increments on `<b>`/`<strong>`
+start/end tags (never inspects `style`), so `_p_has_nonbold_text` becomes
+`True` the instant any text is emitted and `_ITEM_HEADING_RE` is never
+even attempted — the real heading produces **no marker at all**. This is a
+different failure mode than Critical-1 (false-positive ToC marker): this
+is a false-negative, the real heading is structurally invisible. Net
+effect on the filings that motivated the original review: DLR went from
+"misleading ToC-stub text" (round 1) to "nothing for either section" (still
+wrong, just failing more safely); HUT's `item7` was and still is silently
+absent.
+
+One new test added (fixture + test only — `onrecord/ingest/edgar.py` was
+never modified; verified via `git diff --stat`/`git status` at every step
+below):
+
+**`test_parse_10k_recognizes_css_bold_headings_without_tag_bold`** (AC-1) —
+new fixture `tests/fixtures/edgar/10k_css_bold.html`: Items 1/1A/7/8, each
+real heading CSS-bold only, covering the DLR-observed variants named by
+the coordinator: `font-weight:bold` directly on the `<p>` (Items 1, 1A),
+`font-weight:700` on a `<span>` nested inside the `<p>` (Item 7 — the
+"possibly within a span" variant), and `font-weight:bolder` directly on
+the `<p>` (Item 8, an extra variant for coverage). The fixture has no ToC
+(that concern is already covered/fixed by the round-1 test) and the test
+itself asserts `"<b>" not in html and "<strong>" not in html` as a fixture
+sanity check, so a future accidental edit reintroducing tag-bold would be
+caught immediately rather than silently invalidating the test's purpose.
+Asserts both `item1a` and `item7` come back with substantive real content
+(real marker tokens present, `len(text) > 200`), matching the coordinator's
+"parse must return substantive Item 1A + Item 7 sections."
+
+The module docstring's frozen contract gained a second PINNED paragraph
+(after the round-1 ToC one) spelling out that "bold" for heading
+recognition must include CSS `font-weight` (on the `<p>` or a nested
+`<span>`) in addition to `<b>`/`<strong>` tags.
+
+### Verification performed (this update)
+
+1. Ran the extended suite against the actual committed (round-1-fixed,
+   round-2-still-flawed) `onrecord/ingest/edgar.py` (commit `b525c9b`):
+   **1 failed, 11 passed** — the one failure is the exact confirmed root
+   cause, not incidental breakage: `by_section == set()` (no `item1a`/
+   `item7` key at all — `_extract_item_sections` recorded zero markers for
+   the CSS-bold headings), reproducing the reviewer's "DLR item1a/item7
+   now 0 chars; HUT item7 same cause" finding exactly.
+2. Built a throwaway patch directly on the committed implementation:
+   added a `_style_is_bold(style)` helper (`font-weight` value is
+   `bold`/`bolder`/numeric ≥ 600) and extended `_SectionExtractor` to (a)
+   treat a `<p>` whose own `style` attribute is bold as bold context for
+   its direct text, and (b) track a `<span style="font-weight:...">`
+   nested inside a `<p>` the same way `<b>`/`<strong>` already are (via a
+   small per-paragraph tag stack so nesting/unwinding stays correct) —
+   confirmed **12/12 pass** against the patch, proving the new test is
+   achievable, not failing-by-construction. Reverted via
+   `git checkout -- onrecord/ingest/edgar.py`, confirmed zero diff against
+   the commit (`git diff --stat` empty), then re-ran and confirmed
+   **1 failed, 11 passed** again (RED restored).
+3. `uv run ruff format --check tests/` and `uv run ruff check tests/` —
+   clean.
+4. `.tdd-swarm/spec-lint.sh tickets/T-007.md` → `spec-lint OK: all ACs
+   covered for T-007`.
+5. Full repo suite (`uv run pytest -q`) at hand-off: **26 collected, 1
+   failed, 25 passed** (25 passed = 14 T-001 + all 11 prior T-007 tests,
+   still green; the 1 new T-007 test is the only failure, RED for the
+   intended reason above).
+
+### Notes for the Implementation Agent (round-2 revision)
+
+- This is orthogonal to the round-1 ToC fix — the throwaway patch above
+  touched only bold-tracking inside `_SectionExtractor` (`__init__`,
+  `handle_starttag`, `handle_endtag`, `handle_data`); the ToC
+  href-anchor/min-length filter in `_extract_item_sections` did not need
+  to change at all, and none of the 11 previously-passing tests needed
+  their assertions touched.
+- Don't special-case "`<p style=...>` directly" vs "`<span style=...>`
+  nested inside `<p>`" as two different code paths if avoidable — both are
+  just "is there bold styling in scope for this run of text," and the
+  fixture exercises both plus a third CSS value (`bolder`) specifically so
+  a narrow, single-shape fix (e.g. only checking the `<p>`'s own `style`
+  and missing the nested-`<span>` case) would still fail this test.
+- Real EDGAR filings are not internally consistent about how they bold a
+  given heading (tag-bold vs. CSS-bold, sometimes within the same
+  document) — a robust fix treats tag-bold and CSS-bold as two OR'd
+  signals for the same underlying "is this bold" concept, not an
+  either/or dispatch on document shape.

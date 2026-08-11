@@ -51,6 +51,21 @@ Run with:
       real section (confirmed: DLR's item1a/item7 came back as 26-98-char
       ToC-row stubs; HUT's item7 was silently dropped entirely). See
       `test_parse_10k_prefers_real_heading_over_table_of_contents_stub`.
+
+      PINNED (per round-2 review finding, live-data re-confirmed on the
+      SAME DLR/HUT 10-Ks after the ToC fix above landed): "bold" for
+      heading-recognition purposes is not only a `<b>`/`<strong>` TAG --
+      real filings commonly bold an Item heading via inline CSS on the
+      `<p>` itself (`style="...font-weight:bold;..."` or `font-weight:700`
+      / `font-weight:bolder`) or on a `<span>` nested inside the `<p>`,
+      with NO `<b>`/`<strong>` tag anywhere in that paragraph. A heading
+      styled this way must be recognized exactly like a tag-bold one --
+      confirmed live: DLR's real Item 1A AND Item 7 headings, and HUT's
+      real Item 7 heading, are ALL styled this way with no `<b>`/`<strong>`
+      present, and a bold-tracker that only watches `<b>`/`<strong>` never
+      records a marker for them at all -- not a stub (Critical-1's
+      failure mode), a silent, total absence with no warning and no Doc.
+      See `test_parse_10k_recognizes_css_bold_headings_without_tag_bold`.
     - form == "8-K": the ENTIRE document becomes ONE Doc, section "body".
       8-K internal item numbering (2.02, 9.01, ...) uses a different scheme
       than 10-K/Q Items 1-15 and must NOT be split on.
@@ -152,6 +167,8 @@ EIGHTK_ACCESSION = "0001234567-26-000101"
 EIGHTK_FILING_DATE = "2026-08-10"
 TENK_TOC_ACCESSION = "0001234567-26-000199"
 TENK_TOC_FILING_DATE = "2026-03-05"
+TENK_CSS_BOLD_ACCESSION = "0001234567-26-000299"
+TENK_CSS_BOLD_FILING_DATE = "2026-04-12"
 
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL_GOOD = "https://data.sec.gov/submissions/CIK0007654321.json"
@@ -387,6 +404,69 @@ def test_parse_10k_prefers_real_heading_over_table_of_contents_stub():
     assert "TOC_FIXTURE_ITEM7_REAL_BODY_TOKEN" not in item1a.text
     assert "TOC_FIXTURE_ITEM8_BODY_TOKEN" not in item7.text
     assert "TOC_FIXTURE_ITEM1A_REAL_BODY_TOKEN" not in item7.text
+
+
+def test_parse_10k_recognizes_css_bold_headings_without_tag_bold():
+    """spec(T-007:AC-1)
+
+    Adversarial per round-2 review (live-data finding on real DLR/HUT
+    10-Ks, re-verified AFTER the ToC fix above already landed): a real
+    10-K commonly bolds an Item heading via inline CSS -- on the `<p>`
+    itself (`style="...font-weight:bold;..."`, `font-weight:bolder`) or on
+    a `<span>` nested inside the `<p>` (`font-weight:700`) -- with NO
+    `<b>`/`<strong>` tag anywhere in that paragraph. Confirmed live: DLR's
+    real Item 1A AND Item 7 headings, and HUT's real Item 7 heading, are
+    ALL styled exactly this way. A bold-tracker that only watches
+    `<b>`/`<strong>` tags never records a marker for these at all -- the
+    section isn't a short stub (that was Critical-1, already fixed), it is
+    silently, totally absent: no Doc, no warning.
+
+    tests/fixtures/edgar/10k_css_bold.html has NO Table of Contents (that
+    concern is already covered elsewhere) and, by construction, NO
+    `<b>`/`<strong>` tag anywhere in the document -- every Item heading
+    (1, 1A, 7, 8) is CSS-bold only, covering the DLR-observed style
+    variants: font-weight:bold directly on <p>, font-weight:700 on a
+    nested <span>, and font-weight:bolder directly on <p>.
+    """
+    parse_filing_html = _get_callable("parse_filing_html")
+    html = _read_fixture("10k_css_bold.html")
+    # fixture sanity: this really does exercise "bold with no tag-bold"
+    assert "<b>" not in html
+    assert "<strong>" not in html
+
+    docs = parse_filing_html(
+        html, "10-K", "ACME", TENK_CSS_BOLD_ACCESSION, TENK_CSS_BOLD_FILING_DATE
+    )
+    by_section = _docs_by_section(docs)
+    assert set(by_section) == {"item1a", "item7"}
+
+    item1a, item7 = by_section["item1a"], by_section["item7"]
+    _assert_doc(
+        item1a,
+        ticker="ACME",
+        accession=TENK_CSS_BOLD_ACCESSION,
+        section="item1a",
+        filing_date=TENK_CSS_BOLD_FILING_DATE,
+    )
+    _assert_doc(
+        item7,
+        ticker="ACME",
+        accession=TENK_CSS_BOLD_ACCESSION,
+        section="item7",
+        filing_date=TENK_CSS_BOLD_FILING_DATE,
+    )
+
+    # substantive real content, not merely "some non-empty text"
+    assert "CSS_FIXTURE_ITEM1A_REAL_BODY_TOKEN" in item1a.text
+    assert "CSS_FIXTURE_ITEM7_REAL_BODY_TOKEN" in item7.text
+    assert len(item1a.text) > 200
+    assert len(item7.text) > 200
+
+    # no cross-bleed into neighboring/unkept sections
+    assert "CSS_FIXTURE_ITEM1_PREAMBLE_TOKEN" not in item1a.text
+    assert "CSS_FIXTURE_ITEM7_REAL_BODY_TOKEN" not in item1a.text
+    assert "CSS_FIXTURE_ITEM8_BODY_TOKEN" not in item7.text
+    assert "CSS_FIXTURE_ITEM1A_REAL_BODY_TOKEN" not in item7.text
 
 
 # --------------------------------------------------------------------------
