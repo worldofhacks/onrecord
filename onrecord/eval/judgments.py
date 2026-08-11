@@ -39,6 +39,24 @@ def _load_judged_pairs(out_path: Path) -> set[tuple[str, str]]:
     return judged
 
 
+def _find_stored_criterion(out_path: Path, query_id: str) -> str | None:
+    """Return the criterion of the first (file-order) existing row in
+    out_path whose query_id matches, or None if out_path is missing or has
+    no such row.
+    """
+    if not out_path.exists():
+        return None
+    with out_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            row = json.loads(stripped)
+            if row["query_id"] == query_id:
+                return row["criterion"]
+    return None
+
+
 def run_judging_session(
     query: str,
     query_id: str,
@@ -46,21 +64,40 @@ def run_judging_session(
     out_path: str | Path,
     k_per_source: int,
     seed: int,
+    amend_criterion: bool = False,
 ) -> int:
     """Run one interactive judging session; returns 0 on success.
 
     1. Prompt for and capture the relevance criterion (stdout, before any
        candidate text is shown -- AC-4).
-    2. Pool candidates and drop any whose (query_id, doc.id) is already
+    2. Criterion-drift guard: if a criterion is already on file for this
+       query_id and the freshly typed one differs, refuse (stderr,
+       "CRITERION MISMATCH", nonzero return, zero rows written) unless
+       `amend_criterion` is set, in which case proceed with the new
+       criterion applied to every row written this session.
+    3. Pool candidates and drop any whose (query_id, doc.id) is already
        judged in out_path (AC-3, resumable).
-    3. For each remaining candidate, print its text, prompt for a grade
+    4. For each remaining candidate, print its text, prompt for a grade
        (0/1/2/s), and append a JSONL row on 0/1/2; "s"/"S" skips silently.
     """
     criterion = input("Relevance criterion: ")
 
+    out_path = Path(out_path)
+    stored_criterion = _find_stored_criterion(out_path, query_id)
+    if stored_criterion is not None and stored_criterion != criterion and not amend_criterion:
+        print(
+            "CRITERION MISMATCH for query_id="
+            f"{query_id!r}: stored criterion is {stored_criterion!r}, "
+            f"freshly typed criterion is {criterion!r}. Refusing to resume "
+            "under a materially different criterion -- pass --amend-criterion "
+            "to proceed anyway (new rows will carry the new criterion; "
+            "already-judged rows are left untouched).",
+            file=sys.stderr,
+        )
+        return 1
+
     candidates = pool_candidates(query, corpus_path, k_per_source, seed)
 
-    out_path = Path(out_path)
     judged_pairs = _load_judged_pairs(out_path)
     remaining = [c for c in candidates if (query_id, c.id) not in judged_pairs]
 
@@ -108,6 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="path to the judgments JSONL file")
     parser.add_argument("--k-per-source", type=int, default=10, help="candidates per source")
     parser.add_argument("--seed", type=int, default=0, help="seed for pooling RNG")
+    parser.add_argument(
+        "--amend-criterion",
+        action="store_true",
+        default=False,
+        help=(
+            "allow resuming this query_id under a criterion that differs from "
+            "what's already on file; new rows carry the new criterion"
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -118,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         out_path=args.out,
         k_per_source=args.k_per_source,
         seed=args.seed,
+        amend_criterion=args.amend_criterion,
     )
 
 
