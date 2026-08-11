@@ -157,3 +157,98 @@ guard helper (via `pytest.fail`), not an uncaught exception/collection error.
 - Do not edit `tests/unit/test_judgments.py` to make it pass — frozen. If a
   genuine ambiguity or defect is found, escalate to the orchestrator/Reviewer
   rather than editing directly.
+
+---
+
+## Extension — criterion-drift guard on resume (post-implementation, post-review)
+
+**Trigger:** Reviewer + Security Agent review of the initial implementation
+(`.tdd-swarm/reports/T-009-review.md`, Important finding #1) found that
+rerunning a `query_id` under a materially different criterion silently
+reuses stale grades and discards the new criterion text with zero warning —
+an honesty-integrity hole for a tool whose entire purpose is building labels
+without fooling yourself. Not a violation of any originally-frozen AC (the
+resumability key was pinned to `(query_id, doc_id)` only), but the
+coordinator asked this be closed before tonight's real judging session by
+extending the frozen contract rather than deferring it to a follow-up
+ticket.
+
+**Status:** DONE. 2 new failing tests added, both confirmed to fail against
+the current implementation (`onrecord/eval/judgments.py` as committed by the
+Implementation Agent) for the right reason. The original 14 tests in this
+file are unaffected (all still pass) — full-repo regression is
+`2 failed, 28 passed`.
+
+### New contract (module docstring, "Criterion-drift guard on resume")
+
+- New CLI flag `--amend-criterion` (store_true, default False).
+- Right after the criterion is captured (still first, before pooling/display
+  — AC-4 unaffected), compare it against the "stored criterion" for
+  `query_id`: the `criterion` field of the first existing row in `out_path`
+  matching that `query_id` (none found → nothing to compare, proceed as
+  before).
+- Differ + no `--amend-criterion` → refuse: write nothing to `out_path`
+  (byte-identical before/after), display no candidate text, write a message
+  to **stderr** containing the marker `"CRITERION MISMATCH"`, both criterion
+  strings verbatim, and a mention of `--amend-criterion`; return 1.
+- Differ + `--amend-criterion` → proceed; every newly written row this
+  session carries the **new** criterion; already-judged `(query_id, doc_id)`
+  pairs stay skipped and their stored rows are untouched (amending is not
+  retroactive).
+- Identical → proceed exactly as before regardless of the flag.
+
+### New/changed tests
+
+| Test | Type | What it checks |
+|---|---|---|
+| `test_cli_refuses_resume_when_criterion_differs_and_writes_no_rows` | new, `spec(T-009:AC-3)` | Pre-existing `(q1, docA)` row under `_OLD_CRITERION`; session resumed with `_NEW_CRITERION`, no flag. Asserts `rc != 0`, `out_path` bytes unchanged, no candidate text on stdout/stderr, and stderr contains `"CRITERION MISMATCH"` + both criterion strings + `"--amend-criterion"`. Scripted stdin supplies full grade answers (not just the criterion line) specifically so a *buggy* implementation that wrongly proceeds runs to completion and the test fails on a clean `assert rc != 0`, rather than on an incidental `EOFError` from stdin running dry. |
+| `test_cli_amend_criterion_flag_allows_resume_and_new_rows_carry_new_criterion` | new, `spec(T-009:AC-3)` | Same setup, run with `--amend-criterion`. Asserts `rc == 0`, docA still not re-displayed and its row byte-identical to the original (untouched, old criterion), docB/docC's new rows carry `_NEW_CRITERION`. |
+| `test_cli_resumability_does_not_represent_already_judged_doc` | **adjusted** (pre-existing) | `existing_row["criterion"]` changed from an arbitrary unrelated string to `_CLI_CRITERION` (identical to what's freshly typed in that test), so this test cleanly represents the "identical criterion → resumes normally" path now that a separate, dedicated drift-guard scenario exists. Also added an assertion that `"CRITERION MISMATCH"` does **not** appear in captured output. Without this fix, the test would start failing once the drift guard is correctly implemented (it previously exercised mismatched criteria with no `--amend-criterion` while still expecting `rc == 0`), which would make the frozen suite internally self-contradictory. This is a "the fixture value was an accidental, unlabeled edge case now that an adjacent rule exists" fix, not an edit to relax any assertion. |
+| `_run_cli` helper | **extended** (pre-existing) | Added an `extra_args: list[str] | None = None` parameter (appended to argv) so the new `--amend-criterion` tests can reuse it. Backward compatible — no existing call site changed behavior. |
+
+`test_cli_resumability_never_duplicates_a_row` needed no change: both its
+sessions already use the same `_CLI_CRITERION`, so it was already a
+same-criterion scenario.
+
+### Verification performed
+
+1. Ran `uv run pytest tests/unit/test_judgments.py -v` against the current
+   implementation (`onrecord/eval/pooling.py` + `onrecord/eval/judgments.py`
+   as committed): **14 passed, 2 failed** — the original 14 stay green, the 2
+   new tests fail.
+2. Confirmed both new failures are clean/meaningful, not incidental:
+   - `test_cli_refuses_resume_when_criterion_differs_and_writes_no_rows` →
+     `AssertionError: a criterion mismatch on resume must return a
+     non-zero/failure status` (`assert 0 != 0`) — captured stdout shows the
+     current implementation happily printed docB's and docC's candidate
+     text and prompted for grades, i.e. it proceeded straight through the
+     mismatch exactly as the review's live repro described.
+   - `test_cli_amend_criterion_flag_allows_resume_and_new_rows_carry_new_criterion`
+     → `SystemExit: 2` from `argparse` ("unrecognized arguments:
+     --amend-criterion") — the flag doesn't exist yet, as expected.
+3. `bash .tdd-swarm/spec-lint.sh tickets/T-009.md` → still
+   `spec-lint OK: all ACs covered for T-009`.
+4. `uv run ruff format --check tests/` / `uv run ruff check tests/` → clean.
+5. Full-repo regression: `uv run pytest -q` → `2 failed, 28 passed` (T-001's
+   14 + this file's original 14 = 28 baseline preserved; only the 2 new
+   tests are red).
+6. `git status --short` before commit: only `tests/unit/test_judgments.py`
+   modified (plus this report). No implementation files touched.
+
+### Notes for the Implementation Agent (round 2)
+
+- The refusal/amend check belongs in `run_judging_session`, immediately
+  after `criterion = input(...)` and before `pool_candidates(...)` is
+  called — consistent with AC-4's existing structural guarantee that no
+  candidate is even pooled before the criterion step completes.
+- The "stored criterion" lookup can reuse the same `out_path`-scanning code
+  path as `_load_judged_pairs` (or extend it) — just also capture the first
+  matching `criterion` per `query_id` in the same read pass. It must still
+  tolerate `out_path` not existing yet.
+- Write the refusal message to `sys.stderr`, not `sys.stdout` —
+  `test_cli_resumability_does_not_represent_already_judged_doc` (the
+  same-criterion path) explicitly asserts `"CRITERION MISMATCH"` is absent
+  from **either** stream in the non-drift case, and the new refusal test
+  checks stderr specifically.
+- Do not edit the two new tests or the adjusted fixture to make them pass —
+  frozen, same as the rest of this file.

@@ -123,11 +123,51 @@ Session sequence, driven entirely through the `input()`/`print()` builtins
        - "s" / "S" -> skip; no row is written for this candidate; continue.
   4. Return 0.
 
+Criterion-drift guard on resume (frozen contract extension -- honesty-
+integrity fix for Reviewer finding #1, .tdd-swarm/reports/T-009-review.md):
+a criterion typed at the resume prompt that materially differs from what's
+already on file for this `query_id` must never be silently swallowed.
+
+  An additional CLI flag:
+    --amend-criterion  FLAG  optional  store_true, default False
+
+  Step 1 (criterion capture) is unchanged and still happens first, before
+  anything about candidates. Immediately after capturing `criterion`, but
+  BEFORE calling `pool_candidates` or displaying/prompting anything else,
+  the session determines the "stored criterion" for `query_id`: the
+  `criterion` field of the first (file-order) existing row in `out_path`
+  whose `query_id` matches. If no such row exists, there is nothing to
+  compare against and the session proceeds exactly as before, regardless of
+  `--amend-criterion`.
+
+  If a stored criterion exists and differs (plain string inequality) from
+  the freshly typed `criterion`:
+    - without `--amend-criterion`: the session refuses to proceed for this
+      query_id. It writes NOTHING to `out_path` (byte-identical before and
+      after the run), displays NO candidate text, and writes a message to
+      stderr containing the marker substring "CRITERION MISMATCH", the
+      stored criterion text verbatim, the freshly typed criterion text
+      verbatim, and a mention of "--amend-criterion" as the escape hatch.
+      `run_judging_session` / `main` return 1 (not 0).
+    - with `--amend-criterion`: the session proceeds normally. Every row
+      newly written this session carries the freshly typed (new)
+      criterion. Resumability is otherwise unaffected -- `(query_id,
+      doc_id)` pairs already judged (under the old criterion) are still
+      skipped and their stored rows are left untouched; amending is not
+      retroactive.
+
+  If the stored criterion is identical to the freshly typed one, the
+  session proceeds exactly as before (no message; `--amend-criterion` is a
+  no-op either way).
+
 Adversarial properties this file enforces beyond the bare ACs:
   - the final pooled order must differ from the naive
     grep-then-bm25-then-random concatenation order for a fixed seed (a
     real shuffle happened, not just concatenation-that-looks-shuffled);
-  - resumability must never produce a duplicate `(query_id, doc_id)` row.
+  - resumability must never produce a duplicate `(query_id, doc_id)` row;
+  - resuming a query_id under a materially different criterion must refuse
+    (not silently reuse stale grades and discard the new criterion) unless
+    the operator explicitly opts in via `--amend-criterion`.
 """
 
 from __future__ import annotations
@@ -507,6 +547,11 @@ _CLI_QUERY = "power capacity zoning"
 _CLI_QUERY_ID = "q1"
 _CLI_CRITERION = "Directly and specifically answers the query with a concrete, checkable claim"
 
+# Distinct criteria used only by the criterion-drift-guard tests below --
+# deliberately different strings from each other and from _CLI_CRITERION.
+_OLD_CRITERION = "Grade 2 only for a direct, numeric commitment; grade 1 for a vague mention"
+_NEW_CRITERION = "Grade 2 for any topical relevance at all, numeric or not"
+
 
 def _patch_pool_candidates(monkeypatch, judgments_mod, docs):
     def _fake_pool_candidates(query, corpus_path, k_per_source, seed):
@@ -516,7 +561,14 @@ def _patch_pool_candidates(monkeypatch, judgments_mod, docs):
 
 
 def _run_cli(
-    monkeypatch, judgments_mod, stdin_lines, *, corpus_path, out_path, query_id=_CLI_QUERY_ID
+    monkeypatch,
+    judgments_mod,
+    stdin_lines,
+    *,
+    corpus_path,
+    out_path,
+    query_id=_CLI_QUERY_ID,
+    extra_args=None,
 ):
     monkeypatch.setattr("sys.stdin", io.StringIO("\n".join(stdin_lines) + "\n"))
     return judgments_mod.main(
@@ -529,6 +581,7 @@ def _run_cli(
             str(corpus_path),
             "--out",
             str(out_path),
+            *(extra_args or []),
         ]
     )
 
@@ -611,6 +664,13 @@ def test_cli_skip_grade_does_not_append_a_row(tmp_path, monkeypatch):
 
 def test_cli_resumability_does_not_represent_already_judged_doc(tmp_path, monkeypatch, capsys):
     # spec(T-009:AC-3)
+    #
+    # NOTE: existing_row's criterion is deliberately IDENTICAL to the freshly
+    # typed _CLI_CRITERION below (it was previously an unrelated arbitrary
+    # string; tightened when the criterion-drift guard was added -- see
+    # module docstring -- so this test cleanly exercises "same-criterion
+    # resume" without conflating it with the drift-guard tests further down,
+    # which own the "different criterion" scenario).
     judgments_mod = _import_judgments_module()
     _patch_pool_candidates(monkeypatch, judgments_mod, [_DOC_A, _DOC_B, _DOC_C])
 
@@ -620,7 +680,7 @@ def test_cli_resumability_does_not_represent_already_judged_doc(tmp_path, monkey
     existing_row = {
         "query_id": _CLI_QUERY_ID,
         "query": _CLI_QUERY,
-        "criterion": "an earlier session's criterion text",
+        "criterion": _CLI_CRITERION,
         "doc_id": "docA",
         "grade": 2,
     }
@@ -635,9 +695,12 @@ def test_cli_resumability_does_not_represent_already_judged_doc(tmp_path, monkey
     )
     assert rc == 0
 
-    captured = capsys.readouterr().out
-    assert _DOC_A.text not in captured, (
+    captured = capsys.readouterr()
+    assert _DOC_A.text not in captured.out, (
         "an already-judged (query_id, doc_id) candidate must not be re-displayed"
+    )
+    assert "CRITERION MISMATCH" not in captured.out + captured.err, (
+        "an identical criterion on resume must not trigger the drift-guard refusal"
     )
 
     rows = _read_rows(out_path)
@@ -688,6 +751,122 @@ def test_cli_resumability_never_duplicates_a_row(tmp_path, monkeypatch):
     )
     pairs = [(r["query_id"], r["doc_id"]) for r in rows]
     assert len(pairs) == len(set(pairs)), f"duplicate (query_id, doc_id) rows found: {pairs}"
+
+
+# --------------------------------------------------------------------------
+# AC-3 (extension) -- criterion-drift guard on resume. Reviewer finding #1
+# (.tdd-swarm/reports/T-009-review.md): resuming a query_id under a
+# materially different criterion must never silently reuse stale grades and
+# discard the new criterion text with zero warning.
+# --------------------------------------------------------------------------
+
+
+def test_cli_refuses_resume_when_criterion_differs_and_writes_no_rows(
+    tmp_path, monkeypatch, capsys
+):
+    # spec(T-009:AC-3) -- adversarial: a materially different criterion on
+    # resume must refuse outright, not proceed and quietly drop the new
+    # criterion.
+    judgments_mod = _import_judgments_module()
+    _patch_pool_candidates(monkeypatch, judgments_mod, [_DOC_A, _DOC_B, _DOC_C])
+
+    corpus_path = tmp_path / "corpus.jsonl"
+    corpus_path.write_text("")
+    out_path = tmp_path / "judgments.jsonl"
+    existing_row = {
+        "query_id": _CLI_QUERY_ID,
+        "query": _CLI_QUERY,
+        "criterion": _OLD_CRITERION,
+        "doc_id": "docA",
+        "grade": 2,
+    }
+    _write_jsonl(out_path, [existing_row])
+    before_bytes = out_path.read_bytes()
+
+    rc = _run_cli(
+        monkeypatch,
+        judgments_mod,
+        # A correct implementation aborts right after the criterion line and
+        # never reads another line. These extra grade answers exist only so
+        # that a buggy implementation which proceeds anyway (today's bug)
+        # runs to completion instead of crashing on EOFError -- the point of
+        # this test is to fail on a clean assertion below, not on stdin
+        # running dry.
+        [_NEW_CRITERION, "1", "0"],
+        corpus_path=corpus_path,
+        out_path=out_path,
+    )
+    assert rc != 0, "a criterion mismatch on resume must return a non-zero/failure status"
+
+    after_bytes = out_path.read_bytes()
+    assert after_bytes == before_bytes, (
+        "a refused session must write nothing at all -- judgments.jsonl must be byte-identical"
+    )
+
+    captured = capsys.readouterr()
+    for doc in (_DOC_A, _DOC_B, _DOC_C):
+        assert doc.text not in captured.out, (
+            "no candidate may ever be displayed once a criterion mismatch is detected"
+        )
+        assert doc.text not in captured.err
+
+    assert "CRITERION MISMATCH" in captured.err, "a clear refusal marker must be written to stderr"
+    assert _OLD_CRITERION in captured.err, "the refusal must name the stored (old) criterion"
+    assert _NEW_CRITERION in captured.err, "the refusal must name the freshly typed (new) criterion"
+    assert "--amend-criterion" in captured.err, (
+        "the refusal must point the operator at the explicit escape hatch"
+    )
+
+
+def test_cli_amend_criterion_flag_allows_resume_and_new_rows_carry_new_criterion(
+    tmp_path, monkeypatch, capsys
+):
+    # spec(T-009:AC-3) -- the explicit `--amend-criterion` opt-in proceeds
+    # despite the drift, and every row written this session carries the NEW
+    # criterion; already-judged docs stay resumability-skipped (amending is
+    # not retroactive -- the old row is left untouched).
+    judgments_mod = _import_judgments_module()
+    _patch_pool_candidates(monkeypatch, judgments_mod, [_DOC_A, _DOC_B, _DOC_C])
+
+    corpus_path = tmp_path / "corpus.jsonl"
+    corpus_path.write_text("")
+    out_path = tmp_path / "judgments.jsonl"
+    existing_row = {
+        "query_id": _CLI_QUERY_ID,
+        "query": _CLI_QUERY,
+        "criterion": _OLD_CRITERION,
+        "doc_id": "docA",
+        "grade": 2,
+    }
+    _write_jsonl(out_path, [existing_row])
+
+    rc = _run_cli(
+        monkeypatch,
+        judgments_mod,
+        [_NEW_CRITERION, "1", "0"],  # grades for docB, docC only -- docA stays skipped
+        corpus_path=corpus_path,
+        out_path=out_path,
+        extra_args=["--amend-criterion"],
+    )
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    assert _DOC_A.text not in captured.out, (
+        "docA must still be resumability-skipped in amend mode -- amending the "
+        "criterion is not retroactive"
+    )
+
+    rows = _read_rows(out_path)
+    assert len(rows) == 3
+    by_doc = {r["doc_id"]: r for r in rows}
+    assert by_doc["docA"] == existing_row, (
+        "the pre-existing docA row must be left byte-for-byte untouched, still "
+        "carrying the OLD criterion"
+    )
+    assert by_doc["docB"]["criterion"] == _NEW_CRITERION
+    assert by_doc["docC"]["criterion"] == _NEW_CRITERION
+    assert by_doc["docB"]["grade"] == 1
+    assert by_doc["docC"]["grade"] == 0
 
 
 # --------------------------------------------------------------------------
