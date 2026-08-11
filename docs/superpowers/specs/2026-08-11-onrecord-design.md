@@ -76,10 +76,14 @@ Retrieval units: speaker-turn groups (transcripts), ~60-90s caption windows (vid
 
 | Version | When | Contents |
 |---|---|---|
-| corpus-v1 | **tonight (MVP)** | **≥2,500 primary docs** (MVP requires "a few thousand documents" loaded Day 1): 6-10 county channels' full caption archives (Loudoun, Prince William, Spotsylvania, Fairfax, Maricopa, New Albany, Memphis, Mount Pleasant…) + EDGAR 10-K/10-Q/8-K pulls for top ~40 tickers + sample earnings transcripts + 1 PUC docket — all three adapter families proven at thousands-scale |
-| corpus-v2 | Wed | ~20 T1 channels + top 40 T2 tickers with full transcript depth |
-| corpus-v3 | Thu-Fri | full T1+T2, core T3 dockets + queues |
-| corpus-v4 | Sat freeze | T4 + stragglers; **final reported metrics run on this freeze** |
+Download-bound sources (T1 captions, T2/T4 EDGAR paper) launch at **full registry breadth tonight** as unattended background pulls — machine time, not engineering time. Engineering-bound sources (T3 docket scrapers, transcript-source adapters, Granicus/Legistar packets) land through the week as their adapters get built. Versions are snapshot cutoffs, not fetch targets:
+
+| Version | When | Contents |
+|---|---|---|
+| corpus-v1 | **tonight ~22:00 snapshot (MVP)** | whatever the full-breadth background pulls have safely landed — **≥2,500 primary docs** guaranteed (EDGAR bulk alone clears it; MVP requires "a few thousand documents" loaded Day 1) |
+| corpus-v2 | Wed | overnight pulls complete: full T1 caption archives + full T2/T4 EDGAR paper + first transcript-adapter depth |
+| corpus-v3 | Thu-Fri | core T3 dockets + interconnection queues; remaining transcript depth |
+| corpus-v4 | Sat freeze | T4 packets/MOUs + stragglers; **final reported metrics run on this freeze** |
 
 Snapshots are immutable; the harness re-runs per version and the scoreboard is tagged with the corpus version, so metrics stay comparable. Form 4 + interconnection-queue tables ingest as *structured joins* (not indexed text) for the mechanic layer.
 
