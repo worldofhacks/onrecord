@@ -58,6 +58,23 @@ fixtures below (per the coordinator's pointer) and is never read by, or a
 dependency of, these tests — everything the suite touches is committed under
 `tests/fixtures/youtube/`.
 
+**Round 3 (post-Round-2-re-review, `prev_full` reset patch — see
+`.tdd-swarm/reports/T-006-review.md`'s "Round 2 re-verification" section):**
+the Round 2 fix (commit `ca1dee3`) genuinely strips karaoke tags and decodes
+entities, but its `_dedupe_consecutive_rollups` has a residual bug the Round
+2 fixture (`real_markup/`, a single growth->settle cycle) was too short to
+exercise: in the "redundant settle" branch (case 3 -- `prev_full.endswith(text)`
+-> drop), `prev_full` is left unchanged instead of being reset to the settle
+cue's shorter, newly-confirmed text. The *next* growth cue then compares
+against the stale, longer `prev_full`, its prefix check (case 2) fails, and
+it falls through to "unrelated, retain in full" (case 4) -- re-emitting text
+that already survived via the previous cycle's case-2 retention. This only
+surfaces once a chain has **two full growth->settle cycles** back to back;
+one cycle (Round 2's fixture) never reaches the third cue that would expose
+it. `real_markup_multicycle/` (below) is a two-cycle chain built to hit
+exactly this. Reproduced directly against the real implementation while
+authoring this fixture (see `test_ac2_multi_cycle_rollup_no_phrase_level_duplication`).
+
 Schema/contract decisions not otherwise pinned by the ticket (fixed here and
 documented in onrecord/ingest/youtube.py's module docstring, which the
 implementer must follow):
@@ -127,6 +144,23 @@ Fixture layout (tests/fixtures/youtube/), a 3-video simulated channel pull:
         doubled, `&nbsp;&nbsp;`, at a line break) and an `&amp;` elsewhere.
         The fixture's own 2 cues (both in window 0) use entirely original
         wording, reproducing only that entity-placement pattern.
+    real_markup_multicycle/ — (Round 3) one video, `KaraokeVid02`: 5 cues,
+        TWO full growth->settle cycles back to back (all in window 0,
+        upload_date 20260305): cue 1 "The budget review begins with the
+        water fund" (seed, settled); cue 2 (t=2s) repeats cue 1's text on
+        line 1, adds `<c>`-tagged growth ("capital improvement plan for
+        fiscal year twenty twenty six") on line 2 -- cycle 1's growth; cue 3
+        (t=4.7s) settles cycle 1 (re-emits just that new phrase, plain); cue
+        4 (t=4.71s) repeats cue 3's (short, settled) text on line 1 and adds
+        further `<c>`-tagged growth ("for the coming fiscal cycle") on line
+        2 -- cycle 2's growth; cue 5 (t=7.5s) settles cycle 2. This is the
+        shape from the real `-75a1WxvzdM` trace quoted in
+        `.tdd-swarm/reports/T-006-review.md`'s "Root cause" section
+        (structure only; this fixture's wording is original). One cycle
+        (`real_markup/`, Round 2) never reaches a fourth cue, so it can't
+        expose the `prev_full`-not-reset-on-settle bug; two cycles do —
+        reproduced directly against the real implementation while authoring
+        this fixture (see `test_ac2_multi_cycle_rollup_no_phrase_level_duplication`).
 
 `registry_entry` fixtures mirror corpus/registry.yaml's `youtube_channels[i]`
 shape (`id`, `name`, `jurisdiction`, `state`, `verified`).
@@ -149,6 +183,7 @@ MALFORMED_ONLY_DIR = FIXTURES_DIR / "malformed_only"
 NOSUBS_ONLY_DIR = FIXTURES_DIR / "nosubs_only"
 REAL_MARKUP_DIR = FIXTURES_DIR / "real_markup"
 REAL_ENTITIES_DIR = FIXTURES_DIR / "real_entities"
+REAL_MARKUP_MULTICYCLE_DIR = FIXTURES_DIR / "real_markup_multicycle"
 
 PULL_SCRIPT = REPO_ROOT / "scripts" / "pull_captions.sh"
 
@@ -157,6 +192,7 @@ BAD_VIDEO_ID = "LCBbadvtt01"
 NOSUB_VIDEO_ID = "LCBnosubs01"
 KARAOKE_VIDEO_ID = "KaraokeVid01"
 ENTITIES_VIDEO_ID = "EntitiesVid01"
+KARAOKE_MULTICYCLE_VIDEO_ID = "KaraokeVid02"
 
 LOUDOUN_ENTRY = {
     "id": "https://www.youtube.com/@LoudounCountyBoardofSupervisors",
@@ -354,6 +390,36 @@ def test_ac1_html_entities_are_decoded():
             f"{doc.id}.text has an undecoded &nbsp; entity: {doc.text!r}"
         )
         assert "&amp;" not in doc.text, f"{doc.id}.text has an undecoded &amp; entity: {doc.text!r}"
+
+
+# --------------------------------------------------------------------------
+# Round 3 (post-Round-2-re-review, prev_full reset patch) — a two-cycle
+# growth->settle rollup chain. See the module docstring's "Round 3" section
+# and `.tdd-swarm/reports/T-006-review.md`'s "Root cause" trace.
+# --------------------------------------------------------------------------
+
+
+def test_ac2_multi_cycle_rollup_no_phrase_level_duplication():
+    # spec(T-006:AC-2)
+    #
+    # A single growth->settle cycle (real_markup/, Round 2) never reaches a
+    # fourth cue, so it can't expose a bug in how the settle cue's dedupe
+    # branch hands off to the *next* cycle's growth cue. This fixture chains
+    # TWO full cycles (settled -> growth -> settle -> growth -> settle) so
+    # that hand-off is actually exercised. Per Round 2's revised AC-2 rule
+    # (see module docstring), no phrase may survive twice anywhere in the
+    # window text, regardless of how many rollup cycles it took to get there.
+    docs = parse_video_dir(REAL_MARKUP_MULTICYCLE_DIR, FICTIONAL_ENTRY)
+    good = _docs_for(docs, KARAOKE_MULTICYCLE_VIDEO_ID)
+    assert good, "expected the multi-cycle karaoke video to produce at least one Doc"
+
+    seg000 = next(d for d in good if d.id == f"yt:{KARAOKE_MULTICYCLE_VIDEO_ID}:seg000")
+    cycle1_phrase = "capital improvement plan for fiscal year twenty twenty six"
+    assert seg000.text.count(cycle1_phrase) == 1, (
+        f"{cycle1_phrase!r} must appear exactly once in seg000.text (cycle 1's settled "
+        f"phrase must not be re-emitted when cycle 2's growth cue is processed), got "
+        f"{seg000.text.count(cycle1_phrase)}: {seg000.text!r}"
+    )
 
 
 # --------------------------------------------------------------------------

@@ -2,11 +2,13 @@
 
 **Status:** DONE — Round 1 (frozen failing tests against the stub) + Round 2 (post-review,
 real-data patch: 3 new failing tests for gaps `.tdd-swarm/reports/T-006-review.md` found that the
-Round-1 fixtures didn't model)
+Round-1 fixtures didn't model) + Round 3 (post-Round-2-re-review: 1 new failing test for the
+`prev_full`-reset-on-settle bug the Round-2 single-cycle fixture was too short to expose)
 
 **Test file:** `tests/unit/ingest/test_youtube.py` (+ `tests/unit/ingest/__init__.py`)
 
-**Fixtures:** `tests/fixtures/youtube/{mixed_batch,malformed_only,nosubs_only,real_markup,real_entities}/`
+**Fixtures:**
+`tests/fixtures/youtube/{mixed_batch,malformed_only,nosubs_only,real_markup,real_entities,real_markup_multicycle}/`
 
 **Stub touched:** `onrecord/ingest/youtube.py` — added the `parse_video_dir(directory,
 registry_entry) -> list[Doc]` signature (raises `NotImplementedError`) plus a full contract
@@ -200,3 +202,66 @@ tickets/T-006.md`: all 5 ACs still covered. `ruff format --check` / `ruff check`
 No existing fixture or assertion needed adjustment for the revised dedupe semantics — the two new
 fixtures are additive and isolated (their own directories/video ids), so nothing already-frozen
 was touched.
+
+---
+
+## Round 3 — multi-cycle rollup fixture (prev_full reset regression)
+
+**Trigger:** `.tdd-swarm/reports/T-006-review.md`, "Round 2 re-verification" section. The Round-2
+fix's `_dedupe_consecutive_rollups` genuinely strips karaoke tags and decodes entities (confirmed:
+0/20 tag/entity leaks in the reviewer's real-data re-sample), but its case-3 branch ("redundant
+settle" — `prev_full.endswith(text)` → drop) leaves `prev_full` unchanged instead of resetting it
+to the settle cue's shorter, newly-confirmed text. The *next* growth cue then compares against the
+stale, longer `prev_full`; its case-2 prefix check fails; it falls through to case 4 ("unrelated,
+retain in full") and re-emits text that already survived via the previous cycle. Reviewer measured
+this at 16/20 (80%) of a random real-video sample. Root cause: `real_markup/` (Round 2) is only a
+**single** growth→settle cycle (3 cues) and never reaches a fourth cue, so it structurally cannot
+exercise the hand-off from one settle cue to the *next* cycle's growth cue — the exact sequence the
+bug lives in. Scope for this round: `tests/` + `tests/fixtures/youtube/**` only, per the
+coordinator's instruction — `onrecord/ingest/youtube.py` untouched (implementer's fast-follow).
+
+**New fixture:** `tests/fixtures/youtube/real_markup_multicycle/` — one video (`KaraokeVid02`,
+`upload_date` `20260305`), 5 cues forming **two** full growth→settle cycles back to back, modeled
+structurally on the reviewer's real `-75a1WxvzdM` trace quoted in the review report's "Root cause"
+section (original wording throughout, only the cue-timing/growth/settle *structure* is
+reproduced):
+
+1. `t=0` — seed, settled: `"The budget review begins with the water fund"`
+2. `t=2.0` — cycle-1 growth: line 1 repeats cue 1's text, line 2 adds `<c>`-tagged new words
+   (`"capital improvement plan for fiscal year twenty twenty six"`, tag-stripped)
+3. `t=4.7` — cycle-1 settle: re-emits just that new phrase, plain, no tags
+4. `t=4.71` — cycle-2 growth: line 1 repeats cue 3's (short, settled) text, line 2 adds further
+   `<c>`-tagged new words (`"for the coming fiscal cycle"`, tag-stripped)
+5. `t=7.5` — cycle-2 settle: re-emits cycle 2's new phrase
+
+**New test:** `test_ac2_multi_cycle_rollup_no_phrase_level_duplication`, tagged
+`spec(T-006:AC-2)`, inserted in a new "Round 3" section after the Round 2 tests. Asserts
+`seg000.text.count("capital improvement plan for fiscal year twenty twenty six") == 1` — the
+cycle-1 phrase must not be re-emitted when cycle 2's growth cue is processed.
+
+**Confirmed against the actual current implementation** (commit `ca1dee3`, unmodified) before
+adding the assertion:
+
+```
+real_markup_multicycle/ -> Doc.text =
+  "The budget review begins with the water fund capital improvement plan for fiscal year
+   twenty twenty six capital improvement plan for fiscal year twenty twenty six for the
+   coming fiscal cycle"
+  ("capital improvement plan for fiscal year twenty twenty six" appears twice; no "<" markup
+   leaks — the Round-2 tag-stripping fix is unaffected by this bug)
+```
+
+This exactly reproduces the reviewer's traced mechanism: case 3 drops the cycle-1 settle cue
+(t=4.7) without resetting `prev_full`, so the cycle-2 growth cue (t=4.71, whose text starts with
+cue 3's short settled text, not the stale long `prev_full`) fails its case-2 prefix check and is
+retained in full via case 4 — re-duplicating the cycle-1 phrase it already contains.
+
+**Test run** (`uv run pytest tests/unit/ingest/test_youtube.py -v`): **1 failed, 19 passed** — the
+new test fails with a plain `AssertionError` (`got 2`, exact offending text included), not an
+import/fixture error; all 19 Round-1/Round-2 tests remain green, unmodified. Full suite
+(`uv run pytest -q`): **1 failed, 33 passed** (T-001's 14-test scaffold suite still unaffected).
+`spec-lint.sh tickets/T-006.md`: all 5 ACs still covered. `ruff format --check` / `ruff check` over
+`tests/ onrecord/ scripts/`: clean.
+
+No existing fixture or assertion needed adjustment — `real_markup_multicycle/` is additive and
+isolated (its own directory/video id), so nothing already-frozen was touched.
