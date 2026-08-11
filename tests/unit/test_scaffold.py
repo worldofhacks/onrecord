@@ -127,6 +127,7 @@ def test_make_setup_installs_deps_and_onrecord_imports():
         capture_output=True,
         text=True,
         timeout=600,
+        check=False,
     )
     assert setup.returncode == 0, (
         f"'make setup' failed (exit {setup.returncode}):\n"
@@ -139,6 +140,7 @@ def test_make_setup_installs_deps_and_onrecord_imports():
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     assert check.returncode == 0, (
         "'uv run python -c \"import onrecord\"' failed "
