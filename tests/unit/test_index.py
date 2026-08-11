@@ -45,6 +45,36 @@ values chosen by the implementer. Tests that don't need this assumption
 entirely and use only the frozen, external-id-based surface
 (`get_doc`, `delete`, `doc_count`, `df`).
 
+FROZEN-CONTRACT EXTENSION — review findings (.tdd-swarm/reports/T-003-review.md)
+---------------------------------------------------------------------------
+Three forward-compat gaps flagged as Important by code review are pinned as
+additional frozen-contract surface below (new tests only; the 15 tests above
+are untouched and must stay green):
+
+1. (Important #1) `get_doc(id)` MUST accept EITHER the external string id
+   (existing behavior, unchanged) OR an internal integer id — the same ints
+   that appear in `postings(term).doc_ids` — and resolve to the correct
+   `Doc` in both cases. The two id spaces are disjoint by Python type
+   (`str` vs `int`), so dispatch is unambiguous even when an external id
+   happens to be a numeric-looking string (e.g. `"0"`) that collides in
+   *text* with an unrelated internal id. `KeyError` on an unknown id holds
+   in both spaces. Required by T-004's frozen `FakeIndex` contract, where
+   search resolves postings matches via `get_doc(internal_id)`.
+2. (Important #2) `doc_length(internal_id) -> int` (token count under the
+   analyzer used at build time) and `avg_doc_length() -> float` (mean over
+   currently-live docs) are new public methods. Both must survive a
+   `save()`/`load()` round-trip (BM25, the next ticket, needs both without
+   recomputing from raw text).
+3. (Important #3) `postings()` for a term that's absent from the corpus
+   must not hand back state that can be corrupted by a caller mutating the
+   returned object. Two designs both satisfy this and are accepted:
+   (a) the returned containers are immutable and mutation raises
+   `TypeError`/`AttributeError`, or (b) mutation succeeds locally but is
+   never visible to a later `postings()` call, for the same absent term, a
+   different absent term, or any real term's postings. Only a shared,
+   mutable "empty postings" singleton returned by reference (mutation
+   leaks everywhere) fails.
+
 Run with:
     uv run pytest tests/unit/test_index.py -v
 """
@@ -310,3 +340,217 @@ def test_absent_term_on_empty_index_no_exception():
     assert list(postings.doc_ids) == []
     assert list(postings.tfs) == []
     assert list(postings.positions) == []
+
+
+# ---------------------------------------------------------------------------
+# Review extension #1 (Important #1, AC-2) — get_doc() accepts internal int
+# ids (the ints in postings(term).doc_ids) in addition to external str ids.
+# ---------------------------------------------------------------------------
+
+
+def test_get_doc_accepts_internal_int_id_and_returns_correct_doc():
+    # spec(T-003:AC-2)
+    doc_a = _make_doc("ext-a", "substation transformer", 0)
+    doc_b = _make_doc("ext-b", "substation county", 1)
+    idx = InvertedIndex.build([doc_a, doc_b], analyzer=TRIVIAL_ANALYZER)
+
+    # Pinned build-order id scheme: doc_a -> internal id 0, doc_b -> internal id 1.
+    assert idx.get_doc(0) == doc_a
+    assert idx.get_doc(1) == doc_b
+    # External string-id lookup must keep working unchanged.
+    assert idx.get_doc("ext-a") == doc_a
+    assert idx.get_doc("ext-b") == doc_b
+
+
+def test_get_doc_resolves_every_id_in_a_terms_postings():
+    # spec(T-003:AC-2)
+    doc_a = _make_doc("ext-a", "substation", 0)
+    doc_b = _make_doc("ext-b", "substation", 1)
+    idx = InvertedIndex.build([doc_a, doc_b], analyzer=TRIVIAL_ANALYZER)
+
+    postings = idx.postings("substation")
+    resolved_external_ids = {idx.get_doc(internal_id).id for internal_id in postings.doc_ids}
+    assert resolved_external_ids == {"ext-a", "ext-b"}
+
+
+def test_get_doc_disjoint_id_spaces_survive_adversarial_numeric_looking_external_ids():
+    # spec(T-003:AC-2)
+    # External ids are numeric-looking strings, deliberately mismatched
+    # against their internal (build-order) integer ids, to prove get_doc()
+    # dispatches on type (str -> external map, int -> internal map) instead
+    # of coercing/comparing across the two id spaces.
+    doc_first = _make_doc("1", "substation", 0)  # internal id 0, external "1"
+    doc_second = _make_doc("0", "transformer", 1)  # internal id 1, external "0"
+    idx = InvertedIndex.build([doc_first, doc_second], analyzer=TRIVIAL_ANALYZER)
+
+    assert idx.get_doc("1") == doc_first  # external string lookup
+    assert idx.get_doc("0") == doc_second  # external string lookup
+    assert idx.get_doc(0) == doc_first  # internal int lookup (build-order id 0)
+    assert idx.get_doc(1) == doc_second  # internal int lookup (build-order id 1)
+
+
+def test_get_doc_key_error_holds_for_both_int_and_str_id_spaces():
+    # spec(T-003:AC-2)
+    doc = _make_doc("ext-a", "substation", 0)
+    idx = InvertedIndex.build([doc], analyzer=TRIVIAL_ANALYZER)
+
+    try:
+        idx.get_doc("does-not-exist")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("get_doc() with an unknown external str id should raise KeyError")
+
+    try:
+        idx.get_doc(9999)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("get_doc() with an unknown internal int id should raise KeyError")
+
+
+# ---------------------------------------------------------------------------
+# Review extension #2 (Important #2, AC-1) — public doc_length()/
+# avg_doc_length(), both surviving save/load.
+# ---------------------------------------------------------------------------
+
+
+def test_doc_length_returns_token_count_under_injected_analyzer():
+    # spec(T-003:AC-1)
+    doc_a = _make_doc("a", "substation transformer grid", 0)  # 3 tokens
+    doc_b = _make_doc("b", "substation", 1)  # 1 token
+    idx = InvertedIndex.build([doc_a, doc_b], analyzer=TRIVIAL_ANALYZER)
+
+    # Pinned build-order id scheme: doc_a -> internal id 0, doc_b -> internal id 1.
+    assert idx.doc_length(0) == 3
+    assert idx.doc_length(1) == 1
+
+
+def test_avg_doc_length_is_mean_token_count_over_live_docs():
+    # spec(T-003:AC-1)
+    doc_a = _make_doc("a", "substation transformer grid", 0)  # 3
+    doc_b = _make_doc("b", "substation", 1)  # 1
+    doc_c = _make_doc("c", "substation transformer", 2)  # 2
+    idx = InvertedIndex.build([doc_a, doc_b, doc_c], analyzer=TRIVIAL_ANALYZER)
+
+    avg = idx.avg_doc_length()
+    assert abs(avg - 2.0) < 1e-9, f"expected avg_doc_length() == 2.0, got {avg!r}"
+
+
+def test_doc_length_and_avg_doc_length_survive_save_load_round_trip(tmp_path):
+    # spec(T-003:AC-1)
+    doc_a = _make_doc("a", "substation transformer grid", 0)  # 3
+    doc_b = _make_doc("b", "substation", 1)  # 1
+    idx = InvertedIndex.build([doc_a, doc_b], analyzer=TRIVIAL_ANALYZER)
+
+    save_path = tmp_path / "index-doc-lengths"
+    idx.save(save_path)
+    loaded = InvertedIndex.load(save_path)
+
+    assert loaded.doc_length(0) == idx.doc_length(0) == 3
+    assert loaded.doc_length(1) == idx.doc_length(1) == 1
+    before_avg = idx.avg_doc_length()
+    after_avg = loaded.avg_doc_length()
+    assert abs(after_avg - before_avg) < 1e-9, (
+        f"avg_doc_length() changed across round-trip: {before_avg!r} -> {after_avg!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Review extension #3 (Important #3, AC-5) — postings() for an absent term
+# must not be a shared mutable object that leaks corruption across calls.
+# ---------------------------------------------------------------------------
+
+
+def test_postings_absent_term_doc_ids_mutation_does_not_leak():
+    # spec(T-003:AC-5)
+    # NOTE: if the implementation under test really does share one mutable
+    # "empty postings" singleton across every absent-term lookup (the bug
+    # this test targets), a successful mutation would otherwise corrupt
+    # shared module state for the rest of THIS pytest process. The
+    # try/finally below best-effort reverts the mutation after asserting,
+    # regardless of pass/fail, so a red result here can't cascade into
+    # unrelated tests later in the same session.
+    doc = _make_doc("a", "substation transformer", 0)
+    idx = InvertedIndex.build([doc], analyzer=TRIVIAL_ANALYZER)
+
+    first_absent = "absent-term-one-zz"
+    second_absent = "absent-term-two-zz"
+
+    p1 = idx.postings(first_absent)
+    mutation_succeeded = True
+    try:
+        p1.doc_ids.append(999999)
+    except (TypeError, AttributeError):
+        mutation_succeeded = False
+
+    if not mutation_succeeded:
+        # Immutable container design: mutation itself raising is sufficient.
+        return
+
+    try:
+        # Mutable-container design: the mutation must be invisible elsewhere.
+        p_same_again = idx.postings(first_absent)
+        assert list(p_same_again.doc_ids) == [], (
+            "mutating postings(absent_term).doc_ids leaked into a later "
+            "postings() call for the SAME absent term — shared mutable state"
+        )
+        p_other_absent = idx.postings(second_absent)
+        assert list(p_other_absent.doc_ids) == [], (
+            "mutating postings(absent_term).doc_ids for one absent term leaked "
+            "into postings() for a DIFFERENT absent term — shared mutable "
+            "singleton corruption"
+        )
+        p_real_term = idx.postings("substation")
+        assert 999999 not in list(p_real_term.doc_ids), (
+            "mutating an absent-term postings object leaked into a REAL term's "
+            "postings — shared mutable state corrupted the live index"
+        )
+    finally:
+        try:
+            p1.doc_ids.pop()
+        except (IndexError, AttributeError):
+            pass
+
+
+def test_postings_absent_term_positions_mutation_does_not_leak():
+    # spec(T-003:AC-5)
+    # See the doc_ids variant above for why cleanup happens in `finally`.
+    doc = _make_doc("a", "substation transformer", 0)
+    idx = InvertedIndex.build([doc], analyzer=TRIVIAL_ANALYZER)
+
+    first_absent = "absent-term-three-zz"
+    second_absent = "absent-term-four-zz"
+
+    p1 = idx.postings(first_absent)
+    mutation_succeeded = True
+    try:
+        p1.positions.append([123, 456])
+    except (TypeError, AttributeError):
+        mutation_succeeded = False
+
+    if not mutation_succeeded:
+        return
+
+    try:
+        p_same_again = idx.postings(first_absent)
+        assert list(p_same_again.positions) == [], (
+            "mutating postings(absent_term).positions leaked into a later "
+            "postings() call for the SAME absent term — shared mutable state"
+        )
+        p_other_absent = idx.postings(second_absent)
+        assert list(p_other_absent.positions) == [], (
+            "mutating postings(absent_term).positions for one absent term "
+            "leaked into postings() for a DIFFERENT absent term — shared "
+            "mutable singleton corruption"
+        )
+        p_real_term = idx.postings("substation")
+        assert [123, 456] not in [list(p) for p in p_real_term.positions], (
+            "mutating an absent-term postings object leaked into a REAL term's "
+            "postings — shared mutable state corrupted the live index"
+        )
+    finally:
+        try:
+            p1.positions.pop()
+        except (IndexError, AttributeError):
+            pass

@@ -194,3 +194,141 @@ FAILED tests/property/test_index_properties.py::test_property_df_equals_number_o
 - `delete` on an unknown id: behavior unspecified by the ticket/AC text and
   not tested here — pick something sane (e.g. `KeyError`) and document it if
   it matters for T-004+.
+
+---
+
+# Addendum — frozen-contract extension per code review findings
+
+**Trigger:** `.tdd-swarm/reports/T-003-review.md` (Reviewer + Security,
+verdict APPROVED, 0 Critical / 3 Important / 4 Minor) flagged three
+forward-compat gaps in "the core data structure of the whole engine" that
+don't violate any T-003 AC today but block/complicate T-004 and the BM25
+ticket. The orchestrator directed the Test Agent to extend the frozen suite
+with failing tests for the API additions that resolve them. Same worktree,
+same rules (`tests/` only, `spec()` tags, ruff-clean, no push).
+
+**What changed:** `tests/unit/test_index.py` only — 9 new tests appended
+(module docstring also extended with a new "FROZEN-CONTRACT EXTENSION"
+section documenting the 3 additions below). The original 15 tests
+(`tests/unit/test_index.py` + `tests/property/test_index_properties.py`)
+are byte-for-byte unchanged and all still pass. No implementation files
+touched this round.
+
+## New contract surface (pinned, implementer must add)
+
+1. **`get_doc(id)` accepts internal int ids** (review Important #1): in
+   addition to the existing external `str` id lookup, `get_doc` must accept
+   any `int` that appears in `postings(term).doc_ids` and resolve it to the
+   correct `Doc`. The two id spaces are disjoint by Python type (`str` vs
+   `int`) — dispatch on `isinstance(id, int)` rather than coercing. `KeyError`
+   on an unrecognized id holds in both spaces.
+2. **`doc_length(internal_id) -> int`** and **`avg_doc_length() -> float`**
+   (review Important #2): public accessors for the already-tracked
+   `_doc_lengths` data (token count under the build-time analyzer per doc,
+   and the mean over currently-live docs). Both must round-trip through
+   `save()`/`load()`.
+3. **`postings()` for an absent term must not share mutable state** (review
+   Important #3): either return immutable containers (mutation raises
+   `TypeError`/`AttributeError`), or ensure a caller's mutation of a
+   previously-returned `Postings` object is never visible to a later
+   `postings()` call — not for the same absent term, a different absent
+   term, or any real term. A shared, by-reference mutable "empty postings"
+   singleton (the current `_EMPTY_POSTINGS` pattern) fails this.
+
+## New criterion → test mapping
+
+| Criterion | Test(s) | What it checks |
+|---|---|---|
+| AC-2 (get_doc, internal ids) | `test_get_doc_accepts_internal_int_id_and_returns_correct_doc` | 2-doc fixture; `get_doc(0)`/`get_doc(1)` (build-order internal ids) return the right `Doc`; external `str` lookups still work unchanged |
+| AC-2 | `test_get_doc_resolves_every_id_in_a_terms_postings` | Every int in `postings("substation").doc_ids` resolves via `get_doc` to a doc whose external id is one of the two fixture docs |
+| AC-2 | `test_get_doc_disjoint_id_spaces_survive_adversarial_numeric_looking_external_ids` | Adversarial: external ids `"1"`/`"0"` deliberately mismatched against build-order internal ids `0`/`1`; asserts `get_doc` dispatches on Python type rather than coercing/comparing across the two id spaces |
+| AC-2 | `test_get_doc_key_error_holds_for_both_int_and_str_id_spaces` | Unknown `str` id and unknown `int` id both raise `KeyError`. **Note:** this one already passes against the current implementation — an unrecognized `int` happens to raise `KeyError` today too, since it's simply absent from the `str`-keyed external map. Kept because it's a genuine, permanent part of the pinned contract (regression guard once `get_doc` gains real int-space resolution), not because it's currently red. |
+| AC-1 (doc lengths) | `test_doc_length_returns_token_count_under_injected_analyzer` | 2-doc fixture with known token counts (3, 1); `doc_length(0)==3`, `doc_length(1)==1` |
+| AC-1 | `test_avg_doc_length_is_mean_token_count_over_live_docs` | 3-doc fixture with token counts (3, 1, 2); `avg_doc_length() == 2.0` |
+| AC-1 | `test_doc_length_and_avg_doc_length_survive_save_load_round_trip` | Build, save, load via `tmp_path`; `doc_length`/`avg_doc_length` identical before/after |
+| AC-5 (postings isolation) | `test_postings_absent_term_doc_ids_mutation_does_not_leak` | Attempts `postings(absent).doc_ids.append(999999)`; if it raises `TypeError`/`AttributeError`, immutable design accepted immediately; otherwise asserts the mutation is invisible to a later call for the same absent term, a different absent term, and a real term's postings. Reverts the mutation in a `finally` block regardless of outcome so a red result can't cascade into unrelated tests later in the same pytest session |
+| AC-5 | `test_postings_absent_term_positions_mutation_does_not_leak` | Same pattern for `postings(absent).positions.append(...)` |
+
+9 new test items (8 unit-level behavioral additions + 1 already-passing
+regression guard), on top of the original 15 — **24 total** in
+`tests/unit/test_index.py` + `tests/property/test_index_properties.py`.
+
+## Verification performed (this round)
+
+1. Ran the extended suite against the current worktree (post-T-003
+   implementation, commit `db916f8`) — **8 of 9 new tests fail**, each for
+   the expected reason (`AttributeError: 'InvertedIndex' object has no
+   attribute 'doc_length'` / `'avg_doc_length'`; `KeyError: 0` for
+   `get_doc(0)` not yet resolving internal ids; `AssertionError` on the two
+   postings-isolation tests, demonstrating the actual singleton-sharing bug
+   the review flagged). The 9th (`..._key_error_holds_for_both_...`) passes
+   already — documented above, not vacuous, kept as a permanent regression
+   guard. **The original 15 tests all still pass** — confirmed no
+   regression/pollution from the new tests.
+2. Cross-test-pollution fix: the two mutation tests initially DID cause the
+   unrelated property tests (`test_property_delete_purges_everywhere`,
+   `test_property_df_equals_number_of_docs_containing_term`) to fail too,
+   because appending to the current implementation's shared
+   `_EMPTY_POSTINGS` singleton corrupts it for the rest of the pytest
+   process (a direct, reproduced demonstration of review Important #3).
+   Fixed by wrapping each mutation test's assertions in `try`/`finally` that
+   best-effort reverts the mutation (`.pop()`) after checking, regardless of
+   pass/fail, so a red result stays localized to its own test.
+3. Built a small patch on top of the current implementation (not committed;
+   restored immediately after) adding: `get_doc` int-id dispatch,
+   `doc_length`/`avg_doc_length` accessors over the existing
+   `_doc_lengths`, and a `postings()` that constructs a fresh empty
+   `Postings` per call instead of returning the shared `_EMPTY_POSTINGS`
+   singleton. Reran the full extended suite: **all 24 pass**. Confirms the
+   9 new tests are achievable, not vacuously red, with a minimal,
+   review-aligned fix.
+4. Restored `onrecord/index/inverted.py` to its exact committed state
+   (`git diff --stat -- onrecord/index/inverted.py` empty) — this round
+   touches tests only.
+5. `uv run ruff format --check tests/` / `uv run ruff check tests/` — both
+   clean.
+6. `uv run pytest -q` (full repo suite) — **30 passed, 8 failed**, matching
+   expectations (29 previously-passing + 1 newly-passing regression guard =
+   30; the 8 new review-driven tests red).
+
+## Failure output (current worktree, this round's RED)
+
+```
+tests/unit/test_index.py::test_get_doc_accepts_internal_int_id_and_returns_correct_doc FAILED
+tests/unit/test_index.py::test_get_doc_resolves_every_id_in_a_terms_postings FAILED
+tests/unit/test_index.py::test_get_doc_disjoint_id_spaces_survive_adversarial_numeric_looking_external_ids FAILED
+tests/unit/test_index.py::test_get_doc_key_error_holds_for_both_int_and_str_id_spaces PASSED
+tests/unit/test_index.py::test_doc_length_returns_token_count_under_injected_analyzer FAILED
+tests/unit/test_index.py::test_avg_doc_length_is_mean_token_count_over_live_docs FAILED
+tests/unit/test_index.py::test_doc_length_and_avg_doc_length_survive_save_load_round_trip FAILED
+tests/unit/test_index.py::test_postings_absent_term_doc_ids_mutation_does_not_leak FAILED
+tests/unit/test_index.py::test_postings_absent_term_positions_mutation_does_not_leak FAILED
+
+Representative failure reasons (uv run pytest tests/unit/test_index.py tests/property/ -v):
+  AttributeError: 'InvertedIndex' object has no attribute 'avg_doc_length'
+  AttributeError: 'InvertedIndex' object has no attribute 'doc_length'
+  KeyError: 0                                    (get_doc(0) not yet resolving internal ids)
+  AssertionError: mutating postings(absent_term).doc_ids leaked into a later
+    postings() call for the SAME absent term — shared mutable state
+  AssertionError: mutating postings(absent_term).positions leaked into a later
+    postings() call for the SAME absent term — shared mutable state
+
+========================= 8 failed, 16 passed in 0.74s =========================
+(16 passed = 15 original T-003 unit tests + the 1 already-satisfying new test;
+ tests/property/test_index_properties.py's 3 tests are unaffected/still green.)
+```
+
+## Notes for the (next) Implementation Agent
+
+- The 3 additions above are new frozen contract surface, same status as the
+  original AC-1..AC-5 tests: do not edit the tests to make them pass.
+- `get_doc`'s type-dispatch must not coerce — an external id that happens to
+  look numeric as a string (e.g. `Doc.id == "0"`) must never resolve via the
+  internal-int path, and vice versa. Dispatch on `isinstance(id, int)` (or
+  equivalent), not on stringifying/parsing.
+- `doc_length`/`avg_doc_length` should read from the existing `_doc_lengths`
+  data already maintained at `build()`/`delete()`/`save()`/`load()` — no new
+  serialization format needed, just accessors.
+- For postings isolation, the minimal fix is to stop returning one shared
+  module-level "empty postings" object for absent terms — construct a fresh
+  one per call (or freeze the containers). Either satisfies the tests.
