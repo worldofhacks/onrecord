@@ -1,6 +1,7 @@
 # T-007 Implementation Agent Report — EDGAR filings adapter
 
-**Status:** DONE — all 9 frozen tests pass, all local gates green.
+**Status:** DONE — all 11 frozen tests pass, all local gates green (updated
+after Review REJECTED the first pass — see "Review round 2" below).
 
 **File touched (scope-compliant):** `onrecord/ingest/edgar.py` only. No test
 or fixture files were edited.
@@ -83,6 +84,56 @@ python -m onrecord.ingest.edgar --help              -> argparse entrypoint works
 
 No live network calls were made anywhere (parse-layer tests are pure
 fixture-driven; fetch-layer tests use `httpx.MockTransport` exclusively).
+
+## Review round 2 (REJECTED -> fixed)
+
+Review (`.tdd-swarm/reports/T-007-review.md`) rejected the first pass on
+live-data evidence: **Critical** — real 10-Ks' hyperlinked Table-of-Contents
+"Item 1A."/"Item 7." rows are structurally identical to a real heading
+(own `<p>`, entirely bold), and first-occurrence-wins locked onto the ToC
+stub, permanently discarding the real section (live-confirmed: DLR's
+item1a/item7 came back as 26-98-char ToC stubs, HUT's item7 was silently
+dropped). **Important** — a malformed `cik_str` (non-numeric, e.g. `"N/A"`)
+reached an unguarded `int(cik)` and would raise out of `fetch_filings`,
+with no per-ticker `try/except` in the CLI's `main()` loop to catch it,
+so one corrupt ticker could kill a multi-ticker batch. The Test Agent
+pinned both at commit `9c8c226` (2 new tests +
+`tests/fixtures/edgar/10k_with_toc.html` + a `BADCIK` entry added to
+`company_tickers.json`).
+
+Fixes, `onrecord/ingest/edgar.py` only:
+
+- **ToC-vs-real-heading discrimination**: `_SectionExtractor` now also
+  records, per heading marker, whether that `<p>` was wrapped in an
+  `<a href=...>` anchor (a real heading is preceded by a plain
+  `<a id="...">` target *outside* the `<p>`, never wrapped by an
+  `<a href>` itself — confirmed against the live DLR HTML the reviewer
+  fetched). `_extract_item_sections` now rejects a candidate occurrence —
+  in favor of a later occurrence of the same section key, if one exists —
+  when EITHER it was href-wrapped OR its slice to the next heading
+  occurrence is under `_MIN_SECTION_CHARS` (200; a ToC row is "heading +
+  page number", not section prose). Both the fixture's ToC rows fail on
+  both signals simultaneously (href-wrapped AND short); the real headings
+  that follow satisfy neither rejection reason and are picked up.
+- **`fetch_filings` exception isolation**: `_resolve_cik` now validates
+  `cik_str` is int-convertible before returning it (a non-numeric CIK is
+  treated the same as "ticker not found" — logged with the ticker name,
+  `None` returned, caller's existing skip-and-log path handles it — no
+  `int()` call downstream can ever see bad data). As defense-in-depth per
+  the review's broader "must be exception-safe standing alone" framing,
+  `fetch_filings` also now wraps the whole CIK/submissions resolution in a
+  `try/except Exception` and each per-filing fetch+parse iteration in its
+  own `try/except Exception`, logging and continuing/returning
+  whatever Docs were already built rather than ever propagating — so the
+  "one ticker's failure doesn't kill the batch" guarantee holds regardless
+  of whether the CLI's `main()` ever grows its own per-ticker
+  `try/except` (it currently doesn't).
+
+Verification: `uv run pytest tests/unit/ingest/test_edgar.py -v` → 11
+passed (9 original + 2 new: `test_parse_10k_prefers_real_heading_over_...`,
+`test_fetch_filings_malformed_cik_does_not_raise_...`);
+`uv run pytest -q` → 25 passed; `.tdd-swarm/run-local-gates.sh . tickets/T-007.md`
+→ `ALL LOCAL GATES GREEN`.
 
 ## Notes / deferrals (explicit, per posture.md philosophy)
 

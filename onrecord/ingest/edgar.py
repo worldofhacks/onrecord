@@ -53,6 +53,14 @@ _KEEP_ITEM_SECTIONS: dict[tuple[str, str], str] = {
 # bold-only paragraph).
 _ITEM_HEADING_RE = re.compile(r"^item\s+(\d+)\s*([a-z]?)\.", re.IGNORECASE)
 
+# A real filing's hyperlinked Table of Contents renders each Item row in the
+# SAME shape as a real heading (own <p>, entirely bold) -- live-confirmed on
+# real DLR/HUT 10-Ks (T-007 review, Critical-1). A candidate heading is
+# rejected as a likely ToC-row stub (in favor of a later occurrence of the
+# same section key) when its slice to the next heading occurrence is
+# trivially short: a ToC row is "heading + page number", not a section body.
+_MIN_SECTION_CHARS = 200
+
 _SKIP_TAGS = frozenset({"script", "style"})
 _BLOCK_BREAK_TAGS = frozenset({"p", "tr", "table", "hr", "div"})
 
@@ -82,6 +90,14 @@ class _SectionExtractor(HTMLParser):
     mentions live inside ordinary flowing-prose paragraphs, never inside
     their own bold-only paragraph, so they never produce a marker.
 
+    A real filing's hyperlinked Table of Contents renders each Item row in
+    that SAME shape though (`<p><a href="#..."><b>Item 1A.</b></a></p>`), so
+    each marker also records whether it was wrapped in an `<a href=...>`
+    anchor -- a real heading is preceded by a plain `<a id="...">` target
+    (outside the <p>, not wrapping it), never wrapped in an `<a href>`
+    itself. `_extract_item_sections` uses this plus the trivially-short-slice
+    signal to prefer a later, real occurrence over a ToC-row stub.
+
     Heading text is still emitted into the flat text (so whole-document
     callers like the 8-K/exhibit path get it back), but a marker's offset
     points to the START of the heading's own text -- so a kept section's
@@ -92,13 +108,15 @@ class _SectionExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.chunks: list[str] = []
-        self.markers: list[tuple[int, str, str]] = []  # (offset, number, letter)
+        # (offset, item number, item letter, was-wrapped-in-<a href>)
+        self.markers: list[tuple[int, str, str, bool]] = []
         self._length = 0
         self._skip_depth = 0
         self._in_p_depth = 0
         self._bold_depth = 0
         self._p_buffer: list[str] = []
         self._p_has_nonbold_text = False
+        self._p_saw_href_anchor = False
 
     def _emit(self, text: str) -> None:
         if not text:
@@ -117,8 +135,11 @@ class _SectionExtractor(HTMLParser):
             self._p_buffer = []
             self._bold_depth = 0
             self._p_has_nonbold_text = False
+            self._p_saw_href_anchor = False
         elif tag in ("b", "strong") and self._in_p_depth:
             self._bold_depth += 1
+        elif tag == "a" and self._in_p_depth and dict(attrs).get("href") is not None:
+            self._p_saw_href_anchor = True
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP_TAGS:
@@ -136,7 +157,9 @@ class _SectionExtractor(HTMLParser):
             normalized = " ".join(text.split())
             match = None if self._p_has_nonbold_text else _ITEM_HEADING_RE.match(normalized)
             if match:
-                self.markers.append((self._length, match.group(1), match.group(2).lower()))
+                self.markers.append(
+                    (self._length, match.group(1), match.group(2).lower(), self._p_saw_href_anchor)
+                )
             self._emit(text)
             self._emit("\n")
             return
@@ -175,17 +198,28 @@ def _extract_full_text(html: str) -> str:
 
 
 def _extract_item_sections(html: str) -> dict[str, str]:
-    """10-K/10-Q only: split on Item headings, keep Item 1A + Item 7."""
+    """10-K/10-Q only: split on Item headings, keep Item 1A + Item 7.
+
+    First-occurrence-wins per section id, EXCEPT a candidate occurrence is
+    rejected (in favor of a later occurrence of the same key, if any) when
+    it looks like a Table-of-Contents row rather than a real heading: either
+    it was wrapped in an `<a href=...>` anchor, or its slice to the next
+    heading occurrence is too short to be real prose. See
+    `_SectionExtractor`'s docstring and the T-007 review's Critical-1
+    finding (live-confirmed on real DLR/HUT 10-Ks).
+    """
     extractor = _extract(html)
     full_text = extractor.full_text
     markers = extractor.markers
     sections: dict[str, str] = {}
-    for idx, (offset, number, letter) in enumerate(markers):
+    for idx, (offset, number, letter, in_href_anchor) in enumerate(markers):
         section_id = _KEEP_ITEM_SECTIONS.get((number, letter))
         if section_id is None or section_id in sections:
             continue
         end = markers[idx + 1][0] if idx + 1 < len(markers) else len(full_text)
         text = _clean_text(full_text[offset:end])
+        if in_href_anchor or len(text) < _MIN_SECTION_CHARS:
+            continue  # looks like a ToC-row stub -- keep looking for the real heading
         if text:
             sections[section_id] = text
     return sections
@@ -361,6 +395,13 @@ def _get_with_retry(
 def _resolve_cik(
     client: httpx.Client, ticker: str, sleep_fn: Callable[[float], None]
 ) -> str | None:
+    """Ticker -> CIK, or None if unresolvable (unknown ticker, unfetchable
+    index, OR a malformed/non-numeric `cik_str` in the source data -- SEC's
+    static index is fetched, not authored by us, so a corrupt entry is
+    treated as data to log and skip, not trusted blindly. Per T-007 review
+    Important-1: this validation is what keeps a malformed CIK from ever
+    reaching `int(cik)` downstream and raising out of `fetch_filings`.
+    """
     response = _get_with_retry(client, COMPANY_TICKERS_URL, sleep_fn)
     if response is None:
         return None
@@ -370,8 +411,18 @@ def _resolve_cik(
         return None
     ticker_upper = ticker.upper()
     for entry in data.values():
-        if str(entry.get("ticker", "")).upper() == ticker_upper:
-            return str(entry.get("cik_str"))
+        if str(entry.get("ticker", "")).upper() != ticker_upper:
+            continue
+        cik_str = entry.get("cik_str")
+        try:
+            return str(int(cik_str))
+        except (TypeError, ValueError):
+            logger.warning(
+                "edgar: ticker %s has a malformed cik_str in company_tickers.json (%r); skipping",
+                ticker,
+                cik_str,
+            )
+            return None
     return None
 
 
@@ -408,9 +459,13 @@ def fetch_filings(
 ) -> list[Doc]:
     """Live-shaped fetch: ticker -> CIK -> submissions -> recent filings'
     primary documents -> Docs (via `parse_filing_html`). Never raises: any
-    failure (unresolvable ticker, unfetchable submissions/document) is
-    retried with backoff, then skipped with a `logging.warning` and
-    processing continues with whatever else can still be built.
+    failure (unresolvable/malformed ticker data, unfetchable
+    submissions/document, or any other unexpected internal error) is
+    retried with backoff where applicable, then skipped with a
+    `logging.warning` -- processing continues with whatever else can still
+    be built, and the caller (the CLI's per-ticker batch loop has no
+    try/except of its own -- see T-007 review Important-1) can rely on this
+    function alone to keep one bad ticker from killing the rest of a batch.
     """
     sleep_fn = sleep if sleep is not None else time.sleep
     user_agent = os.environ.get("EDGAR_USER_AGENT", "").strip()
@@ -421,34 +476,61 @@ def fetch_filings(
         client_kwargs["transport"] = transport
 
     docs: list[Doc] = []
-    with httpx.Client(**client_kwargs) as client:
-        cik = _resolve_cik(client, ticker, sleep_fn)
-        if cik is None:
-            logger.warning("edgar: could not resolve ticker %s to a CIK; skipping", ticker)
-            return []
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            cik = _resolve_cik(client, ticker, sleep_fn)
+            if cik is None:
+                logger.warning("edgar: could not resolve ticker %s to a CIK; skipping", ticker)
+                return []
 
-        submissions = _fetch_submissions(client, cik, sleep_fn)
-        if submissions is None:
-            logger.warning(
-                "edgar: could not fetch submissions for ticker %s (cik %s); skipping", ticker, cik
-            )
-            return []
-
-        for ref in list_recent_filings(submissions, forms, limit):
-            url = _primary_document_url(cik, ref)
-            response = _get_with_retry(client, url, sleep_fn)
-            if response is None:
+            submissions = _fetch_submissions(client, cik, sleep_fn)
+            if submissions is None:
                 logger.warning(
-                    "edgar: failed to fetch primary document for ticker %s accession %s "
-                    "(%s); skipping",
+                    "edgar: could not fetch submissions for ticker %s (cik %s); skipping",
                     ticker,
-                    ref.accession,
-                    ref.primary_document,
+                    cik,
                 )
-                continue
-            docs.extend(
-                parse_filing_html(response.text, ref.form, ticker, ref.accession, ref.filing_date)
-            )
+                return []
+
+            for ref in list_recent_filings(submissions, forms, limit):
+                try:
+                    url = _primary_document_url(cik, ref)
+                    response = _get_with_retry(client, url, sleep_fn)
+                    if response is None:
+                        logger.warning(
+                            "edgar: failed to fetch primary document for ticker %s accession %s "
+                            "(%s); skipping",
+                            ticker,
+                            ref.accession,
+                            ref.primary_document,
+                        )
+                        continue
+                    docs.extend(
+                        parse_filing_html(
+                            response.text, ref.form, ticker, ref.accession, ref.filing_date
+                        )
+                    )
+                except Exception:
+                    logger.warning(
+                        "edgar: unexpected error processing ticker %s accession %s; skipping "
+                        "that filing",
+                        ticker,
+                        ref.accession,
+                        exc_info=True,
+                    )
+                    continue
+    except Exception:
+        # Belt-and-braces, per T-007 review Important-1: fetch_filings must
+        # never raise -- an unforeseen internal error resolving/using this
+        # one ticker's data must not kill the rest of a multi-ticker batch.
+        # Whatever Docs were already built for this ticker are still
+        # returned rather than discarded.
+        logger.warning(
+            "edgar: unexpected error fetching filings for ticker %s; skipping",
+            ticker,
+            exc_info=True,
+        )
+        return docs
 
     return docs
 
