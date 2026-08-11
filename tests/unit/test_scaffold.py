@@ -109,9 +109,7 @@ def _require_module_spec(name: str, fail_message: str):
 def test_onrecord_package_importable():
     # spec(T-001:AC-1)
     spec = importlib.util.find_spec("onrecord")
-    assert spec is not None, (
-        "onrecord package missing (importlib.util.find_spec returned None)"
-    )
+    assert spec is not None, "onrecord package missing (importlib.util.find_spec returned None)"
 
 
 def test_make_setup_installs_deps_and_onrecord_imports():
@@ -161,9 +159,7 @@ def test_doc_dataclass_is_frozen_with_exact_fields():
     from onrecord.types import Doc
 
     assert is_dataclass(Doc), "Doc must be a dataclass"
-    assert Doc.__dataclass_params__.frozen, (
-        "Doc must be declared @dataclass(frozen=True)"
-    )
+    assert Doc.__dataclass_params__.frozen, "Doc must be declared @dataclass(frozen=True)"
 
     field_map = {f.name: f for f in fields(Doc)}
     expected_order = DOC_REQUIRED_FIELDS + DOC_OPTIONAL_FIELDS
@@ -171,9 +167,7 @@ def test_doc_dataclass_is_frozen_with_exact_fields():
         f"Doc fields {tuple(field_map.keys())} do not match expected {expected_order}"
     )
     for name in DOC_REQUIRED_FIELDS:
-        assert field_map[name].default is MISSING, (
-            f"Doc.{name} must be required (no default)"
-        )
+        assert field_map[name].default is MISSING, f"Doc.{name} must be required (no default)"
     for name in DOC_OPTIONAL_FIELDS:
         assert field_map[name].default is None, f"Doc.{name} must default to None"
 
@@ -267,9 +261,7 @@ def test_registry_youtube_channels_meet_scale_and_schema():
     # spec(T-001:AC-3)
     data = _load_registry_yaml()
     channels = data.get("youtube_channels")
-    assert isinstance(channels, list), (
-        "registry.yaml must have a top-level 'youtube_channels' list"
-    )
+    assert isinstance(channels, list), "registry.yaml must have a top-level 'youtube_channels' list"
     assert len(channels) >= YOUTUBE_CHANNEL_MIN, (
         f"expected >= {YOUTUBE_CHANNEL_MIN} youtube channels, found {len(channels)}"
     )
@@ -283,12 +275,8 @@ def test_registry_tickers_meet_scale_and_schema():
     # spec(T-001:AC-3)
     data = _load_registry_yaml()
     tickers = data.get("tickers")
-    assert isinstance(tickers, list), (
-        "registry.yaml must have a top-level 'tickers' list"
-    )
-    assert len(tickers) >= TICKER_MIN, (
-        f"expected >= {TICKER_MIN} tickers, found {len(tickers)}"
-    )
+    assert isinstance(tickers, list), "registry.yaml must have a top-level 'tickers' list"
+    assert len(tickers) >= TICKER_MIN, f"expected >= {TICKER_MIN} tickers, found {len(tickers)}"
     for i, tk in enumerate(tickers):
         assert isinstance(tk, dict), f"tickers[{i}] must be a mapping"
         missing = REQUIRED_TICKER_KEYS - set(tk.keys())
@@ -299,9 +287,7 @@ def test_registry_docket_sources_meet_scale():
     # spec(T-001:AC-3)
     data = _load_registry_yaml()
     dockets = data.get("docket_sources")
-    assert isinstance(dockets, list), (
-        "registry.yaml must have a top-level 'docket_sources' list"
-    )
+    assert isinstance(dockets, list), "registry.yaml must have a top-level 'docket_sources' list"
     assert len(dockets) >= DOCKET_MIN, (
         f"expected >= {DOCKET_MIN} docket sources, found {len(dockets)}"
     )
@@ -319,13 +305,9 @@ def test_registry_loadable_via_onrecord_registry_load():
     tickers = _attr_or_key(loaded, "tickers")
     dockets = _attr_or_key(loaded, "docket_sources")
 
-    assert channels is not _MISSING, (
-        "onrecord.registry.load() result missing 'youtube_channels'"
-    )
+    assert channels is not _MISSING, "onrecord.registry.load() result missing 'youtube_channels'"
     assert tickers is not _MISSING, "onrecord.registry.load() result missing 'tickers'"
-    assert dockets is not _MISSING, (
-        "onrecord.registry.load() result missing 'docket_sources'"
-    )
+    assert dockets is not _MISSING, "onrecord.registry.load() result missing 'docket_sources'"
 
     assert len(channels) >= YOUTUBE_CHANNEL_MIN, (
         f"onrecord.registry.load(): expected >= {YOUTUBE_CHANNEL_MIN} youtube "
@@ -335,6 +317,5 @@ def test_registry_loadable_via_onrecord_registry_load():
         f"onrecord.registry.load(): expected >= {TICKER_MIN} tickers, found {len(tickers)}"
     )
     assert len(dockets) >= DOCKET_MIN, (
-        f"onrecord.registry.load(): expected >= {DOCKET_MIN} docket sources, "
-        f"found {len(dockets)}"
+        f"onrecord.registry.load(): expected >= {DOCKET_MIN} docket sources, found {len(dockets)}"
     )

@@ -287,18 +287,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx" },
-    { name = "msgpack" },
-    { name = "numpy" },
-    { name = "pyyaml" },
-    { name = "rank-bm25" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "msgpack", specifier = ">=1.1" },
+    { name = "numpy", specifier = ">=2.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rank-bm25", specifier = ">=0.2.2" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hypothesis" },
-    { name = "pytest" },
-    { name = "ruff" },
+    { name = "hypothesis", specifier = ">=6.115" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]
