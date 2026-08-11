@@ -59,3 +59,66 @@ suite passes an explicit `transport=` (`httpx.MockTransport`).
 
 None. No ambiguity encountered; the Test Agent's documented contract was
 sufficient to implement against directly. No dispute raised.
+
+---
+
+## AMENDMENT — security review REJECTED, fix applied
+
+**Status:** DONE
+
+Trigger: `.tdd-swarm/reports/T-008-review.md` REJECTED the original
+implementation (commit `a174677`) with 1 Critical (C1: API key leaked in
+plaintext via an unhandled `httpx.HTTPStatusError` on non-429 error
+statuses — its `str()` embeds the `apikey` query param) and 2 Important
+(I1: no name-validation on the speaker-marker split, so a continuation
+line containing `": "` was emitted as its own bogus-speaker Doc; I2: same
+root cause as C1 also aborted the whole multi-quarter batch instead of
+skip-and-continue). The Test Agent extended the frozen suite at
+`0c53e6b` with 5 new tests (13 total) pinning the corrected behavior.
+
+### Fix
+
+- **C1/I2 (`_fetch_one_quarter`):** branch on `response.status_code`
+  *before* ever calling `raise_for_status()`. 429 keeps its existing
+  single-backoff-retry-then-skip behavior. Any other status `>= 400` is
+  now handled as a single-attempt (no retry) skip: log one line
+  containing only `ticker`/`year`/`quarter`/`status_code` — never the
+  URL, query params, or response body — and return `[]` for that quarter
+  only, letting the batch continue to the rest of `quarters`.
+  `httpx.HTTPStatusError` (whose `str()` is the leak vector, since it
+  embeds the full request URL including `apikey=...`) is now never
+  constructed for a non-429 status, so it can never propagate or be
+  logged in any form.
+- **I1 (`parse_transcript`):** added `_looks_like_speaker_name(prefix)` —
+  1-5 whitespace-split words, every word matching
+  `^[A-Z][A-Za-z'’\-]*$` (title-cased, internal apostrophe/hyphen
+  allowed). A `"<prefix>: <rest>"` line is only treated as a new speaker
+  turn if `prefix` passes this check; otherwise the *whole line*
+  (verbatim, including its own `": "`) is appended, space-joined, onto
+  the immediately preceding raw turn — or treated as an unmarked line if
+  there is no preceding turn yet (preserves the existing AC-4
+  whole-transcript fallback for markerless content). The existing
+  consecutive-same-speaker merge pass runs unchanged on top of this.
+
+### Verification
+
+```
+uv run pytest tests/unit/ingest/test_fmp.py -v
+```
+13 passed (8 original + 5 new: 3× parametrized non-429 status codes
+[401/403/500], the 429-no-leak regression guard, and the colon-in-
+continuation-line test).
+
+`.tdd-swarm/run-local-gates.sh . tickets/T-008.md`:
+- format: 24 files already formatted
+- lint: All checks passed!
+- unit: 27 passed (full suite, no regressions — 14 T-001 + 13 T-008)
+- spec-lint: `spec-lint OK: all ACs covered for T-008`
+- ALL LOCAL GATES GREEN
+
+No key leakage: every new/changed log call site interpolates only
+`ticker`/`year`/`quarter`/`status_code`; `response.raise_for_status()` is
+no longer called anywhere in the module, so `httpx.HTTPStatusError`
+(the confirmed leak vector) is never constructed. Verified by the new
+`sentinel_key not in caplog.text` assertions across all three error-log
+code paths (no-key, 429-skip, non-429-skip), all passing.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -23,6 +24,24 @@ from onrecord.types import Doc
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://financialmodelingprep.com/api/v3/earning_call_transcript"
+
+# A single "word" of a plausible speaker name: starts with an uppercase
+# letter, may contain internal apostrophes/hyphens (e.g. "O'Brien",
+# "Jean-Pierre"). Used to reject continuation lines that merely happen to
+# contain ": " (e.g. "Turning to guidance: ...") from being mistaken for a
+# new speaker turn.
+_NAME_WORD_RE = re.compile(r"^[A-Z][A-Za-z'’\-]*$")
+
+
+def _looks_like_speaker_name(prefix: str) -> bool:
+    """True if `prefix` (text before ": ") plausibly looks like a speaker name.
+
+    Heuristic: 1-5 whitespace-separated words, every word title-cased.
+    """
+    words = prefix.split()
+    if not (1 <= len(words) <= 5):
+        return False
+    return all(_NAME_WORD_RE.match(word) for word in words)
 
 
 def _deep_link(ticker: str, year: int, quarter: int) -> str:
@@ -42,15 +61,23 @@ def parse_transcript(payload: dict, ticker: str) -> list[Doc]:
 
     deep_link = _deep_link(ticker, year, quarter)
 
-    # Raw turns: split on newlines, match a leading "Speaker: text" marker.
+    # Raw turns: split on newlines, match a leading "Speaker: text" marker
+    # whose prefix looks like a plausible name. A line that contains ": "
+    # but whose prefix fails the name heuristic (e.g. "Turning to
+    # guidance: ...") is continuation text: it merges into the immediately
+    # preceding raw turn (whole line, verbatim) rather than becoming its
+    # own bogus-speaker Doc.
     raw_turns: list[tuple[str | None, str]] = []
-    for line in content.split("\n"):
-        line = line.strip()
+    for raw_line in content.split("\n"):
+        line = raw_line.strip()
         if not line:
             continue
-        name, sep, text = line.partition(": ")
-        if sep and name:
-            raw_turns.append((name, text))
+        name, sep, rest = line.partition(": ")
+        if sep and name and _looks_like_speaker_name(name):
+            raw_turns.append((name, rest))
+        elif raw_turns:
+            prev_speaker, prev_text = raw_turns[-1]
+            raw_turns[-1] = (prev_speaker, f"{prev_text} {line}")
         else:
             raw_turns.append((None, line))
 
@@ -104,8 +131,9 @@ def _fetch_one_quarter(
     url = f"{_BASE_URL}/{ticker}"
     params = {"quarter": quarter, "year": year, "apikey": api_key}
 
-    for attempt in range(2):  # initial attempt + exactly one retry
+    for attempt in range(2):  # initial attempt + exactly one retry (429 only)
         response = client.get(url, params=params)
+
         if response.status_code == 429:
             if attempt == 0:
                 time.sleep(1.0)
@@ -117,7 +145,22 @@ def _fetch_one_quarter(
                 quarter,
             )
             return []
-        response.raise_for_status()
+
+        if response.status_code >= 400:
+            # Deliberately never call response.raise_for_status() here: its
+            # HTTPStatusError.__str__ embeds the full request URL, including
+            # the apikey query param, in plaintext. Log only ticker/year/
+            # quarter/status code — never the URL, params, or response body
+            # — and skip this quarter without retrying (retry is 429-only).
+            logger.info(
+                "FMP transcript fetch for %s %dQ%d failed with HTTP %d; skipping this quarter",
+                ticker,
+                year,
+                quarter,
+                response.status_code,
+            )
+            return []
+
         body = response.json()
         if not body:
             return []
