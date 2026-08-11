@@ -1,8 +1,71 @@
 # T-010 Test Report — Integration (CLI search, corpus-v1 build, clean clone)
 
-**Status:** DONE (RED — as required, no implementation exists yet)
+**Status:** DONE (see "Update" section below for current state)
 **Branch:** `ticket/T-010-integration`
 **Worktree:** `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-010`
+
+## Update — post-review follow-up (non-dict-row tolerance + `--k` lower bound)
+
+Review (`.tdd-swarm/reports/T-010-review.md`) APPROVED T-010 but flagged one
+Important robustness gap and one Minor CLI-arg gap, both addressed here with
+2 new tests appended to the still-frozen `tests/integration/test_e2e.py`
+(no other files touched; the original 6 tests from the initial handoff are
+untouched):
+
+1. **`test_ac1_non_dict_json_rows_are_skipped_not_crashed`**
+   (`spec(T-010:AC-1)`) — regression test for Important finding #1: a raw
+   JSONL row that is valid JSON but not a JSON object (a `[1,2,3]` array, a
+   bare `null`) currently raises an uncaught `AttributeError` in
+   `_parse_jsonl_lines`'s `row.get(field)`, crashing the whole
+   `build_corpus` run instead of being skipped+logged like every other
+   malformed-row case. Mixes 3 good dict rows with a JSON-array row, a bare
+   `null` row, and a genuinely-invalid-JSON line in one raw file; asserts
+   `build_corpus` exits 0, the output `corpus.jsonl.gz` contains exactly
+   the 3 good rows, and stderr logs at least 3 "skip"-substring warnings
+   (one per bad row) — loosely matched (case-insensitive `"skip"`
+   substring only) since the exact new log message for the non-dict case
+   is left to the implementer, consistent with the existing "skipping
+   malformed row (...)" convention already used for the other two
+   malformed-row kinds.
+   - **Contract #1 in the module docstring extended**: non-dict-but-valid
+     JSON (array/number/string/`null`) is now explicitly pinned as another
+     malformed-row case, alongside invalid-JSON and missing-required-field.
+
+2. **`test_search_rejects_non_positive_k_as_usage_error`** (parametrized
+   `--k` in `{"0", "-1", "-10"}`, no AC tag — a Minor finding, not one of
+   the ticket's 4 ACs) — folds in the reviewer's Minor finding: `--k` had
+   no lower-bound validation, so `--k -1` silently fell through to
+   Python's negative-slice semantics (`results[:-1]`, i.e. "drop the last
+   result" — a nonsensical reading of a "max results" flag). **Design
+   choice pinned (documented in contract #3, not a clamp):** `--k` must be
+   a positive integer (`>= 1`); `--k <= 0` is a usage error — stderr must
+   contain the substring `--k`, exit code 2 (mirroring the existing
+   `--op`-invalid-choice convention, which also exits 2) — rather than a
+   silent clamp to some minimum, so a script that passes a bad `--k`
+   fails loudly instead of getting quietly-wrong result counts.
+
+**Verified RED for the right reason:** `uv run pytest tests/integration/
+test_e2e.py -v -m "not slow"` → **4 failed, 5 passed** (the pre-existing 5
+non-slow tests now PASS — the Implementation Agent's real `cli.py`/
+`build_corpus.py` landed between the initial handoff and this follow-up —
+and exactly the 2 new scenarios, expanded to 4 parametrized cases, fail).
+Full repo: **4 failed, 178 passed** (`-m "not slow"`); the `slow`-marked
+AC-4 test independently still **passes** (`1 passed` under `-m slow`,
+unaffected by this change). The non-dict-row test fails via a clean
+`AssertionError` inside pytest itself — the underlying subprocess crashes
+with `AttributeError: 'list' object has no attribute 'get'` (confirming
+the review's reproduction exactly), but that crash is fully contained
+inside the child `subprocess.run(...)` call and surfaces as an ordinary
+failed assertion on `returncode`/stdout content, never an import error or
+a crash of the pytest test process itself. The `--k` tests fail via plain
+`returncode == 0` (not the expected `2`) `AssertionError`s. `.tdd-swarm/
+spec-lint.sh tickets/T-010.md` still → `spec-lint OK`. `ruff format
+--check tests/` / `ruff check tests/` both clean.
+
+---
+
+## Original report (initial handoff — status at the time: RED, no
+implementation existed yet)
 
 ## Summary
 

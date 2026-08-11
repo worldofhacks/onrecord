@@ -35,10 +35,18 @@ implementer intuition.
    `deep_link`, `ticker`, `jurisdiction`, `speaker`). The three optional
    fields may be omitted or `null`. A row is malformed — skip it, log a
    warning, keep going, never abort the run — when: the line is not valid
-   JSON, OR any *required* field (`id`/`text`/`source_type`/`venue_type`/
-   `date`/`deep_link`) is missing or `null`. An unrecognized extra key is
-   ignored, not fatal. A blank/whitespace-only line is skipped silently
-   (not counted as malformed; not logged).
+   JSON, OR the line IS valid JSON but does not decode to a JSON object
+   (e.g. a JSON array `[1,2,3]`, a bare number, a bare string, or a bare
+   `null` — anything whose Python type isn't `dict`), OR any *required*
+   field (`id`/`text`/`source_type`/`venue_type`/`date`/`deep_link`) is
+   missing or `null`. An unrecognized extra key is ignored, not fatal. A
+   blank/whitespace-only line is skipped silently (not counted as
+   malformed; not logged). **Non-dict-but-valid-JSON rows must never raise
+   an uncaught exception** (regression coverage: a review pass on this
+   ticket found `row.get(field)` crashing with `AttributeError` on a
+   `list`/`None` row — see `.tdd-swarm/reports/T-010-review.md` Important
+   finding #1 — which is exactly the "never abort the run" guarantee this
+   contract exists to protect).
 
 2. **`python -m onrecord.ingest.build_corpus --raw-dir DIR --out OUTDIR
    --index-out INDEXDIR`**:
@@ -60,7 +68,16 @@ implementer intuition.
    [--k N] [--source TYPE] [--index DIR]`**:
      - `--index` defaults to `artifacts/index` (an `InvertedIndex.load()`
        directory); `--op` defaults to `AND`; `--k` defaults to 10
-       (ranked results truncated to the top K after retrieval).
+       (ranked results truncated to the top K after retrieval). `--k` MUST
+       be a positive integer (`>= 1`): `--k 0` or a negative `--k` is
+       rejected as a usage error — print a message containing the
+       substring `--k` to stderr and exit code 2 (the same convention
+       `--op`'s `choices=[...]` validation already uses for a bad
+       argument) — rather than silently falling through to Python's
+       negative-slice semantics on `results[:k]` (a bare `--k -1` would
+       otherwise mean "drop the last result", which is nonsensical for a
+       "max results" flag). Pinned per reviewer Minor finding, see
+       `.tdd-swarm/reports/T-010-review.md`.
      - `--source TYPE` filters the result set to docs whose
        `Doc.source_type == TYPE`, applied AFTER retrieval (a metadata
        filter over retrieved hits, not a query-term restriction).
@@ -452,6 +469,93 @@ def test_ac1_build_corpus_then_cli_search_prints_ranked_results_with_deep_links(
             assert f"id={doc.id}" not in stdout
 
 
+def test_ac1_non_dict_json_rows_are_skipped_not_crashed(tmp_path):
+    # spec(T-010:AC-1)
+    #
+    # Regression test for .tdd-swarm/reports/T-010-review.md Important
+    # finding #1: a raw JSONL line that parses as valid JSON but is NOT a
+    # JSON object (a list, a bare number/string, or bare `null`) must be
+    # tolerated exactly like any other malformed row (contract #1) --
+    # skipped, logged, run continues -- never an uncaught exception that
+    # kills the whole ingest run. At real-corpus scale (~40K rows tonight)
+    # a single stray non-object line must not be able to take out an
+    # entire adapter batch.
+    good_docs = [
+        Doc(
+            id="yt:loudoun:good001",
+            text="The applicant is requesting approval for a new substation.",
+            source_type="county_meeting",
+            venue_type="sworn",
+            date="2025-11-05",
+            deep_link="https://youtube.com/watch?v=good001&t=100s",
+            jurisdiction="Loudoun County, VA",
+        ),
+        Doc(
+            id="fmp:VST:good002",
+            text="Our team continues to bring new substation capacity online.",
+            source_type="earnings_call",
+            venue_type="coached",
+            date="2025-10-30",
+            deep_link="https://financialmodelingprep.com/api/v3/earning_call_transcript/VST"
+            "?quarter=3&year=2025",
+            ticker="VST",
+        ),
+        Doc(
+            id="edgar:VST:good003",
+            text="Risk factors include regulatory delays affecting substation construction.",
+            source_type="filing",
+            venue_type="coached",
+            date="2025-03-01",
+            deep_link="https://www.sec.gov/Archives/edgar/data/1000/vst-10k.htm",
+            ticker="VST",
+        ),
+    ]
+
+    raw_dir = tmp_path / "raw"
+    mixed_file = raw_dir / "mixed" / "bad_rows.jsonl"
+    mixed_file.parent.mkdir(parents=True, exist_ok=True)
+    with mixed_file.open("w") as fh:
+        fh.write(json.dumps(asdict(good_docs[0])) + "\n")
+        fh.write("[1, 2, 3]\n")  # valid JSON, but a list, not an object
+        fh.write(json.dumps(asdict(good_docs[1])) + "\n")
+        fh.write("null\n")  # valid JSON, but bare null, not an object
+        fh.write("{this is not valid json at all\n")  # not valid JSON either
+        fh.write(json.dumps(asdict(good_docs[2])) + "\n")
+
+    out_dir = tmp_path / "corpus" / "v1"
+    index_out = tmp_path / "artifacts" / "index"
+
+    build_proc = _run_build_corpus(
+        "--raw-dir", str(raw_dir), "--out", str(out_dir), "--index-out", str(index_out)
+    )
+    assert build_proc.returncode == 0, (
+        "a non-dict-but-valid-JSON row must be skipped like any other malformed "
+        f"row, never crash the run:\nstdout={build_proc.stdout!r}\n"
+        f"stderr={build_proc.stderr!r}"
+    )
+
+    corpus_file = out_dir / "corpus.jsonl.gz"
+    assert corpus_file.exists()
+    with gzip.open(corpus_file, "rt") as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    assert {row["id"] for row in rows} == {doc.id for doc in good_docs}, (
+        "output must contain exactly the well-formed rows -- the 3 bad "
+        "rows (array, null, invalid-JSON) must be excluded, not crash, "
+        "and not silently corrupt the good rows around them"
+    )
+
+    # "logged as skipped": at least one warning per bad row (3 bad rows:
+    # the JSON array, the bare null, and the invalid-JSON line). Substring
+    # match only ("skip", case-insensitive) -- the exact message text for
+    # the new non-dict-row case is the implementer's choice, consistent
+    # with the existing "skipping malformed row (...)" convention in
+    # onrecord/ingest/build_corpus.py for the other two malformed-row
+    # kinds.
+    assert build_proc.stderr.lower().count("skip") >= 3, (
+        f"expected >=3 'skip' log lines (one per bad row):\nstderr={build_proc.stderr!r}"
+    )
+
+
 # --------------------------------------------------------------------------
 # AC-2 — `--source county_meeting` filters to only county docs (metadata
 # filter over retrieved hits). Index built directly (bypassing
@@ -518,6 +622,29 @@ def test_ac3_robustness_graceful_empty_result_exit_zero(tmp_path, case_name, que
     assert "No results" in proc.stdout
     assert "Traceback" not in proc.stdout
     assert "Traceback" not in proc.stderr
+
+
+# --------------------------------------------------------------------------
+# `--k` lower bound (reviewer Minor finding, .tdd-swarm/reports/
+# T-010-review.md #3): `--k 0` / negative `--k` must be a clean usage
+# error (exit 2), never Python's negative-slice semantics on results[:k].
+# Not tied to a numbered AC -- folded in here as cheap extra coverage
+# while this file is open per the coordinator's review follow-up.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_k", ["0", "-1", "-10"])
+def test_search_rejects_non_positive_k_as_usage_error(tmp_path, bad_k):
+    docs = _fixture_docs()
+    index_dir = tmp_path / "index"
+    InvertedIndex.build(docs).save(index_dir)
+
+    proc = _run_cli("search", "substation", "--k", bad_k, "--index", str(index_dir))
+    assert proc.returncode == 2, (
+        f"--k {bad_k} must be rejected as a usage error (exit 2), not silently "
+        f"accepted:\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+    )
+    assert "--k" in proc.stderr
 
 
 # --------------------------------------------------------------------------
