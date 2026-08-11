@@ -53,6 +53,29 @@ _KEEP_ITEM_SECTIONS: dict[tuple[str, str], str] = {
 # bold-only paragraph).
 _ITEM_HEADING_RE = re.compile(r"^item\s+(\d+)\s*([a-z]?)\.", re.IGNORECASE)
 
+# Real filings commonly bold an Item heading via inline CSS (on the <p>
+# itself, or on a nested <span>) instead of a <b>/<strong> tag -- confirmed
+# live on real DLR/HUT 10-Ks (T-007 review, Critical-2). `bold`/`bolder`
+# keywords and numeric weights >=600 (matches CSS's bold=700 vs.
+# normal=400, with headroom for semi-bold-ish 600 values) both count.
+_FONT_WEIGHT_RE = re.compile(r"font-weight\s*:\s*([a-z0-9]+)", re.IGNORECASE)
+
+
+def _style_is_bold(style: str | None) -> bool:
+    if not style:
+        return False
+    match = _FONT_WEIGHT_RE.search(style)
+    if not match:
+        return False
+    value = match.group(1).lower()
+    if value in ("bold", "bolder"):
+        return True
+    try:
+        return int(value) >= 600
+    except ValueError:
+        return False
+
+
 # A real filing's hyperlinked Table of Contents renders each Item row in the
 # SAME shape as a real heading (own <p>, entirely bold) -- live-confirmed on
 # real DLR/HUT 10-Ks (T-007 review, Critical-1). A candidate heading is
@@ -83,12 +106,21 @@ class _SectionExtractor(HTMLParser):
     boundary offsets into the resulting flat text -- all in one linear pass.
 
     A heading is recognized purely by block/heading structure: a <p>
-    element whose ENTIRE text content sits inside <b>/<strong> (no other
-    text in that paragraph) and whose collapsed text matches
-    ``Item <n>[<letter>].`` at the very start. That is what lets this
-    survive the fixtures' mid-sentence "Item 1A"/"Item 8" traps -- those
-    mentions live inside ordinary flowing-prose paragraphs, never inside
-    their own bold-only paragraph, so they never produce a marker.
+    element whose ENTIRE text content is bold (no other text in that
+    paragraph) and whose collapsed text matches ``Item <n>[<letter>].`` at
+    the very start. That is what lets this survive the fixtures'
+    mid-sentence "Item 1A"/"Item 8" traps -- those mentions live inside
+    ordinary flowing-prose paragraphs, never inside their own bold-only
+    paragraph, so they never produce a marker.
+
+    "Bold" covers both a <b>/<strong> tag AND inline CSS
+    (`style="...font-weight:bold..."`, on the <p> itself or on any element
+    nested inside it, e.g. a wrapping <span>) -- real filings commonly use
+    the latter with no <b>/<strong> tag anywhere (live-confirmed on real
+    DLR/HUT 10-Ks, T-007 review Critical-2). A per-paragraph stack of
+    "was this open tag itself bold" flags (`_p_bold_stack`) tracks bold
+    context through arbitrary nested inline elements, on top of a base
+    bold state seeded from the <p> tag's own style when it opens.
 
     A real filing's hyperlinked Table of Contents renders each Item row in
     that SAME shape though (`<p><a href="#..."><b>Item 1A.</b></a></p>`), so
@@ -117,6 +149,7 @@ class _SectionExtractor(HTMLParser):
         self._p_buffer: list[str] = []
         self._p_has_nonbold_text = False
         self._p_saw_href_anchor = False
+        self._p_bold_stack: list[bool] = []
 
     def _emit(self, text: str) -> None:
         if not text:
@@ -130,15 +163,24 @@ class _SectionExtractor(HTMLParser):
             return
         if self._skip_depth:
             return
+        attrs_map = dict(attrs)
         if tag == "p":
             self._in_p_depth += 1
             self._p_buffer = []
-            self._bold_depth = 0
             self._p_has_nonbold_text = False
             self._p_saw_href_anchor = False
-        elif tag in ("b", "strong") and self._in_p_depth:
+            self._p_bold_stack = []
+            # A p-level inline-CSS bold applies to the whole paragraph from
+            # the start, same as opening inside a <b> right away.
+            self._bold_depth = 1 if _style_is_bold(attrs_map.get("style")) else 0
+            return
+        if not self._in_p_depth:
+            return
+        is_bold_tag = tag in ("b", "strong") or _style_is_bold(attrs_map.get("style"))
+        self._p_bold_stack.append(is_bold_tag)
+        if is_bold_tag:
             self._bold_depth += 1
-        elif tag == "a" and self._in_p_depth and dict(attrs).get("href") is not None:
+        if tag == "a" and attrs_map.get("href") is not None:
             self._p_saw_href_anchor = True
 
     def handle_endtag(self, tag: str) -> None:
@@ -146,9 +188,6 @@ class _SectionExtractor(HTMLParser):
             self._skip_depth = max(0, self._skip_depth - 1)
             return
         if self._skip_depth:
-            return
-        if tag in ("b", "strong") and self._in_p_depth:
-            self._bold_depth = max(0, self._bold_depth - 1)
             return
         if tag == "p" and self._in_p_depth:
             self._in_p_depth -= 1
@@ -162,6 +201,13 @@ class _SectionExtractor(HTMLParser):
                 )
             self._emit(text)
             self._emit("\n")
+            return
+        if self._in_p_depth and self._p_bold_stack:
+            # Closing an inline element opened inside the current paragraph
+            # (<b>/<strong>/a bold-styled <span>/an anchor/etc.) -- pop its
+            # bold flag to keep `_bold_depth` balanced through nesting.
+            if self._p_bold_stack.pop():
+                self._bold_depth = max(0, self._bold_depth - 1)
             return
         if tag in _BLOCK_BREAK_TAGS:
             self._emit("\n")

@@ -1,7 +1,8 @@
 # T-007 Implementation Agent Report — EDGAR filings adapter
 
-**Status:** DONE — all 11 frozen tests pass, all local gates green (updated
-after Review REJECTED the first pass — see "Review round 2" below).
+**Status:** DONE — all 12 frozen tests pass, all local gates green (updated
+after Review REJECTED twice — see "Review round 2" and "Review round 3"
+below).
 
 **File touched (scope-compliant):** `onrecord/ingest/edgar.py` only. No test
 or fixture files were edited.
@@ -134,6 +135,49 @@ passed (9 original + 2 new: `test_parse_10k_prefers_real_heading_over_...`,
 `test_fetch_filings_malformed_cik_does_not_raise_...`);
 `uv run pytest -q` → 25 passed; `.tdd-swarm/run-local-gates.sh . tickets/T-007.md`
 → `ALL LOCAL GATES GREEN`.
+
+## Review round 3 (REJECTED -> fixed)
+
+Round-2 re-review confirmed the ToC/isolation fixes above (re-derived live
+against the same DLR/HUT 10-Ks) but surfaced a distinct, still-open defect
+(`.tdd-swarm/reports/T-007-review.md`, top section, Critical-2):
+`_SectionExtractor` only recognized bold via `<b>`/`<strong>` tags. Real
+headings styled with inline CSS instead — `font-weight:bold` directly on
+the `<p>`, `font-weight:700` on a `<span>` nested inside the `<p>`,
+`font-weight:bolder` — produced no marker at all: DLR's real Item 1A *and*
+Item 7 headings, and HUT's real Item 7 heading, are all styled exactly
+this way with no `<b>`/`<strong>` anywhere, so post-round-2 those sections
+came back completely empty (a silent, total absence — no Doc, no
+warning — a different failure mode than round 1's ToC-stub false
+positive). The Test Agent pinned this at commit `7a8f87a`
+(`tests/fixtures/edgar/10k_css_bold.html` + 1 new test,
+`test_parse_10k_recognizes_css_bold_headings_without_tag_bold`), noting a
+verified-achievable approach: a `_style_is_bold()` helper plus
+per-paragraph tag-stack bold tracking covering both direct-`<p>`-style and
+nested-`<span>`-style.
+
+Fix, `onrecord/ingest/edgar.py` only:
+
+- Added `_style_is_bold(style: str | None) -> bool`: extracts a
+  `font-weight` value from an inline `style` attribute via regex and
+  treats `bold`/`bolder` keywords or any numeric weight `>=600` as bold
+  (CSS: `normal`=400, `bold`=700).
+- Replaced the old "`_bold_depth` only increments on `<b>`/`<strong>`"
+  tracking with a generic per-paragraph model: when a `<p>` opens,
+  `_bold_depth` is seeded to `1` if the `<p>`'s own `style` is bold-worthy
+  (covers direct-`<p>`-style headings like DLR's), else `0`. Every other
+  tag opened while inside that `<p>` is pushed onto a `_p_bold_stack` with
+  whether *it itself* is bold (`<b>`/`<strong>`, or its own bold-worthy
+  `style`, e.g. a wrapping `<span style="font-weight:700">`) — incrementing
+  `_bold_depth` if so — and popped (decrementing symmetrically) on that
+  tag's close. This correctly tracks bold context through arbitrary
+  nesting (anchors, spans, etc.) without disturbing the existing
+  "entire paragraph must be bold" heading-precision logic or the
+  round-1 href-anchor/ToC-stub tracking, which are unchanged.
+
+Verification: `uv run pytest tests/unit/ingest/test_edgar.py -v` → 12
+passed (11 prior + 1 new); `uv run pytest -q` → 26 passed;
+`.tdd-swarm/run-local-gates.sh . tickets/T-007.md` → `ALL LOCAL GATES GREEN`.
 
 ## Notes / deferrals (explicit, per posture.md philosophy)
 
