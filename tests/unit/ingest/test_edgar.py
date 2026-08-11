@@ -32,6 +32,25 @@ Run with:
       heading/block context, not by any substring match of
       "Item <n>[<letter>]" appearing mid-sentence in flowing body prose
       (see the adversarial test below).
+
+      PINNED (per review finding, live-data confirmed on real DLR/HUT
+      10-Ks): a real filing's hyperlinked Table of Contents renders each
+      Item row as `<p><a href="#...">...<b>Item 1A.</b>...</a></p>` --
+      structurally a "<p> whose entire text sits inside <b>", i.e. the
+      SAME shape a real heading has. A candidate heading occurrence must
+      therefore be rejected (in favor of a later occurrence of the same
+      section key, if one exists) when EITHER: (a) the text from that
+      occurrence up to the next heading occurrence is trivially short
+      (roughly < 200 chars -- a ToC row is a heading + a page number, not
+      a section body), or (b) the occurrence sits inside an anchor/ToC
+      context (e.g. wrapped in `<a href="...">`, as opposed to a real
+      heading which is preceded by a plain `<a id="...">` target, not
+      wrapped by an `<a href>`). Only the first occurrence surviving that
+      filter counts -- "first-occurrence-wins" with no such filter
+      incorrectly locks onto the ToC stub and permanently discards the
+      real section (confirmed: DLR's item1a/item7 came back as 26-98-char
+      ToC-row stubs; HUT's item7 was silently dropped entirely). See
+      `test_parse_10k_prefers_real_heading_over_table_of_contents_stub`.
     - form == "8-K": the ENTIRE document becomes ONE Doc, section "body".
       8-K internal item numbering (2.02, 9.01, ...) uses a different scheme
       than 10-K/Q Items 1-15 and must NOT be split on.
@@ -99,6 +118,17 @@ Run with:
   whatever Docs it *did* manage to build (possibly `[]`) and never raises.
   A subsequent `fetch_filings(...)` call for a different ticker against the
   same transport is unaffected.
+
+  PINNED (per review finding, Important-1): this "never raises" guarantee
+  is a property of `fetch_filings` ITSELF, not of its caller. The CLI's
+  `main()` loops over tickers with no per-ticker try/except, so it relies
+  entirely on `fetch_filings` catching everything internally -- including
+  malformed *data*, not just transport-level failures. A ticker resolving
+  to a non-numeric/malformed CIK (e.g. a corrupt `company_tickers.json`
+  entry) must be caught, logged, and skipped from inside `fetch_filings`
+  the same way a 404 is -- it must not surface as an uncaught
+  ValueError/TypeError that kills the rest of a multi-ticker batch. See
+  `test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed`.
 """
 
 from __future__ import annotations
@@ -120,6 +150,8 @@ TENK_ACCESSION = "0001234567-26-000099"
 TENK_FILING_DATE = "2026-02-17"
 EIGHTK_ACCESSION = "0001234567-26-000101"
 EIGHTK_FILING_DATE = "2026-08-10"
+TENK_TOC_ACCESSION = "0001234567-26-000199"
+TENK_TOC_FILING_DATE = "2026-03-05"
 
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL_GOOD = "https://data.sec.gov/submissions/CIK0007654321.json"
@@ -291,6 +323,70 @@ def test_parse_10k_ignores_item_heading_mentioned_mid_sentence():
     # the tail marker sits between that mention and the real "Item 8."
     # heading, and must survive in the returned text.
     assert "ITEM7_TAIL_TOKEN_DELTA" in by_section["item7"].text
+
+
+def test_parse_10k_prefers_real_heading_over_table_of_contents_stub():
+    """spec(T-007:AC-1)
+
+    Adversarial per review (live-data finding on real DLR/HUT 10-Ks): a
+    real EDGAR 10-K opens with a hyperlinked Table of Contents whose
+    "Item 1A."/"Item 7." rows are, structurally, indistinguishable from a
+    true heading under a naive "own <p>, entirely bold" rule -- each ToC
+    row is `<p><a href="#...">...<b>Item 1A.</b>...</a></p>`, i.e. a <p>
+    whose entire text sits inside <b>, same shape as a real heading. A
+    first-occurrence-wins implementation locks onto the ToC row and
+    returns a heading-plus-page-number stub instead of the real,
+    paragraphs-long section that appears later in the document (or drops
+    the section entirely if the "next heading" after the stub slices to
+    nothing).
+
+    tests/fixtures/edgar/10k_with_toc.html reproduces this shape: a 4-row
+    ToC (Item 1/1A/7/8) with hyperlinked, bold-only heading cells, placed
+    BEFORE the real headings (each preceded by a plain `<a id="...">`
+    anchor target, NOT wrapped in an `<a href="...">`, matching the live
+    DLR HTML the reviewer fetched directly). Every gap between consecutive
+    ToC rows is a couple of words plus a page number -- nowhere near the
+    hundreds of characters of real prose that follow each real heading.
+    """
+    parse_filing_html = _get_callable("parse_filing_html")
+    html = _read_fixture("10k_with_toc.html")
+
+    docs = parse_filing_html(html, "10-K", "ACME", TENK_TOC_ACCESSION, TENK_TOC_FILING_DATE)
+    by_section = _docs_by_section(docs)
+    assert set(by_section) == {"item1a", "item7"}
+
+    item1a, item7 = by_section["item1a"], by_section["item7"]
+    _assert_doc(
+        item1a,
+        ticker="ACME",
+        accession=TENK_TOC_ACCESSION,
+        section="item1a",
+        filing_date=TENK_TOC_FILING_DATE,
+    )
+    _assert_doc(
+        item7,
+        ticker="ACME",
+        accession=TENK_TOC_ACCESSION,
+        section="item7",
+        filing_date=TENK_TOC_FILING_DATE,
+    )
+
+    # the REAL section body must win, not the ToC row's heading+page stub
+    assert "TOC_FIXTURE_ITEM1A_REAL_BODY_TOKEN" in item1a.text
+    assert "TOC_FIXTURE_ITEM7_REAL_BODY_TOKEN" in item7.text
+
+    # a ToC stub is a couple of words + a page number; the real section is
+    # paragraphs long -- this is the same length signal the reviewer used
+    # to diagnose the live DLR/HUT bug (26-98 char stubs vs. 100K+ char
+    # real sections)
+    assert len(item1a.text) > 200
+    assert len(item7.text) > 200
+
+    # no cross-bleed into neighboring/unkept sections
+    assert "TOC_FIXTURE_ITEM1_PREAMBLE_TOKEN" not in item1a.text
+    assert "TOC_FIXTURE_ITEM7_REAL_BODY_TOKEN" not in item1a.text
+    assert "TOC_FIXTURE_ITEM8_BODY_TOKEN" not in item7.text
+    assert "TOC_FIXTURE_ITEM1A_REAL_BODY_TOKEN" not in item7.text
 
 
 # --------------------------------------------------------------------------
@@ -501,6 +597,42 @@ def test_fetch_filings_unknown_ticker_skips_without_raising_and_other_tickers_pr
     assert any("BAD" in r.message for r in caplog.records)
 
     # same transport/session: a different, resolvable ticker still proceeds
+    good_docs = fetch_filings(
+        "GOOD", forms={"10-K"}, limit=5, transport=transport, sleep=lambda _s: None
+    )
+    assert len(good_docs) == 2
+
+
+def test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed(caplog):
+    """spec(T-007:AC-5)
+
+    Adversarial per review (Important-1): a ticker whose
+    company_tickers.json entry has a non-numeric cik_str ("N/A" --
+    malformed/corrupt SEC data, distinct from simply being absent from the
+    mapping) must not raise INSIDE fetch_filings itself. The CLI's
+    per-ticker batch loop (`main()`) has no try/except of its own, so the
+    "one raising ticker doesn't kill the batch" guarantee has to be a
+    property of fetch_filings's own contract, not of luck / of main()
+    happening to wrap it. This is deliberately pinned at the fetch_filings
+    level (not by driving the CLI/main() directly) so the guarantee holds
+    regardless of whether main() ever grows a try/except of its own --
+    fetch_filings must be exception-safe standing alone.
+
+    tests/fixtures/edgar/company_tickers.json includes a "BADCIK" entry
+    with `"cik_str": "N/A"` for exactly this purpose.
+    """
+    caplog.set_level(logging.WARNING)
+    fetch_filings = _get_callable("fetch_filings")
+    transport, _counts, _uas = _make_good_transport()
+
+    # must not raise -- this is the whole point of the regression test
+    badcik_docs = fetch_filings(
+        "BADCIK", forms={"10-K"}, limit=5, transport=transport, sleep=lambda _s: None
+    )
+    assert badcik_docs == []
+    assert any("BADCIK" in r.message for r in caplog.records)
+
+    # same transport/session: a well-formed ticker still proceeds
     good_docs = fetch_filings(
         "GOOD", forms={"10-K"}, limit=5, transport=transport, sleep=lambda _s: None
     )

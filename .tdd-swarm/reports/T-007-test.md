@@ -3,9 +3,13 @@
 **Status:** DONE (frozen failing tests written, confirmed RED against the
 current empty stub, confirmed GREEN against a throwaway correct
 implementation built outside the worktree's tracked files, then reverted).
+**Update (post-review):** review REJECTED the implementation on live-data
+evidence (`.tdd-swarm/reports/T-007-review.md`); suite extended with 2 more
+adversarial tests per the reviewer's findings — see "Update: review-driven
+extension" below.
 
 **Test file:** `tests/unit/ingest/test_edgar.py` (+ `tests/unit/ingest/__init__.py`)
-**Fixtures:** `tests/fixtures/edgar/{10k.html, 8k.html, ex99_1.html, ex10_1.html, submissions.json, company_tickers.json, submissions_good.json}`
+**Fixtures:** `tests/fixtures/edgar/{10k.html, 10k_with_toc.html, 8k.html, ex99_1.html, ex10_1.html, submissions.json, company_tickers.json, submissions_good.json}`
 
 **Run command:**
 ```
@@ -68,6 +72,7 @@ module docstring — treat it as part of the frozen contract):
 |---|---|---|
 | AC-1 | `test_parse_10k_extracts_item1a_and_item7_with_correct_ids_and_deep_links` | 10-K fixture (Items 1, 1A, 7, 8) → exactly `item1a` + `item7` Docs, correct `id`/`deep_link`/`source_type="filing"`/`venue_type="coached"`/`date`, correct content per section, no cross-bleed between sections |
 | AC-1 (adversarial) | `test_parse_10k_ignores_item_heading_mentioned_mid_sentence` | Item 1's body contains "...discussed in Item 1A below..." mid-sentence (not a heading); Item 7's body contains "...presented in Item 8 of this report..." mid-sentence. Asserts the real Item 1A body marker is present (not short-circuited by the fake mention) and Item 7's tail marker (placed between the fake "Item 8" mention and the real Item 8 heading) survives — i.e. Item 7 isn't truncated early. Verified against a naive last-match-wins non-anchored regex: it actually loses the Item-7 tail marker, confirming the trap has teeth. |
+| AC-1 (adversarial, post-review) | `test_parse_10k_prefers_real_heading_over_table_of_contents_stub` | `10k_with_toc.html`: a realistic hyperlinked Table of Contents (`<p><a href="#...">...<b>Item 1A.</b>...</a></p>` rows — same shape confirmed on the live DLR 10-K) sits BEFORE the real headings (each preceded by a plain `<a id="...">` target). Asserts the real, paragraphs-long section content wins (real marker tokens present, `len(text) > 200`), not the ToC row's heading-plus-page-number stub. |
 | AC-4 | `test_parse_10k_strips_tags_scripts_and_decodes_entities` | Same 10-K fixture (nested `<table>`s, a `<script>` block placed *inside* the Item 1A section, `&amp;`/`&nbsp;` entities): no `<`/`>` in output, script payload never leaks, no literal `&amp;`/`&nbsp;` remains, `&amp;` decodes to a real `&`, nested-table cell text survives as plain text |
 | AC-2 | `test_parse_8k_produces_body_and_exhibit_docs` | 8-K body fixture + separate EX-99.1 exhibit fixture, each parsed independently → one `body` Doc + one `ex-99.1` Doc, correct ids/links, no smearing between the two, tags/scripts/entities cleaned in the 8-K body too |
 | AC-2 | `test_parse_8k_body_not_split_by_internal_item_headings` | 8-K's own Item 2.02 / Item 9.01 headings must NOT trigger a 10-K-style split — content from both survives in the single `body` Doc |
@@ -75,9 +80,11 @@ module docstring — treat it as part of the frozen contract):
 | AC-3 | `test_list_recent_filings_filters_sorts_newest_first_and_applies_limit` | Deliberately un-sorted submissions.json (11 entries, 7 matching 10-K/8-K spanning 2025-11-15..2026-08-01) → `forms={"10-K","8-K"}, limit=5` returns exactly the 5 newest matches, in strict newest-first order, by a hand-computed (not re-derived-in-test) expected accession list — catches an implementation that filters-and-truncates in raw JSON order instead of actually sorting |
 | AC-5 | `test_fetch_filings_retries_then_skips_404_and_timeout_and_continues` | `fetch_filings("GOOD", ...)` against an `httpx.MockTransport`: one filing's doc 404s every attempt, another's times out (`httpx.TimeoutException`) every attempt, a third succeeds. Asserts: only the successful filing's 2 Docs come back, no exception escapes, each broken URL was hit ≥2 times (a retry genuinely happened, without pinning an exact backoff policy), a WARNING+ log record mentions the skipped filing, and a real non-empty `User-Agent` (sourced from `EDGAR_USER_AGENT`) was sent on every request |
 | AC-5 | `test_fetch_filings_unknown_ticker_skips_without_raising_and_other_tickers_proceed` | Ticker absent from the `company_tickers.json` fixture → `fetch_filings("BAD", ...)` returns `[]`, logs a warning mentioning "BAD", raises nothing; a subsequent call for `"GOOD"` against the *same* transport instance still succeeds — proves failures don't poison later calls |
+| AC-5 (adversarial, post-review) | `test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed` | `company_tickers.json`'s new `"BADCIK"` entry has `"cik_str": "N/A"` (malformed/corrupt data, distinct from an absent ticker). Asserts `fetch_filings("BADCIK", ...)` itself does not raise (pinned at the `fetch_filings` contract level, not by driving the CLI/`main()`, since `main()`'s per-ticker loop has no try/except of its own) and a subsequent `fetch_filings("GOOD", ...)` on the same transport still succeeds |
 
-9 test items total (all currently RED with clean, per-test `Failed:` messages
-— no collection errors, no uncaught tracebacks).
+11 test items total: the original 9 stay green; 2 new ones (added post-review)
+are RED against the current implementation for the exact root causes the
+reviewer confirmed on live data (see "Update: review-driven extension" below).
 
 ## Verification performed
 
@@ -164,3 +171,94 @@ E           Failed: onrecord.ingest.edgar.fetch_filings is not defined yet
   to make an implementation pass — fix `onrecord/ingest/edgar.py` instead.
   If a genuine defect or ambiguity is found in the tests/fixtures,
   escalate to the orchestrator/Reviewer rather than editing directly.
+
+## Update: review-driven extension (post-implementation, post-review)
+
+The orchestrator dispatched an Implementation Agent (commit `6d940d2`), which
+passed all 9 original tests, local gates, and spec-lint — but Review
+**REJECTED** on live-data evidence (`.tdd-swarm/reports/T-007-review.md`):
+a Critical finding that real 10-Ks' hyperlinked Table of Contents rows get
+mistaken for real Item headings (confirmed: `DLR.jsonl` item1a/item7 are
+26-98-char ToC stubs; `HUT.jsonl`'s real 10-K has no `item7` Doc at all), and
+an Important finding that `fetch_filings` can raise on malformed live data
+(`int(cik)` uncaught on a non-numeric `cik_str`), which `main()`'s
+try/except-less per-ticker loop would let kill an entire batch. Both gaps
+existed because the frozen fixtures had no ToC and no malformed-CIK case to
+exercise them.
+
+Two tests were added (fixtures + tests only — `onrecord/ingest/edgar.py` was
+never modified; every `git diff`/`git status` check below confirms zero diff
+against the last commit at hand-off):
+
+1. **`test_parse_10k_prefers_real_heading_over_table_of_contents_stub`**
+   (AC-1) — new fixture `tests/fixtures/edgar/10k_with_toc.html`: a 4-row
+   ToC (Item 1/1A/7/8) whose cells are `<p><a href="#...">...<b>Item
+   1A.</b>...</a></p>` (hyperlinked, bold-only paragraphs — structurally
+   identical to a real heading), placed before the real headings (each
+   preceded by a bare `<a id="...">` anchor target, matching the exact
+   shape the reviewer confirmed by fetching the live DLR 10-K HTML
+   directly). The module docstring's frozen contract now pins the
+   discriminating rule: a candidate heading occurrence must be rejected in
+   favor of a later occurrence of the same section key when its
+   slice-until-next-heading content is trivially short (≲200 chars, a ToC
+   row is a heading + a page number) or sits inside an anchor/ToC-href
+   context — implementers are free to choose either signal (or another)
+   as long as the *observable* outcome (real section wins, by both content
+   marker and length) matches what the test asserts.
+2. **`test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed`**
+   (AC-5) — `tests/fixtures/edgar/company_tickers.json` gained a `"BADCIK"`
+   entry with `"cik_str": "N/A"`. Asserts `fetch_filings("BADCIK", ...)`
+   itself does not raise and a subsequent `fetch_filings("GOOD", ...)` call
+   on the same transport still succeeds. Deliberately pinned at the
+   `fetch_filings` level (not by driving the CLI/`main()`) so the "other
+   tickers proceed" guarantee is `fetch_filings`'s own contract, not
+   contingent on `main()` ever growing a try/except.
+
+### Verification performed (this update)
+
+1. Ran the extended suite against the actual committed (rejected)
+   `onrecord/ingest/edgar.py` (commit `6d940d2`, no reference-implementation
+   swap needed this time since the real code was already sitting there):
+   **2 failed, 9 passed** — both new failures are the exact confirmed root
+   causes, not incidental breakage:
+   - `test_parse_10k_prefers_real_heading_over_table_of_contents_stub`:
+     `item1a.text == 'Item\xa01A.\n\nRisk Factors18'` — the literal ToC-row
+     stub, reproducing the reviewer's `DLR.jsonl` finding exactly.
+   - `test_fetch_filings_malformed_cik_does_not_raise_and_other_tickers_proceed`:
+     an uncaught `ValueError: invalid literal for int() with base 10: 'N/A'`
+     raised from `_submissions_url` (`edgar.py:379`) escapes `fetch_filings`
+     entirely — reproducing the reviewer's Important-1 finding exactly.
+2. Built a throwaway two-line patch directly on the committed
+   implementation (a) `_extract_item_sections`: collect all same-key
+   candidate slices and keep the longest instead of first-wins, (b)
+   `fetch_filings`: wrap the per-ticker body in `try/except Exception` ->
+   log + return partial `docs` — confirmed **11/11 pass** against the
+   patch, proving both new tests are achievable, not just failing-by-
+   construction. Reverted via `git checkout -- onrecord/ingest/edgar.py`,
+   confirmed zero diff against the commit, then re-ran and confirmed
+   **2 failed, 9 passed** again (RED restored).
+3. `uv run ruff format --check tests/` and `uv run ruff check tests/` —
+   clean.
+4. `.tdd-swarm/spec-lint.sh tickets/T-007.md` → `spec-lint OK: all ACs
+   covered for T-007` (AC-1/AC-5 tags already existed from the original 9;
+   the 2 new tests are additional tagged instances of the same ACs, not
+   new AC numbers).
+5. Full repo suite (`uv run pytest -q`) at hand-off: **25 collected, 2
+   failed, 23 passed** (23 passed = 14 T-001 scaffold tests + the original
+   9 T-007 tests, all still green; the 2 new T-007 tests are the only
+   failures, both RED for the intended reasons above).
+
+### Notes for the Implementation Agent (revision round)
+
+- The ToC fix and the try/except fix are independent of each other and of
+  every other passing test — no existing assertion needed to change to
+  accommodate either fix path proven above (the two-line patch touched
+  only `_extract_item_sections` and `fetch_filings`'s outer structure).
+- "Longest slice wins" is one valid strategy for the ToC discriminating
+  rule (proven above), not the only one — an anchor/`<a href>`-context
+  check would also satisfy the frozen tests; pick whichever is simpler to
+  maintain, the tests only check the observable outcome.
+- The malformed-CIK fix should be structural (catch `Exception` broadly
+  around `fetch_filings`'s per-ticker body, as the throwaway patch does),
+  not a narrow `except ValueError` — the point of AC-5 is "no exception
+  escapes," not "this one specific exception type is handled."
