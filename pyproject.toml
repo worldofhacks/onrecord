@@ -1,0 +1,44 @@
+[project]
+name = "onrecord"
+version = "0.1.0"
+description = "From-scratch search engine + RAG over public AI-infrastructure records."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "msgpack",
+    "pyyaml",
+    "httpx",
+    "rank-bm25",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "hypothesis",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["onrecord"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# T-001 owns pyproject.toml/onrecord/** only (see tickets/T-001.md file_scopes).
+# Frozen tests/, ticket specs/, docs/, and pre-existing scripts/ are out of
+# this ticket's authority to reformat or re-lint (tests/ especially: HARD
+# RULE forbids editing anything under tests/), so ruff is scoped to the
+# source this ticket and its siblings actually own. Markdown is excluded
+# project-wide because ruff (>=0.16) formats fenced ```python blocks inside
+# .md by default, which would otherwise rewrite frozen ticket specs.
+extend-exclude = ["tests", "scripts", "tickets", "docs", ".tdd-swarm", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
