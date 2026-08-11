@@ -57,14 +57,39 @@ File-discovery convention (frozen contract for the implementer):
       (yt-dlp always writes both together); no special handling required.
 
 Cue extraction & rollup dedupe:
-    - Parse every WebVTT cue in file order into `(start_seconds, text)`,
-      joining a cue's internal lines with a single space and stripping
-      surrounding whitespace; cues with empty text after stripping are
-      dropped.
-    - Auto-caption "rollup" dedupe: walk cues in order and drop a cue whose
-      cleaned text is identical to the immediately preceding *retained*
-      cue's cleaned text (AC-2). This is a consecutive-only comparison over
-      the whole video's cue stream -- it is not scoped per-window.
+    - Parse every WebVTT cue in file order into `(start_seconds, text)`.
+      Per cue-text line (Round 2, post-review real-data patch -- see
+      `.tdd-swarm/reports/T-006-review.md`): strip inline WebVTT karaoke
+      markup -- per-word timestamp tags (`<00:01:38.520>`) and voice/class
+      spans (`<c>...</c>`) -- via a blanket `<[^>]+>` removal, then decode
+      HTML named entities (`&nbsp;`, `&amp;`, ...) via stdlib
+      `html.unescape`, then strip surrounding whitespace (this also drops a
+      now-bare `&nbsp;`'s decoded `\xa0`, which Python's `str.strip()`
+      treats as whitespace). A cue's internal lines are cleaned individually
+      this way, then joined with a single space. Cues with empty text after
+      cleaning are dropped.
+    - Auto-caption "rollup" dedupe (AC-2), generalized for real incremental
+      rollup: real YouTube rollup cues are not byte-identical -- each new
+      cue's cleaned text commonly repeats the immediately preceding
+      *retained* cue's full cleaned text as a prefix and appends newly
+      revealed words, and a later "settle" cue often re-emits just the
+      newest tail as a standalone cue. Walking cues in consecutive,
+      whole-video order (not scoped per-window) against a running
+      `prev_full` (the previous retained cue's full cleaned text):
+        1. `text == prev_full` -> exact duplicate (zero-growth case, the
+           original frozen rule) -> drop the cue entirely.
+        2. `text.startswith(prev_full)` -> incremental growth -> retain only
+           the new suffix (`text[len(prev_full):]`, stripped); advance
+           `prev_full` to the full (untruncated) `text` so later cues keep
+           comparing against the whole accumulated phrase.
+        3. `prev_full.endswith(text)` -> a "settle" cue whose text is
+           already fully covered by the tail of the (larger) previous cue
+           -> redundant -> drop the cue entirely; `prev_full` is unchanged.
+        4. Otherwise -> unrelated cue -> retain in full; `prev_full` becomes
+           `text`.
+      The net effect: no phrase from a growing/settling rollup chain ends up
+      duplicated in a window's `Doc.text`, while unrelated cues (including
+      the exact-duplicate case exercised by `mixed_batch/`) are unaffected.
 
 Windowing (fixed-width, WINDOW_SECONDS = 75):
     - Window `i` covers `[i * 75, (i + 1) * 75)` seconds of video time.
@@ -96,6 +121,7 @@ already on disk. Tests run only against committed fixtures under
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -111,9 +137,28 @@ logger = logging.getLogger(__name__)
 _INFO_JSON_SUFFIX = ".info.json"
 
 # A WebVTT cue timing line, e.g. "00:01:10.000 --> 00:01:22.000" (hours are
-# optional per the WebVTT spec, e.g. "01:10.000 --> 01:22.000").
+# optional per the WebVTT spec, e.g. "01:10.000 --> 01:22.000"). Trailing cue
+# settings (e.g. "align:start position:0%") are tolerated since this is
+# matched with `.match()`, not anchored at the end.
 _TIMESTAMP = r"(?:\d+:)?\d{2}:\d{2}\.\d{3}"
 _CUE_TIMING_RE = re.compile(rf"^(?P<start>{_TIMESTAMP})\s*-->\s*(?P<end>{_TIMESTAMP})")
+
+# Inline WebVTT karaoke markup: per-word timestamp tags (`<00:01:38.520>`)
+# and voice/class spans (`<c>`, `</c>`) that real YouTube auto-captions embed
+# directly in cue text. Not valid retrieval text -- stripped unconditionally.
+_INLINE_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_line(raw: str) -> str:
+    """Clean one raw VTT cue-text line for use in `Doc.text`.
+
+    Strips inline karaoke markup (`<...>`), decodes HTML named entities
+    (`&nbsp;`, `&amp;`, ...), then strips surrounding whitespace -- a
+    decoded `&nbsp;` becomes `\xa0`, which `str.strip()` also treats as
+    whitespace, so a trailing/leading `&nbsp;` disappears cleanly rather
+    than leaving a stray non-breaking space at a line join.
+    """
+    return html.unescape(_INLINE_TAG_RE.sub("", raw)).strip()
 
 
 def _parse_ts(ts: str) -> float:
@@ -158,7 +203,9 @@ def _parse_vtt_cues(text: str) -> list[tuple[float, str]]:
         i += 1
         text_lines: list[str] = []
         while i < n and lines[i].strip():
-            text_lines.append(lines[i].strip())
+            cleaned = _clean_line(lines[i])
+            if cleaned:
+                text_lines.append(cleaned)
             i += 1
         cue_text = " ".join(text_lines).strip()
         if cue_text:
@@ -170,15 +217,48 @@ def _parse_vtt_cues(text: str) -> list[tuple[float, str]]:
 def _dedupe_consecutive_rollups(
     cues: list[tuple[float, str]],
 ) -> list[tuple[float, str]]:
-    """Drop a cue whose cleaned text repeats the immediately preceding one.
+    """Collapse consecutive auto-caption "rollup" cues (AC-2, generalized).
 
-    Consecutive-only, whole-video-order comparison (AC-2).
+    Consecutive-only, whole-video-order comparison against a running
+    `prev_full` (the immediately preceding *retained* cue's full cleaned
+    text -- not scoped per-window):
+
+      1. Exact duplicate (`text == prev_full`) -> zero-growth rollup, the
+         original frozen rule -> drop entirely.
+      2. Incremental growth (`text.startswith(prev_full)`) -> real YouTube
+         "rolling" captions repeat the settled prefix and append newly
+         revealed words -> retain only the new suffix; keep comparing later
+         cues against the full accumulated `text`.
+      3. Redundant settle (`prev_full.endswith(text)`) -> a later cue that
+         re-emits just the already-seen tail of a larger previous cue ->
+         drop entirely (its content already survived via case 2).
+      4. Otherwise -> unrelated cue -> retain in full.
+
+    See the module docstring's "Cue extraction & rollup dedupe" section.
     """
     deduped: list[tuple[float, str]] = []
-    for start, cue_text in cues:
-        if deduped and deduped[-1][1] == cue_text:
+    prev_full: str | None = None
+    for start, text in cues:
+        if prev_full is None:
+            deduped.append((start, text))
+            prev_full = text
             continue
-        deduped.append((start, cue_text))
+
+        if text == prev_full:
+            continue  # exact duplicate -- zero growth
+
+        if text.startswith(prev_full):
+            suffix = text[len(prev_full) :].strip()
+            prev_full = text
+            if suffix:
+                deduped.append((start, suffix))
+            continue
+
+        if prev_full.endswith(text):
+            continue  # redundant settle cue -- already covered
+
+        deduped.append((start, text))
+        prev_full = text
     return deduped
 
 

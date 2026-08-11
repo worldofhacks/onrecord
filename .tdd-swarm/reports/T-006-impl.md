@@ -1,12 +1,67 @@
 # T-006 Implementation Agent Report — YouTube captions adapter
 
-**Status:** DONE — all 16 frozen tests pass; local gates green.
+**Status:** DONE — all 19 frozen tests pass (16 original + 3 Round-2
+real-caption tests); local gates green.
 
 **Files touched (in-scope only):**
-- `onrecord/ingest/youtube.py` — implemented `parse_video_dir`
+- `onrecord/ingest/youtube.py` — implemented `parse_video_dir`; Round 2
+  (below) adds karaoke-tag stripping, HTML-entity decoding, and a
+  generalized incremental-rollup dedupe
 - `scripts/pull_captions.sh` — new, executable, yt-dlp wrapper
 
 No edits to `tests/` or `tests/fixtures/youtube/**`.
+
+## Round 2 — real-caption cleaning fix (post-review Critical)
+
+`.tdd-swarm/reports/T-006-review.md` found (APPROVED, 1 Critical + 1
+Important, not AC-blocking but corpus-quality-blocking) that real YouTube
+auto-captions don't match the frozen fixtures' model: cue text embeds inline
+karaoke markup (`<00:01:38.520><c>word</c>`) and the real "rollup" pattern is
+incremental growth, not byte-identical repeats, so the original dedupe never
+fired on real data (measured 83%/136-of-163 real corpus-raw video pairs
+producing tag-laden, duplicated `Doc.text`). A separate Important finding:
+undecoded HTML entities (`&nbsp;`, `&amp;`) leak into even "clean" captions.
+The Test Agent extended the frozen suite at commit `353ba6e` with two new
+fixtures (`real_markup/` karaoke, `real_entities/` HTML entities) and 3 new
+tests; the original 16 stay green, unmodified.
+
+Fix, entirely inside `onrecord/ingest/youtube.py`:
+
+- **`_clean_line()`** (new): per raw cue-text line, strip inline `<...>`
+  markup via `_INLINE_TAG_RE = re.compile(r"<[^>]+>")`, then
+  `html.unescape()` to decode named entities, then `.strip()`. Decoded
+  `&nbsp;` becomes `\xa0`, which Python's `str.strip()` also treats as
+  whitespace, so a trailing/leading `&nbsp;` at a line-wrap point disappears
+  cleanly instead of leaving a stray non-breaking space when lines are
+  rejoined. Applied per cue-text line inside `_parse_vtt_cues`, before a
+  cue's lines are joined — so cleaning happens ahead of dedupe comparison,
+  per the revised contract.
+- **`_dedupe_consecutive_rollups()`** (generalized, same function name):
+  walks cues in consecutive whole-video order against a running `prev_full`
+  (the previous *retained* cue's full cleaned text):
+  1. `text == prev_full` → exact duplicate (original zero-growth rule) →
+     drop.
+  2. `text.startswith(prev_full)` → incremental growth → retain only the new
+     suffix (`text[len(prev_full):]`, stripped); `prev_full` advances to the
+     *full* `text` so later cues in the same growing chain keep comparing
+     against the whole accumulated phrase, not just the last suffix kept.
+  3. `prev_full.endswith(text)` → a later "settle" cue whose text is already
+     fully covered by the tail of the larger previous cue → redundant →
+     drop (its content already survived via case 2); `prev_full` unchanged.
+  4. Otherwise → unrelated cue → retain in full, `prev_full` becomes `text`.
+
+  Verified by hand against `real_markup/`'s 3-cue chain (cue1 "The budget
+  review begins with the water fund"; cue2 = cue1's text + tagged growth;
+  cue3 = the settled growth alone): produces exactly 2 retained cues (cue1
+  in full, cue2's new suffix only), cue3 dropped as redundant — the shared
+  phrase survives exactly once, matching
+  `test_ac2_incremental_rollup_no_phrase_level_duplication`.
+- Module docstring's "Cue extraction & rollup dedupe" section rewritten to
+  document both changes as the binding contract.
+
+No change to file discovery, windowing, `Doc` field mapping, or
+`scripts/pull_captions.sh` — the Critical/Important findings were scoped
+entirely to cue-text cleaning and dedupe.
 
 ## What was implemented
 
@@ -76,9 +131,10 @@ channels can log and continue past.
 ## Verification performed
 
 ```
-uv run pytest tests/unit/ingest/test_youtube.py -v   # 16 passed
-bash .tdd-swarm/run-local-gates.sh . tickets/T-006.md # format/lint/unit(30 passed)/spec-lint all green
+uv run pytest tests/unit/ingest/test_youtube.py -v   # Round 1: 16 passed
+                                                       # Round 2: 19 passed
+bash .tdd-swarm/run-local-gates.sh . tickets/T-006.md # format/lint/unit(33 passed)/spec-lint all green
 ```
 
-No edits to `tests/` or fixtures. No network calls in any test path
-(`pull_captions.sh` tests only stat/read the script's text).
+No edits to `tests/` or fixtures in either round. No network calls in any
+test path (`pull_captions.sh` tests only stat/read the script's text).
