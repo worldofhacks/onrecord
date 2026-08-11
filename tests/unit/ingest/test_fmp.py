@@ -71,6 +71,42 @@ report documenting the registry schema).
   ``[0]`` and calls ``parse_transcript(obj, ticker)``.
 - Return value is the concatenation, in quarters order, of the Docs from
   every quarter that succeeded (skipped quarters contribute nothing).
+
+======================================================================
+AMENDMENT (post-review, security REJECTED — see
+.tdd-swarm/reports/T-008-review.md, findings C1/I1/I2). Extends the
+contract above; the tests added below this line are new, the 8 tests
+above are untouched/frozen as originally handed off.
+======================================================================
+
+- **Speaker-name heuristic (fixes I1).** A candidate ``"<prefix>: <rest>"``
+  line is a **new speaker turn** only if ``<prefix>`` *looks like a name*:
+  split on whitespace, ``<prefix>`` has **1-5 words**, and **every** word
+  starts with an uppercase letter (``str.istitle()``-style; internal
+  apostrophes/hyphens such as ``O'Brien`` or ``Jean-Pierre`` are allowed
+  within a word). A line that matches ``"<prefix>: <rest>"`` but whose
+  prefix fails this check (e.g. ``"Turning to guidance: ..."`` — the word
+  ``"to"`` is lowercase) is **continuation text**: appended (space-joined)
+  to the *immediately preceding* raw turn, whatever its speaker (or, if
+  there is no preceding turn yet, treated as an unmarked/no-speaker line
+  per the existing AC-4 fallback). It must never be emitted as its own Doc
+  with the bogus prefix as ``speaker``.
+- **Non-429 HTTP error handling (fixes C1/I2).** Any HTTP error status
+  other than 429 (401, 403, 404, 500, ...) for a given quarter's request
+  is handled exactly like a permanently-failing 429, **minus the
+  retry**: a single attempt, no backoff/retry, log **exactly one** line
+  for that quarter (message may reference the status code — not pinned
+  further), skip it, and continue with the remaining quarters. **No
+  exception of any kind escapes ``fetch_transcripts`` for an HTTP error
+  status** (this includes ``httpx.HTTPStatusError`` — it must never be
+  allowed to propagate, since its default ``str()`` embeds the full
+  request URL, including the ``apikey`` query parameter, in plaintext).
+- **No-key-leakage guarantee (security-critical, fixes C1).** The
+  ``api_key``/effective key value must **never** appear, in any form,
+  anywhere in this module's log output — not in the no-key path (already
+  covered above), not in the 429 skip-and-log path, and not in the
+  non-429 skip-and-log path. Tests assert this via a distinctive sentinel
+  key value and ``sentinel_key not in caplog.text``.
 """
 
 from __future__ import annotations
@@ -401,3 +437,149 @@ def test_parse_transcript_never_returns_zero_docs_for_non_empty_markerless_conte
     assert docs[0].text.strip() == payload["content"]
     assert docs[0].id == "fmp:CEG:2024q4:turn001"
     assert docs[0].date == "2025-02-18"
+
+
+# ==========================================================================
+# AMENDMENT — added post security-review REJECTED
+# (.tdd-swarm/reports/T-008-review.md: Critical C1, Important I1/I2).
+# New tests only; the 8 tests above are untouched.
+# ==========================================================================
+
+
+# --------------------------------------------------------------------------
+# AC-3 amendment — non-429 HTTP errors (401/403/500): skip-and-log, no
+# exception escapes, remaining quarters still fetched, and — the
+# security-critical assertion — the API key never appears anywhere in the
+# logged output (fixes Critical C1 / Important I2).
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 500])
+def test_fetch_transcripts_non_429_error_skips_continues_no_key_leak(
+    monkeypatch, caplog, status_code
+):
+    # spec(T-008:AC-3)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)
+    fetch_transcripts = _callable_or_fail("fetch_transcripts")
+    parse_transcript = _callable_or_fail("parse_transcript")
+
+    sentinel_key = "SENTINEL-KEY-XYZ"
+    ok_payload = _load_fixture("transcript_basic.json")  # 2025 q2, VST
+    expected_ok_docs = _call_or_fail(parse_transcript, ok_payload, "VST")
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First quarter errors — must NOT be retried (retry is 429-only).
+            return httpx.Response(status_code, json={"error": "boom"})
+        if calls["n"] == 2:
+            # Second quarter must still be attempted (batch continues).
+            return httpx.Response(200, json=[ok_payload])
+        raise AssertionError(
+            f"expected exactly 2 HTTP calls (1 errored quarter, no retry, + 1 "
+            f"successful quarter), got a 3rd call: {request.method} {request.url}"
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    with caplog.at_level(logging.INFO, logger="onrecord.ingest.fmp"):
+        result = _call_or_fail(
+            fetch_transcripts,
+            "VST",
+            [(2025, 1), (2025, 2)],
+            api_key=sentinel_key,
+            transport=transport,
+        )
+
+    assert result == expected_ok_docs, (
+        f"a non-429 ({status_code}) quarter must be skipped (contribute no Docs) "
+        f"and the batch must still fetch the remaining quarter, got {result!r}"
+    )
+    assert calls["n"] == 2, (
+        f"errored quarter must not be retried (retry is 429-only); expected "
+        f"exactly 2 total HTTP calls, got {calls['n']}"
+    )
+
+    own_records = [r for r in caplog.records if r.name == "onrecord.ingest.fmp"]
+    assert len(own_records) == 1, (
+        f"expected exactly ONE skip-and-log line for the errored quarter, got "
+        f"{len(own_records)}: {[r.getMessage() for r in caplog.records]}"
+    )
+
+    assert sentinel_key not in caplog.text, (
+        f"API key must NEVER appear in adapter log output on a {status_code} "
+        f"error path (this includes any exception str() a naive fix might log)"
+    )
+
+
+def test_fetch_transcripts_429_skip_never_leaks_api_key_in_logs(monkeypatch, caplog):
+    # spec(T-008:AC-3)
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)
+    fetch_transcripts = _callable_or_fail("fetch_transcripts")
+
+    sentinel_key = "SENTINEL-KEY-XYZ"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": "Too Many Requests"})
+
+    transport = httpx.MockTransport(handler)
+
+    with caplog.at_level(logging.INFO, logger="onrecord.ingest.fmp"):
+        result = _call_or_fail(
+            fetch_transcripts,
+            "VST",
+            [(2025, 2)],
+            api_key=sentinel_key,
+            transport=transport,
+        )
+
+    assert result == []
+    assert sentinel_key not in caplog.text, (
+        "API key must NEVER appear in adapter log output on the 429 skip-and-log path either"
+    )
+
+
+# --------------------------------------------------------------------------
+# AC-1 amendment — a colon inside a continuation line (no real speaker
+# prefix) must merge into the preceding speaker's turn, never spawn a
+# bogus speaker Doc (fixes Important I1).
+# --------------------------------------------------------------------------
+
+
+def test_parse_transcript_colon_in_continuation_line_merges_not_bogus_speaker():
+    # spec(T-008:AC-1)
+    payload = _load_fixture("transcript_colon_continuation.json")
+    parse_transcript = _callable_or_fail("parse_transcript")
+
+    docs = _call_or_fail(parse_transcript, payload, "NVDA")
+
+    assert len(docs) == 3, (
+        f"a colon inside a continuation line ('Turning to guidance: ...') must "
+        f"not create a bogus 4th speaker turn; expected 3 Docs (Operator, "
+        f"Jensen Huang [with the continuation merged in], Colette Kress), "
+        f"got {len(docs)}: {[d.speaker for d in docs]}"
+    )
+    assert [d.speaker for d in docs] == ["Operator", "Jensen Huang", "Colette Kress"]
+    assert [d.id for d in docs] == [
+        "fmp:NVDA:2025q4:turn001",
+        "fmp:NVDA:2025q4:turn002",
+        "fmp:NVDA:2025q4:turn003",
+    ]
+    assert "Turning to guidance" not in [d.speaker for d in docs], (
+        "the continuation line's pre-colon text must never be treated as a "
+        "speaker name (fails the name heuristic: 'to' is not title-cased)"
+    )
+
+    jensen_doc = docs[1]
+    assert jensen_doc.speaker == "Jensen Huang"
+    expected_text = (
+        "Thanks, everyone, for joining us today. "
+        "Turning to guidance: our full-year outlook remains unchanged from last "
+        "quarter, and demand for Blackwell continues to outstrip supply across "
+        "every major cloud partner."
+    )
+    assert jensen_doc.text == expected_text, jensen_doc.text
+    assert jensen_doc.date == "2025-02-26"
+    assert jensen_doc.ticker == "NVDA"

@@ -170,3 +170,127 @@ FAILED tests/unit/ingest/test_fmp.py::test_parse_transcript_never_returns_zero_d
 - `deep_link` format is intentionally loose (only "non-empty http(s) URL" is
   asserted) — pick whatever the ticket's "FMP-cited URL or ticker IR page"
   note suggests; it will not fail these tests either way.
+
+---
+
+## AMENDMENT — security review REJECTED, frozen suite extended
+
+**Status:** DONE (5 new failing tests appended, confirmed to fail against the
+current implementation for the reviewed reasons — existing 8 tests untouched
+and still green — confirmed achievable GREEN against a throwaway *fixed*
+implementation built in a second isolated scratch copy)
+
+Trigger: `.tdd-swarm/reports/T-008-review.md` (Security/Review agent) rejected
+the T-008 implementation (`onrecord/ingest/fmp.py` @ `a174677`) with **1
+Critical, 2 Important** findings:
+
+- **C1 (Critical):** an unhandled `httpx.HTTPStatusError` on any non-429 error
+  status (401/403/5xx) propagates out of `fetch_transcripts`; its default
+  `str()` embeds the full request URL **including the plaintext `apikey`
+  query parameter** — a confirmed, reproducible secret-leak vector if any
+  caller does standard exception logging.
+- **I2 (Important):** same root cause — a non-429 error aborts the whole
+  `for year, quarter in quarters` loop instead of skipping that quarter and
+  continuing, unlike the (already-correct) 429 path.
+- **I1 (Important):** the speaker-marker split (`line.partition(": ")`) has no
+  validation that the pre-colon text is actually a name; a continuation line
+  that merely contains `": "` (e.g. `"Turning to guidance: our outlook
+  improved."`) is mis-parsed as its own turn with a bogus `speaker`.
+
+Per the coordinator, this is addressed by **extending** the frozen suite (not
+implementing the fix — that stays the Implementation Agent's job on
+`onrecord/ingest/fmp.py`, untouched by the Test Agent).
+
+### New fixture
+
+- `tests/fixtures/fmp/transcript_colon_continuation.json` — NVDA 2025 Q4, 4
+  lines: `Operator: ...`, `Jensen Huang: ...`, a bare continuation line
+  `Turning to guidance: our full-year outlook remains unchanged from last
+  quarter, and demand for Blackwell continues to outstrip supply across every
+  major cloud partner.` (no real speaker prefix, but contains `": "` mid-line),
+  then `Colette Kress: ...`. Correct parse: 3 Docs (Operator, Jensen Huang
+  [continuation merged in], Colette Kress) — never 4.
+
+### Contract amendment (documented in the docstring `AMENDMENT` block)
+
+- **Speaker-name heuristic (pins the I1 fix):** a `"<prefix>: <rest>"` line is
+  a new speaker turn only if `<prefix>` has 1-5 whitespace-split words and
+  *every* word is title-cased (`^[A-Z][A-Za-z'\-]*$`-style — internal
+  apostrophes/hyphens allowed). Otherwise it's continuation text, space-joined
+  onto the immediately preceding raw turn (or treated as an unmarked line if
+  there is no preceding turn yet). `"Turning to guidance"` fails on the word
+  `"to"` (not title-cased) — by design, this is the pinned counter-example.
+- **Non-429 HTTP error handling (pins the C1/I2 fix):** any status ≥400 other
+  than 429 is a single-attempt (no retry, unlike 429's one backoff retry),
+  skip-and-log-exactly-once, continue-with-remaining-quarters outcome — and
+  **no exception of any kind (especially not `httpx.HTTPStatusError`) may
+  ever escape `fetch_transcripts`** for an HTTP error status, precisely
+  because that exception's `str()` is the leak vector.
+- **No-key-leakage guarantee:** the effective API key must never appear
+  anywhere in this module's log output, on *any* code path (no-key, 429-skip,
+  or non-429-skip) — tests use a distinctive sentinel key
+  (`"SENTINEL-KEY-XYZ"`) and assert `sentinel_key not in caplog.text`.
+
+### New tests (all appended after the original 8; none of the original 8 were
+modified)
+
+| Criterion | Test(s) | What it checks |
+|---|---|---|
+| AC-3 | `test_fetch_transcripts_non_429_error_skips_continues_no_key_leak[401\|403\|500]` (parametrized, 3 cases) | First quarter returns the given status (no retry expected — exactly 1 call for it), second quarter still succeeds → result equals only the second quarter's Docs; exactly 2 total HTTP calls; exactly one log record from `onrecord.ingest.fmp`; **`sentinel_key not in caplog.text`** (the security-critical assertion); `_call_or_fail` intentionally does NOT catch `httpx.HTTPStatusError`, so against the current implementation this test fails via that uncaught exception itself — the clearest possible demonstration of C1 |
+| AC-3 | `test_fetch_transcripts_429_skip_never_leaks_api_key_in_logs` | Re-verifies, with the same sentinel key, that the (already-correct) 429 skip-and-log path also never leaks the key into `caplog.text` — a defensive regression pin, not a new behavior; already passes against the current implementation |
+| AC-1 | `test_parse_transcript_colon_in_continuation_line_merges_not_bogus_speaker` | `transcript_colon_continuation.json` → exactly 3 Docs (not 4); asserts `"Turning to guidance"` never appears as a `speaker`; asserts the exact merged text of Jensen Huang's turn (original turn + continuation line, space-joined, continuation's `"Turning to guidance: "` prefix preserved verbatim since it was never actually split) |
+
+5 new test items (7 with parametrization expanded), all tagged
+`spec(T-008:AC-1)` or `spec(T-008:AC-3)`; `spec-lint.sh` still reports full
+coverage (these ACs were already covered by the original 8 — the amendment
+tightens them, it doesn't add a new AC).
+
+### Verification performed (amendment)
+
+1. Ran the extended suite against the current implementation (`a174677`):
+   **4 of the 5 new tests fail**, each for the reviewed reason —
+   - `test_fetch_transcripts_non_429_error_skips_continues_no_key_leak[401]`,
+     `[403]`, `[500]`: fail with an **uncaught `httpx.HTTPStatusError`**
+     whose message literally reads `".../earning_call_transcript/VST?quarter=1&year=2025&apikey=SENTINEL-KEY-XYZ"`
+     — directly reproducing C1 in a frozen, automated test.
+   - `test_parse_transcript_colon_in_continuation_line_merges_not_bogus_speaker`:
+     fails with `assert 4 == 3`, `speaker='Turning to guidance'` visible in the
+     4th Doc — directly reproducing I1.
+   - `test_fetch_transcripts_429_skip_never_leaks_api_key_in_logs` **passes**
+     already (the 429 path was never the leak vector) — included as a
+     permanent regression guard, not a new-failure demonstration.
+   - The original 8 tests are unaffected: **9 passed, 4 failed** for
+     `tests/unit/ingest/test_fmp.py` (8 original + 1 already-passing new one).
+2. Built a *second* throwaway implementation in a new isolated scratch copy
+   (`/private/tmp/.../scratchpad/t008-verify2`, again never inside this
+   worktree) that fixes all three findings (name-heuristic filter on the
+   speaker split; a `status_code >= 400` branch in `_fetch_one_quarter` that
+   logs a sanitized ticker/year/quarter/status-code-only message and returns
+   `[]` — never calling `raise_for_status()` for non-429 statuses, so
+   `HTTPStatusError` is never even constructed). Ran the full extended suite
+   there: **all 13 tests pass**. Confirms the amendment is achievable and not
+   vacuously red/green. Scratch copy deleted afterwards;
+   `onrecord/ingest/fmp.py` in this worktree was never touched.
+3. `uv run ruff format --check tests/` and `uv run ruff check tests/` — clean.
+4. `uv run pytest -q` (full repo suite) — `4 failed, 23 passed` (14 T-001
+   baseline + 9 T-008-original-and-already-passing; no regression).
+5. `.tdd-swarm/spec-lint.sh tickets/T-008.md` → still
+   `spec-lint OK: all ACs covered for T-008`.
+
+### Notes for the Implementation Agent (amendment)
+
+- Do not edit `tests/unit/ingest/test_fmp.py` or any file under
+  `tests/fixtures/fmp/` to make the new tests pass — same frozen-suite rule as
+  before, now covering the amendment section too.
+- The security fix should avoid ever constructing an `HTTPStatusError` for a
+  non-429 status at all (branch on `response.status_code` before calling
+  `raise_for_status()`), rather than catching-and-re-logging it — catching
+  and then naively logging `str(exc)` would still leak the key and would
+  **not** satisfy `sentinel_key not in caplog.text`.
+- The name heuristic only needs to be good enough to reject
+  `"Turning to guidance"` (fails on the lowercase word `"to"`) while still
+  accepting every real speaker name already used across all fixtures
+  (`Operator`, `Jim Burke`, `Kristopher Moldovan`, `Jensen Huang`,
+  `Colette Kress`) — no fixture requires unicode names, honorifics, or
+  hyphenated/apostrophe'd names, though the documented heuristic allows the
+  latter two.
