@@ -1,8 +1,66 @@
 # T-010 Implementation Agent Report — Integration (CLI e2e, corpus-v1 build, clean clone)
 
-**Status:** DONE — all 6 tests in `tests/integration/test_e2e.py` pass (5 fast + the
-`@pytest.mark.slow` AC-4 clean-clone test); full repo suite green at 179 passing
-(173 baseline + 6 new); all Tier-1 local gates green.
+**Status:** DONE — all 10 tests in `tests/integration/test_e2e.py` pass (9 fast
++ the `@pytest.mark.slow` AC-4 clean-clone test); full repo suite green at 183
+passing (182 non-slow + 1 slow); all Tier-1 local gates green. See "Update —
+review follow-up" below for the latest state (post `d74df64`/`e535661`).
+
+## Update — review follow-up (non-dict-row crash + `--k` lower bound)
+
+Review (`.tdd-swarm/reports/T-010-review.md`, verdict APPROVED) flagged one
+Important finding and one Minor finding, both closed here. Test Agent pinned
+both with 4 new parametrized tests appended to the still-frozen
+`tests/integration/test_e2e.py` at `d74df64` (no other files touched by that
+commit); fixed in `e535661` (same file scope: `onrecord/cli.py`,
+`onrecord/ingest/build_corpus.py`).
+
+- **Important #1 — non-dict-but-valid-JSON rows crashed the whole ingest
+  run.** A raw JSONL line that parses successfully as JSON but isn't a JSON
+  object (`[1,2,3]`, bare `null`, a bare number/string) hit
+  `row.get(field)` in `_parse_jsonl_lines` and raised an uncaught
+  `AttributeError` — the exact "abort the run" failure mode contract #1's
+  "never abort" guarantee exists to prevent, and untested by the original
+  frozen suite. **Fix:** added an `isinstance(row, dict)` guard immediately
+  after the successful `json.loads(line)`, right before the JSON-decode
+  branch's sibling — a non-dict row now logs a warning
+  (`"...skipping malformed row (valid JSON but not an object: %s)"`, naming
+  the Python type) and `continue`s, exactly like the invalid-JSON and
+  missing-required-field cases already did. Module docstring's contract #1
+  restated to name this case explicitly.
+- **Minor #1 — `--k` had no lower-bound validation.** `--k` was a bare
+  `type=int` with no range check, so `--k -1` silently fell through to
+  Python's negative-slice semantics on `results[:k]` (`results[:-1]` —
+  "drop the last result", a nonsensical reading of a "max results" flag).
+  **Fix:** added `_positive_int(value)` (`onrecord/cli.py`), an argparse
+  `type=` callable that raises `argparse.ArgumentTypeError` for
+  non-integer or `< 1` values; wired to `--k`'s `type=`. `--k 0`/negative
+  now fails at argparse's own usage-error path — stderr contains the
+  substring `--k` (argparse's own `"argument --k: ..."` framing plus the
+  custom message), exit code 2 — mirroring `--op`'s existing
+  `choices=[...]` convention exactly, per the pinned contract's design
+  choice (a hard error, not a silent clamp).
+
+**Verification (this update):**
+- `uv run pytest tests/integration/test_e2e.py -v -m "not slow"` →
+  **9/9 passed** (5 original AC-1/2/3 + the new 4-case non-dict-row/`--k`
+  coverage).
+- `uv run pytest -q -m "not slow"` (full repo suite) → **182 passed, 1
+  deselected** (the slow AC-4 test).
+- `uv run pytest tests/integration/test_e2e.py -v -m slow` → **1 passed**
+  (AC-4 clean-clone, unaffected by this change).
+- `.tdd-swarm/run-local-gates.sh . tickets/T-010.md` (which runs the full,
+  unfiltered `pytest -q`, so it includes the slow test too) → format clean,
+  lint clean, **183 passed**, spec-lint OK, **ALL LOCAL GATES GREEN**.
+- No `BLOCKED(TEST_DISPUTE)` — both fixes matched the pinned contract
+  extensions exactly.
+
+Commit: `e535661 fix(T-010): tolerate non-dict JSON rows; validate --k
+lower bound` (staged exactly `onrecord/cli.py` +
+`onrecord/ingest/build_corpus.py`, on top of `d74df64`'s test commit).
+
+---
+
+## Original report (initial handoff)
 
 **Files touched (file scope, as ticketed):**
 - `onrecord/cli.py` (rewritten from the T-001 stub)
