@@ -11,6 +11,21 @@ appear in the input `docs` list (docs[i] -> internal id i), and are stable
 thereafter — `delete` never renumbers survivors. `Postings.doc_ids` is always
 returned sorted ascending with no duplicates.
 
+`get_doc(id)` accepts EITHER an external string id OR an internal integer id
+(the same ints that appear in `postings(term).doc_ids`) — dispatch is by
+Python type (`str` -> external map, `int` -> internal map), so the two id
+spaces stay disjoint even when an external id happens to look numeric.
+`KeyError` on an unknown id holds in both spaces. (Reconciled contract per
+orchestrator adjudication of a T-003/T-004 id-space collision — see
+`.tdd-swarm/LESSONS.md` and `.tdd-swarm/reports/T-003-review.md`.)
+
+`doc_length(internal_id)` and `avg_doc_length()` are public accessors over
+per-doc token counts recorded at `build()` time; both survive `save`/`load`.
+
+`postings()` for a term absent from the corpus returns a fresh, unshared
+`Postings` object on every call — never a shared mutable singleton — so a
+caller mutating one absent-term result can't corrupt another lookup.
+
 On-disk layout (`save(path)` writes a directory):
     <path>/meta.msgpack   - df, doc lengths, id<->doc_id maps, next_internal_id
     <path>/docs.msgpack   - internal_id -> Doc fields (skips tombstoned/deleted)
@@ -61,7 +76,16 @@ class Postings:
         )
 
 
-_EMPTY_POSTINGS = Postings(array("q"), array("q"), [])
+def _empty_postings() -> Postings:
+    """A fresh, unshared empty Postings — never a module-level singleton.
+
+    Returning the same mutable object by reference for every absent-term
+    lookup would let a caller's in-place mutation of one result leak into
+    every other absent-term lookup (and, transitively, into real terms'
+    postings via accidental aliasing bugs elsewhere). Allocating fresh
+    arrays/lists per call is cheap (empty) and closes that off entirely.
+    """
+    return Postings(array("q"), array("q"), [])
 
 
 def _analyze_positions(tokens: list[str]) -> dict[str, list[int]]:
@@ -140,18 +164,43 @@ class InvertedIndex:
 
     def postings(self, term: str) -> Postings:
         """Postings list for `term`."""
-        return self._postings.get(term, _EMPTY_POSTINGS)
+        postings = self._postings.get(term)
+        return postings if postings is not None else _empty_postings()
 
     def doc_count(self) -> int:
         """Number of documents currently in the index."""
         return len(self._id_to_internal)
 
-    def get_doc(self, id: str) -> Doc:
-        """Fetch a stored Doc by id."""
+    def get_doc(self, id: str | int) -> Doc:
+        """Fetch a stored Doc by external string id or internal integer id.
+
+        Dispatch is by Python type: `str` looks up the external-id map,
+        `int` looks up the internal-id map directly (the same ints returned
+        in `postings(term).doc_ids`). `KeyError` on an unknown id in either
+        space.
+        """
+        if isinstance(id, int):
+            doc = self._docs.get(id)
+            if doc is None:
+                raise KeyError(id)
+            return doc
         internal_id = self._id_to_internal.get(id)
         if internal_id is None:
             raise KeyError(id)
         return self._docs[internal_id]
+
+    def doc_length(self, internal_id: int) -> int:
+        """Token count (under the analyzer used at build time) for `internal_id`."""
+        length = self._doc_lengths.get(internal_id)
+        if length is None:
+            raise KeyError(internal_id)
+        return length
+
+    def avg_doc_length(self) -> float:
+        """Mean token count over currently-live documents (0.0 if empty)."""
+        if not self._doc_lengths:
+            return 0.0
+        return sum(self._doc_lengths.values()) / len(self._doc_lengths)
 
     # ------------------------------------------------------------------
     # delete
