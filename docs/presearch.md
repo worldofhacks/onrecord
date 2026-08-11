@@ -1,6 +1,6 @@
 # Pre-Search Document — OnRecord (RelevanceEngine, Assignment 02)
 
-**Date:** 2026-08-11 · **Author:** Alexander Miller · **Method:** AI-interview per the assignment's Pre-Search methodology (Claude Code / Opus). The full AI conversation is preserved as the session transcript and serves as the reference document required by the assignment.
+**Date:** 2026-08-11 · **Author:** Alexander Miller · **Method:** AI-interview per the assignment's Pre-Search methodology (Claude Code / Opus). The full AI conversation is saved in-repo as the reference document required by the assignment: [`docs/presearch-transcript.md`](presearch-transcript.md) (re-exportable via `scripts/export_presearch_transcript.py`).
 
 **Product in one line:** *OnRecord* — a from-scratch search engine + RAG system over the AI-infrastructure buildout's public paper trail (county permitting meetings, utility earnings calls, regulatory dockets), where every answer carries a clickable receipt: a YouTube timestamp, an EDGAR anchor, or a docket page.
 
