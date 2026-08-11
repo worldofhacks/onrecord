@@ -8,6 +8,7 @@ internals, file dumps, and system reminders are skipped.
 Re-run before final submission to capture the latest state:
     python3 scripts/export_presearch_transcript.py
 """
+
 import json
 import re
 import sys
@@ -31,11 +32,13 @@ def main() -> None:
     if not SESSION.exists():
         sys.exit(f"session file not found: {SESSION}")
 
-    lines: list[str] = ["# Pre-Search AI Conversation — Reference Document",
-                        "",
-                        "Raw session: Claude Code (Opus), RelevanceEngine Assignment 02.",
-                        "Exported by `scripts/export_presearch_transcript.py`.",
-                        ""]
+    lines: list[str] = [
+        "# Pre-Search AI Conversation — Reference Document",
+        "",
+        "Raw session: Claude Code (Opus), RelevanceEngine Assignment 02.",
+        "Exported by `scripts/export_presearch_transcript.py`.",
+        "",
+    ]
     for raw in SESSION.read_text().splitlines():
         try:
             entry = json.loads(raw)
