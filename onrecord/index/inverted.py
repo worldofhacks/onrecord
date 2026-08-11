@@ -1,4 +1,11 @@
-"""InvertedIndex stub — implemented by T-003 (df, tf, positions; save/load/delete)."""
+"""InvertedIndex stub — implemented by T-003 (df, tf, positions; save/load/delete).
+
+`build()`'s `analyzer` keyword (contract extension pinned by T-003's Test Agent,
+see tests/unit/test_index.py module docstring): `None` means "use the real
+`onrecord.analysis.analyzer.analyze` (T-002)"; callers may inject any
+`str -> list[str]` callable instead, primarily so T-003 can be tested in
+isolation while T-002 is still a stub in parallel worktrees.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +14,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from onrecord.types import Doc
 
 
@@ -23,8 +32,15 @@ class InvertedIndex:
     """Array-backed inverted index over a corpus of `Doc`s."""
 
     @classmethod
-    def build(cls, docs: list[Doc]) -> InvertedIndex:
-        """Build a fresh index from an iterable of Docs."""
+    def build(
+        cls, docs: list[Doc], analyzer: Callable[[str], list[str]] | None = None
+    ) -> InvertedIndex:
+        """Build a fresh index from an iterable of Docs.
+
+        `analyzer` defaults to `onrecord.analysis.analyzer.analyze` when None;
+        pass an explicit `str -> list[str]` callable to inject a different
+        tokenizer (used by T-003's tests to avoid depending on T-002).
+        """
         raise NotImplementedError
 
     def df(self, term: str) -> int:
