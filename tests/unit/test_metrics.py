@@ -72,7 +72,9 @@ def run(
   MRR, NDCG@10 — the exact metrics named in tickets/T-005.md's Context).
   Both omitting the kwarg and passing `k_values=None` explicitly must work.
 - Return value (an `int`; `run()` does not call `sys.exit` itself — `main()`
-  is expected to do `sys.exit(run(...))`):
+  is expected to do `return run(...)`, and the module's existing
+  `if __name__ == "__main__": sys.exit(main())` footer forwards that to the
+  process exit code):
   - `0` if mean NDCG@10 across queries is `>= 0.5`
   - `1` if mean NDCG@10 across queries is `< 0.5` (the red gate; this is the
     expected outcome of the real, un-injected pipeline tonight, but the gate
@@ -85,6 +87,14 @@ def run(
   `query_id` carrying all six metric labels (`P@5`, `P@10`, `R@10`, `R@50`,
   `MRR`, `NDCG@10` — verbatim tokens from the ticket text), plus a means
   section/row using those same labels.
+- `metrics` (the history row's 4th key) is pinned to
+  `{"per_query": {query_id: {label: float, ...}, ...}, "mean": {label: float,
+  ...}}`, keyed by the same six literal metric-label tokens as the
+  scoreboard. This is Test-Agent-pinned (post-review hardening, see
+  `.tdd-swarm/reports/T-005-testreview.md`): an unstructured/unverified
+  `metrics` blob let a hardcoded-zero scoreboard and a globally-merged (not
+  per-`query_id`) relevance dict both pass silently — both are now caught by
+  asserting hand-computed values straight out of this dict.
 """
 
 from __future__ import annotations
@@ -92,6 +102,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -176,13 +188,10 @@ def test_mrr_binary_threshold_grade_zero_is_nonrelevant():
 
 
 def test_ndcg_at_2_ideal_order_is_one():
-    # spec(T-005:AC-3)
+    # spec(T-005:AC-3) -- ranked==ideal order (grades sorted desc: c=2, a=1),
+    # so DCG@2/IDCG@2 collapses to the literal ticket value 1.0
     ranked = ["c", "a"]
     relevant = {"a": 1, "c": 2}
-    expected_dcg = 2 / math.log2(2) + 1 / math.log2(3)
-    # ideal ordering (grades sorted desc: c=2, a=1) is identical to `ranked`
-    expected_idcg = expected_dcg
-    assert ndcg_at_k(ranked, relevant, 2) == pytest.approx(expected_dcg / expected_idcg)
     assert ndcg_at_k(ranked, relevant, 2) == pytest.approx(1.0)
 
 
@@ -292,6 +301,14 @@ def test_recall_zero_when_no_relevant_docs_judged_at_all():
 # collection time and take down every other test in this file with it.
 # Accessing it lazily inside each test body means the (currently correct)
 # AttributeError is a normal, isolated per-test failure instead.
+#
+# The fixture has THREE queries (q1/q2 all-hit, q3 all-miss under the "good"
+# retriever) deliberately, not two: with only two identical-NDCG queries,
+# mean/max/min/first-query aggregation are indistinguishable, so a runner
+# that aggregates the wrong way (or ignores `query_id` grouping and scores
+# every query against one globally-merged relevance dict) still passes. Three
+# queries with different outcomes (1.0, 1.0, 0.0 -> mean 2/3) make `mean`
+# the only aggregate that satisfies the hand-computed assertions below.
 # ==========================================================================
 
 
@@ -307,6 +324,8 @@ _JUDGMENT_ROWS = [
     {"query_id": "q1", "query": "alpha", "criterion": "mentions alpha", "doc_id": "d3", "grade": 0},
     {"query_id": "q2", "query": "beta", "criterion": "mentions beta", "doc_id": "e1", "grade": 1},
     {"query_id": "q2", "query": "beta", "criterion": "mentions beta", "doc_id": "e2", "grade": 2},
+    {"query_id": "q3", "query": "gamma", "criterion": "mentions gamma", "doc_id": "f1", "grade": 2},
+    {"query_id": "q3", "query": "gamma", "criterion": "mentions gamma", "doc_id": "f2", "grade": 1},
 ]
 
 
@@ -316,8 +335,14 @@ def _fake_retrieve_bad(query: str) -> list[str]:
 
 
 def _fake_retrieve_good(query: str) -> list[str]:
-    """Returns the ideal (grade-descending) order per query -> NDCG@10 == 1."""
-    return {"alpha": ["d1", "d2", "d3"], "beta": ["e2", "e1"]}[query]
+    """q1/q2: ideal (grade-descending) order -> NDCG@10 == 1.0 each.
+    q3: a doc that was never judged -> NDCG@10 == 0.0. Mean NDCG@10 == 2/3.
+    """
+    return {
+        "alpha": ["d1", "d2", "d3"],
+        "beta": ["e2", "e1"],
+        "gamma": ["zzz9"],
+    }[query]
 
 
 @pytest.fixture
@@ -339,6 +364,7 @@ def test_run_scoreboard_prints_all_metrics_per_query_and_means(judgments_file, t
 
     assert "q1" in out, f"scoreboard missing query_id 'q1':\n{out}"
     assert "q2" in out, f"scoreboard missing query_id 'q2':\n{out}"
+    assert "q3" in out, f"scoreboard missing query_id 'q3':\n{out}"
     for label in ("P@5", "P@10", "R@10", "R@50", "MRR", "NDCG@10"):
         assert label in out, f"scoreboard missing metric label {label!r}:\n{out}"
     assert "mean" in out.lower(), f"scoreboard missing a means row/section:\n{out}"
@@ -370,6 +396,69 @@ def test_run_appends_history_row_with_git_sha_and_corpus_version(judgments_file,
     assert isinstance(row["metrics"], dict) and row["metrics"], "metrics must be a non-empty object"
 
 
+def test_run_history_row_has_hand_computed_per_query_and_mean_metrics(judgments_file, tmp_path):
+    # spec(T-005:AC-5) -- post-review hardening (I-1/I-2): pins real numbers,
+    # not just key presence, so a hardcoded-zero scoreboard AND a runner that
+    # scores every query against one globally-merged relevance dict (instead
+    # of grouping judgments by query_id) both fail. q1: ranked=[d1,d2,d3] vs
+    # {d1:2,d2:1,d3:0} -- top-10 slice is the whole (3-doc) list, 2 of the 3
+    # are relevant (grade>=1): P@5=2/5=0.4, P@10=2/10=0.2, R@10=R@50=2/2=1.0,
+    # first relevant at rank 1 -> MRR=1.0, ranked==ideal order -> NDCG@10=1.0.
+    # q2 is symmetric (also 2/2 relevant, ideal order) -> identical numbers.
+    # q3: ranked=["zzz9"], a doc never judged, vs {f1:2,f2:1} -- 0 found ->
+    # P@5=P@10=R@10=R@50=MRR=NDCG@10=0.0. Mean over the three queries:
+    # P@5=0.8/3=4/15, P@10=0.4/3=2/15, R@10=R@50=MRR=NDCG@10=2/3.
+    history_path = tmp_path / "scoreboard.jsonl"
+    evalrun.run(judgments_file, retrieve_fn=_fake_retrieve_good, history_path=history_path)
+
+    row = json.loads(history_path.read_text().splitlines()[-1])
+    per_query = row["metrics"]["per_query"]
+    mean = row["metrics"]["mean"]
+
+    for qid in ("q1", "q2"):
+        pq = per_query[qid]
+        assert pq["P@5"] == pytest.approx(0.4), f"{qid} P@5: {pq}"
+        assert pq["P@10"] == pytest.approx(0.2), f"{qid} P@10: {pq}"
+        assert pq["R@10"] == pytest.approx(1.0), f"{qid} R@10: {pq}"
+        assert pq["R@50"] == pytest.approx(1.0), f"{qid} R@50: {pq}"
+        assert pq["MRR"] == pytest.approx(1.0), f"{qid} MRR: {pq}"
+        assert pq["NDCG@10"] == pytest.approx(1.0), f"{qid} NDCG@10: {pq}"
+
+    q3 = per_query["q3"]
+    assert q3["P@5"] == pytest.approx(0.0), f"q3 P@5: {q3}"
+    assert q3["P@10"] == pytest.approx(0.0), f"q3 P@10: {q3}"
+    assert q3["R@10"] == pytest.approx(0.0), f"q3 R@10: {q3}"
+    assert q3["R@50"] == pytest.approx(0.0), f"q3 R@50: {q3}"
+    assert q3["MRR"] == pytest.approx(0.0), f"q3 MRR: {q3}"
+    assert q3["NDCG@10"] == pytest.approx(0.0), f"q3 NDCG@10: {q3}"
+
+    assert mean["P@5"] == pytest.approx(4 / 15), f"mean P@5: {mean}"
+    assert mean["P@10"] == pytest.approx(2 / 15), f"mean P@10: {mean}"
+    assert mean["R@10"] == pytest.approx(2 / 3), f"mean R@10: {mean}"
+    assert mean["R@50"] == pytest.approx(2 / 3), f"mean R@50: {mean}"
+    assert mean["MRR"] == pytest.approx(2 / 3), f"mean MRR: {mean}"
+    assert mean["NDCG@10"] == pytest.approx(2 / 3), f"mean NDCG@10: {mean}"
+
+
+def test_run_appends_second_row_without_truncating_first(judgments_file, tmp_path):
+    # spec(T-005:AC-5) -- post-review hardening (I-4): the ticket and design
+    # spec both call this an *append*-only history file; a writer that opens
+    # history_path with "w" (truncating) instead of "a" must fail here.
+    history_path = tmp_path / "scoreboard.jsonl"
+
+    evalrun.run(judgments_file, retrieve_fn=_fake_retrieve_bad, history_path=history_path)
+    first_lines = [line for line in history_path.read_text().splitlines() if line.strip()]
+    assert len(first_lines) == 1, f"expected 1 row after the first run(), got {len(first_lines)}"
+    first_row = json.loads(first_lines[0])
+
+    evalrun.run(judgments_file, retrieve_fn=_fake_retrieve_good, history_path=history_path)
+    lines = [line for line in history_path.read_text().splitlines() if line.strip()]
+    assert len(lines) == 2, f"expected 2 rows after a second run(), got {len(lines)}: {lines}"
+    assert json.loads(lines[0]) == first_row, (
+        "the first history row must survive a second run() call unchanged"
+    )
+
+
 def test_run_exits_1_when_mean_ndcg_at_10_below_half_red_gate(judgments_file, tmp_path):
     # spec(T-005:AC-5) -- RED tonight by design: a retrieve_fn that never
     # surfaces a judged doc drives mean NDCG@10 to 0.0 (< 0.5)
@@ -395,6 +484,30 @@ def test_run_exits_0_when_mean_ndcg_at_10_meets_threshold(judgments_file, tmp_pa
     assert exit_code == 0
 
 
+def test_run_exit_code_boundary_mean_ndcg_exactly_half_is_green(tmp_path):
+    # spec(T-005:AC-5) -- post-review hardening (m-5): the ticket says "exit
+    # 1 if mean NDCG@10 < 0.5", so exactly 0.5 must NOT trigger the red gate.
+    # Two single-doc queries, one hit (NDCG@10=1.0) and one miss (0.0), give
+    # a mean of exactly 0.5.
+    judgments_path = tmp_path / "boundary_judgments.jsonl"
+    _write_judgments(
+        judgments_path,
+        [
+            {"query_id": "b1", "query": "one", "criterion": "c", "doc_id": "x1", "grade": 1},
+            {"query_id": "b2", "query": "two", "criterion": "c", "doc_id": "x2", "grade": 1},
+        ],
+    )
+
+    def boundary_retrieve(query: str) -> list[str]:
+        return {"one": ["x1"], "two": ["nomatch"]}[query]
+
+    history_path = tmp_path / "scoreboard.jsonl"
+    exit_code = evalrun.run(
+        judgments_path, retrieve_fn=boundary_retrieve, history_path=history_path
+    )
+    assert exit_code == 0
+
+
 def test_run_exits_2_with_clear_message_when_judgments_file_missing(tmp_path, capsys):
     # spec(T-005:AC-5)
     missing = tmp_path / "does_not_exist.jsonl"
@@ -414,4 +527,49 @@ def test_run_exits_2_with_clear_message_when_judgments_file_missing(tmp_path, ca
     )
     assert not history_path.exists(), (
         "history_path should not be written to when judgments_path is missing"
+    )
+
+
+def test_main_delegates_to_run_and_forwards_its_exit_code(monkeypatch):
+    # spec(T-005:AC-5) -- post-review hardening (I-5): AC-5's literal subject
+    # is `python -m onrecord.eval.run` / `main()`, which the rest of this
+    # file never exercises (it only calls the injectable `run()` directly).
+    # Pins `main()` as a real delegation to `run()` -- today's stub
+    # (`main()` just writes "not implemented" and returns 1, ignoring `run`
+    # entirely) must fail this.
+    sentinel = 7
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sentinel
+
+    monkeypatch.setattr(evalrun, "run", fake_run)
+    result = evalrun.main()
+
+    assert calls, "main() must call run() (module-level onrecord.eval.run.run)"
+    assert result == sentinel, "main() must return run()'s exit code, not a hardcoded value"
+
+
+def test_main_entrypoint_exits_2_when_default_judgments_file_missing(tmp_path):
+    # spec(T-005:AC-5) -- post-review hardening (I-5): a hermetic smoke test
+    # of the literal `python -m onrecord.eval.run` entry point AC-5 names.
+    # Run with cwd=tmp_path (no evalsets/judgments.jsonl present anywhere
+    # under it) so the default judgments path can't resolve -- must exit 2,
+    # exactly like the direct run() call in
+    # test_run_exits_2_with_clear_message_when_judgments_file_missing.
+    result = subprocess.run(
+        [sys.executable, "-m", "onrecord.eval.run"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2, (
+        f"'python -m onrecord.eval.run' with no default judgments file present "
+        f"should exit 2, got {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "judgments" in result.stderr.lower(), (
+        f"stderr does not mention the missing judgments file:\n{result.stderr}"
     )
