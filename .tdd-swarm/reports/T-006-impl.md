@@ -1,15 +1,54 @@
 # T-006 Implementation Agent Report — YouTube captions adapter
 
-**Status:** DONE — all 19 frozen tests pass (16 original + 3 Round-2
-real-caption tests); local gates green.
+**Status:** DONE — all 20 frozen tests pass (16 original + 3 Round-2
+real-caption tests + 1 Round-3 multi-cycle-rollup regression test); local
+gates green.
 
 **Files touched (in-scope only):**
 - `onrecord/ingest/youtube.py` — implemented `parse_video_dir`; Round 2
-  (below) adds karaoke-tag stripping, HTML-entity decoding, and a
-  generalized incremental-rollup dedupe
+  adds karaoke-tag stripping, HTML-entity decoding, and a generalized
+  incremental-rollup dedupe; Round 3 (below) fixes a `prev_full`-not-reset
+  bug in that dedupe's redundant-settle branch
 - `scripts/pull_captions.sh` — new, executable, yt-dlp wrapper
 
 No edits to `tests/` or `tests/fixtures/youtube/**`.
+
+## Round 3 — multi-cycle rollup duplication fix (post-re-review)
+
+Round-2 re-review found the generalized dedupe (below) still duplicates text
+on a *second* rollup growth→settle cycle within the same video (measured:
+80% of real videos affected). Root cause: in `_dedupe_consecutive_rollups`'s
+case 3 (redundant settle — `prev_full.endswith(text)` → drop the cue), the
+code dropped the cue but left `prev_full` unchanged (still pointing at the
+longer, pre-settle cue's text) instead of resetting it to the settle cue's
+own (shorter) `text`. A second cycle's growth cue builds on the settle cue's
+text, not the stale pre-settle text, so its `text.startswith(prev_full)`
+check missed against the stale `prev_full`, fell through to the "unrelated
+cue → retain in full" branch, and re-emitted the just-dropped phrase
+verbatim inside its own full text.
+
+The Test Agent pinned this at commit `3eba156`
+(`real_markup_multicycle/KaraokeVid02`, 5 cues / two full growth→settle
+cycles chained back to back — a single cycle, as in `real_markup/`, never
+reaches a fourth cue and so can't expose this hand-off bug) with
+`test_ac2_multi_cycle_rollup_no_phrase_level_duplication` (1 new failing
+test; the existing 19 stayed green, confirming the bug was isolated to the
+cross-cycle hand-off, not the single-cycle case).
+
+**Fix** (`onrecord/ingest/youtube.py`, case 3 of
+`_dedupe_consecutive_rollups`): add `prev_full = text` before the `continue`
+that drops a redundant settle cue. One line. Traced by hand against the
+5-cue fixture (`A`=cue1, `B`=cycle-1 growth, `C`=cycle-2 growth): cue3
+(settle, text=`B`) now resets `prev_full` from the stale `"A B"` to `B`
+before cue4 (text=`"B C"`) is evaluated, so cue4 correctly matches case 2
+(`"B C".startswith(B)`) and contributes only its new suffix `C` — `B` no
+longer appears a second time embedded inside cue4's full text. Final
+`seg000.text` = `A + " " + B + " " + C`, each phrase exactly once, matching
+the pinned test's assertion.
+
+Also updated: the module docstring's "Cue extraction & rollup dedupe"
+section and `_dedupe_consecutive_rollups`'s own docstring, both now document
+the `prev_full` reset as part of case 3's binding contract.
 
 ## Round 2 — real-caption cleaning fix (post-review Critical)
 
@@ -133,8 +172,9 @@ channels can log and continue past.
 ```
 uv run pytest tests/unit/ingest/test_youtube.py -v   # Round 1: 16 passed
                                                        # Round 2: 19 passed
-bash .tdd-swarm/run-local-gates.sh . tickets/T-006.md # format/lint/unit(33 passed)/spec-lint all green
+                                                       # Round 3: 20 passed
+bash .tdd-swarm/run-local-gates.sh . tickets/T-006.md # format/lint/unit(34 passed)/spec-lint all green
 ```
 
-No edits to `tests/` or fixtures in either round. No network calls in any
-test path (`pull_captions.sh` tests only stat/read the script's text).
+No edits to `tests/` or fixtures in any round. No network calls in any test
+path (`pull_captions.sh` tests only stat/read the script's text).

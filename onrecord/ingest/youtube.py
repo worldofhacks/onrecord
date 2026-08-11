@@ -84,7 +84,14 @@ Cue extraction & rollup dedupe:
            comparing against the whole accumulated phrase.
         3. `prev_full.endswith(text)` -> a "settle" cue whose text is
            already fully covered by the tail of the (larger) previous cue
-           -> redundant -> drop the cue entirely; `prev_full` is unchanged.
+           -> redundant -> drop the cue entirely, but reset `prev_full` to
+           this settle cue's (shorter) `text` (Round 3 fix -- see
+           `.tdd-swarm/reports/T-006-review.md`'s multi-cycle finding): a
+           second rollup cycle's growth cue builds on the settle cue's text,
+           not the pre-settle cue's longer text, so leaving `prev_full`
+           stale would make the next growth cue miss its prefix match, get
+           retained in full, and re-duplicate the phrase this branch just
+           dropped.
         4. Otherwise -> unrelated cue -> retain in full; `prev_full` becomes
            `text`.
       The net effect: no phrase from a growing/settling rollup chain ends up
@@ -231,7 +238,13 @@ def _dedupe_consecutive_rollups(
          cues against the full accumulated `text`.
       3. Redundant settle (`prev_full.endswith(text)`) -> a later cue that
          re-emits just the already-seen tail of a larger previous cue ->
-         drop entirely (its content already survived via case 2).
+         drop entirely (its content already survived via case 2), but reset
+         `prev_full` to this settle cue's (shorter) `text` before moving on:
+         a second rollup cycle's growth cue builds on the settle cue's text,
+         not on the pre-settle cue's longer text, so comparing the next cue
+         against a stale, longer `prev_full` would miss its prefix match and
+         retain it in full -- re-duplicating the phrase this branch just
+         dropped (multi-cycle rollup bug).
       4. Otherwise -> unrelated cue -> retain in full.
 
     See the module docstring's "Cue extraction & rollup dedupe" section.
@@ -255,7 +268,15 @@ def _dedupe_consecutive_rollups(
             continue
 
         if prev_full.endswith(text):
-            continue  # redundant settle cue -- already covered
+            # Redundant settle cue -- already covered, drop it. But reset
+            # prev_full to this (shorter) settled text: the *next* cue's
+            # growth chain builds on the settle cue's text, not on the
+            # larger pre-settle cue's text, so comparing against the stale,
+            # longer prev_full would make that next growth cue miss its
+            # prefix match and get retained in full -- re-duplicating the
+            # phrase this branch just dropped (multi-cycle rollup bug).
+            prev_full = text
+            continue
 
         deduped.append((start, text))
         prev_full = text
