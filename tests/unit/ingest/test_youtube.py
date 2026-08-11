@@ -10,10 +10,53 @@ Run with:
     uv run pytest tests/unit/ingest/test_youtube.py -v
 
 Zero network: every test below reads only committed fixtures under
-tests/fixtures/youtube/. `onrecord.ingest.youtube.parse_video_dir` currently
-raises NotImplementedError (see its module docstring for the full frozen
-contract) — that is the CORRECT failure mode for every test that calls it
-until T-006 is implemented.
+tests/fixtures/youtube/.
+
+**Round 2 (post-review, real-data patch — see `.tdd-swarm/reports/T-006-review.md`):**
+`parse_video_dir` is now implemented (commit `00bb196`) and the original 16
+tests below pass against it. Review's real-data spot check (against
+`corpus-raw/youtube/`, never committed here) found that the *frozen* fixture
+model of "auto-caption rollup" (byte-identical consecutive cues) does not
+match how real YouTube auto-captions actually behave, and that real cue text
+carries markup the frozen fixtures never exercised. Two classes of gap, each
+now covered by a new fixture + tests below:
+
+1. **Karaoke inline markup**: real auto-caption cues embed per-word timing
+   tags directly in the cue text, e.g. `capital<00:00:02.300><c>
+   improvement</c><00:00:02.600><c> plan</c>...` (verbatim structure from
+   `corpus-raw/youtube/Loudoun_County_Board_of_Supervisors/-75a1WxvzdM.en.vtt`,
+   trimmed; wording in the fixture is original, not copied). None of this is
+   valid retrieval text; `<...>` tags must be stripped from `Doc.text`.
+2. **Incremental (not exact-duplicate) rollup**: real "rolling" captions grow
+   a cue's text over several consecutive cue blocks (each new cue repeats the
+   prior cue's now-settled text on one line and adds newly-tagged words on
+   another — see the real excerpt quoted in the fixture-layout section
+   below), then a short "settle" cue finalizes that segment as plain text.
+   Consecutive cues are therefore rarely byte-identical, so the originally
+   frozen "drop if identical to the immediately preceding retained cue"
+   dedupe (still correct for exact duplicates — see `mixed_batch/`, AC-2)
+   never fires against this pattern, and naively joining every cue's text
+   duplicates whole phrases. **Revised AC-2 rule (supersedes the exact-match
+   wording above for this case, per this round's brief — tests aren't merged
+   yet, this file's author still owns the contract)**: after any per-cue
+   cleaning (tag-stripping, entity-decoding), a phrase must not appear more
+   than once, consecutively-repeated-and-extended, in a window's `Doc.text`.
+   The old byte-identical rule is the zero-growth special case of this and
+   remains satisfied by it (see `test_ac2_consecutive_duplicate_rollup_lines_collapsed`,
+   unchanged, still green). The exact algorithm (keep-first vs. keep-last of
+   a growing chain, etc.) is left to the implementer; only the *observable*
+   no-repeated-phrase outcome is pinned here.
+3. **Undecoded HTML entities**: even the "clean" (non-karaoke) real caption
+   variant emits raw named entities, e.g. `&nbsp;`, `&amp;` (verbatim
+   structure from
+   `corpus-raw/youtube/Culpeper_County_Board_of_Supervisors/AaLqpzq-6gU.en-en.vtt`,
+   trimmed; wording in the fixture is original). These must be decoded
+   (e.g. stdlib `html.unescape`) before landing in `Doc.text`.
+
+`corpus-raw/youtube/` was read-only reference material for authoring the new
+fixtures below (per the coordinator's pointer) and is never read by, or a
+dependency of, these tests — everything the suite touches is committed under
+`tests/fixtures/youtube/`.
 
 Schema/contract decisions not otherwise pinned by the ticket (fixed here and
 documented in onrecord/ingest/youtube.py's module docstring, which the
@@ -26,7 +69,14 @@ implementer must follow):
   is the lexicographically-first `<stem>.*.vtt` match in the same directory.
 - Rollup dedupe (AC-2): a cue is dropped if its cleaned text is identical to
   the immediately preceding *retained* cue's cleaned text — a consecutive,
-  whole-video-order comparison, not scoped per-window.
+  whole-video-order comparison, not scoped per-window. **Extended by Round 2
+  above**: this must also collapse incremental (extending, not just
+  identical) consecutive rollup growth once cue text is cleaned of markup —
+  see `real_markup/` and the no-repeated-phrase rule above.
+- Cue text cleaning (Round 2): inline WebVTT karaoke tags (`<...>`, e.g.
+  `<00:00:02.300>`, `<c>`, `</c>`) are stripped, and HTML named entities
+  (`&nbsp;`, `&amp;`, etc.) are decoded, before a cue's text is used for
+  dedupe comparison or joined into a window's `Doc.text`.
 - Windowing: fixed 75s windows, `window_index = int(cue_start_seconds //
   75)`. A cue belongs to the window containing its START time. A cue that
   starts before a boundary and ends after it is NOT split (whole cue -> the
@@ -52,6 +102,31 @@ Fixture layout (tests/fixtures/youtube/), a 3-video simulated channel pull:
             simulates "no English subs available".
     malformed_only/   — isolated copy of the LCBbadvtt01 pair (AC-5 alone).
     nosubs_only/      — isolated copy of the LCBnosubs01 info.json (AC-3 alone).
+    real_markup/      — (Round 2) one video, `KaraokeVid01`: 3 cues modeling
+        real YouTube "growing rollup" karaoke captions structurally, e.g.
+        (real excerpt, `-75a1WxvzdM.en.vtt`, quoted for structure only):
+            00:01:38.280 --> 00:01:40.069
+            the code changes much has changed we're
+            now<00:01:38.520><c> our</c><00:01:38.640><c> own</c>...
+        i.e. a cue whose first line repeats the prior cue's settled text and
+        whose second line is newly-tagged growth. The fixture's own 3 cues
+        (all in window 0, upload_date 20260305): cue 1 "The budget review
+        begins with the water fund" (plain, settled); cue 2 (t=2s) repeats
+        cue 1's text on line 1 and adds `<c>`-tagged growth ("capital
+        improvement plan for fiscal year twenty twenty six") on line 2; cue
+        3 (t=4.7s) is the settled, plain-text finalization of cue 2's growth.
+        Naively joining all 3 (as the pre-Round-2 implementation does)
+        duplicates cue 1's phrase and leaks literal `<...>` tags into
+        `Doc.text` — reproduced directly against the real implementation
+        while authoring these tests.
+    real_entities/    — (Round 2) one video, `EntitiesVid01`: 2 cues modeling
+        the real "clean" (non-karaoke) caption variant's HTML-entity leakage
+        seen in `corpus-raw/youtube/Culpeper_County_Board_of_Supervisors/
+        AaLqpzq-6gU.en-en.vtt` (structure described, not quoted here): plain
+        2-line cues with a trailing `&nbsp;` after some words (sometimes
+        doubled, `&nbsp;&nbsp;`, at a line break) and an `&amp;` elsewhere.
+        The fixture's own 2 cues (both in window 0) use entirely original
+        wording, reproducing only that entity-placement pattern.
 
 `registry_entry` fixtures mirror corpus/registry.yaml's `youtube_channels[i]`
 shape (`id`, `name`, `jurisdiction`, `state`, `verified`).
@@ -72,12 +147,16 @@ FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "youtube"
 MIXED_BATCH_DIR = FIXTURES_DIR / "mixed_batch"
 MALFORMED_ONLY_DIR = FIXTURES_DIR / "malformed_only"
 NOSUBS_ONLY_DIR = FIXTURES_DIR / "nosubs_only"
+REAL_MARKUP_DIR = FIXTURES_DIR / "real_markup"
+REAL_ENTITIES_DIR = FIXTURES_DIR / "real_entities"
 
 PULL_SCRIPT = REPO_ROOT / "scripts" / "pull_captions.sh"
 
 GOOD_VIDEO_ID = "LCB0611meet"
 BAD_VIDEO_ID = "LCBbadvtt01"
 NOSUB_VIDEO_ID = "LCBnosubs01"
+KARAOKE_VIDEO_ID = "KaraokeVid01"
+ENTITIES_VIDEO_ID = "EntitiesVid01"
 
 LOUDOUN_ENTRY = {
     "id": "https://www.youtube.com/@LoudounCountyBoardofSupervisors",
@@ -91,6 +170,14 @@ FAIRFAX_ENTRY = {
     "id": "https://www.youtube.com/@FairfaxCountyBoardofSupervisors",
     "name": "Fairfax County Board of Supervisors",
     "jurisdiction": "Fairfax County, VA",
+    "state": "VA",
+    "verified": False,
+}
+
+FICTIONAL_ENTRY = {
+    "id": "https://www.youtube.com/@FictionalCountyBoardofSupervisors",
+    "name": "Fictional County Board of Supervisors",
+    "jurisdiction": "Fictional County, VA",
     "state": "VA",
     "verified": False,
 }
@@ -212,6 +299,61 @@ def test_ac2_no_adjacent_duplicate_lines_in_any_window():
         sentences = [s.strip() for s in doc.text.split(". ") if s.strip()]
         for prev, curr in zip(sentences, sentences[1:]):
             assert prev != curr, f"adjacent duplicate line in {doc.id}: {curr!r}"
+
+
+# --------------------------------------------------------------------------
+# Round 2 (post-review, real-data patch) — karaoke markup, incremental
+# rollup, HTML entities. See the module docstring's "Round 2" section for
+# the real corpus-raw/youtube/ examples these fixtures are modeled on.
+# --------------------------------------------------------------------------
+
+
+def test_ac1_karaoke_inline_tags_are_stripped():
+    # spec(T-006:AC-1)
+    docs = parse_video_dir(REAL_MARKUP_DIR, FICTIONAL_ENTRY)
+    good = _docs_for(docs, KARAOKE_VIDEO_ID)
+    assert good, "expected the karaoke-markup video to produce at least one Doc"
+
+    for doc in good:
+        assert "<" not in doc.text, (
+            f"{doc.id}.text still contains raw VTT/karaoke markup: {doc.text!r}"
+        )
+
+
+def test_ac2_incremental_rollup_no_phrase_level_duplication():
+    # spec(T-006:AC-2)
+    #
+    # Real YouTube rollup is NOT byte-identical consecutive cues (that model
+    # is exercised separately by mixed_batch/, above) -- it's a growing cue
+    # whose text repeats + extends the previous cue's settled text. The
+    # fixture's first cue is fully "The budget review begins with the water
+    # fund"; its second cue repeats that exact phrase as a prefix before its
+    # own (tagged) growth. A correct implementation must not let that shared
+    # phrase survive twice in the window text, however it chooses to collapse
+    # the growth (keep-first, keep-last, or merge).
+    docs = parse_video_dir(REAL_MARKUP_DIR, FICTIONAL_ENTRY)
+    good = _docs_for(docs, KARAOKE_VIDEO_ID)
+    assert good, "expected the karaoke-markup video to produce at least one Doc"
+
+    seg000 = next(d for d in good if d.id == f"yt:{KARAOKE_VIDEO_ID}:seg000")
+    repeated_phrase = "The budget review begins with the water fund"
+    assert seg000.text.count(repeated_phrase) == 1, (
+        f"{repeated_phrase!r} must appear exactly once in seg000.text, got "
+        f"{seg000.text.count(repeated_phrase)}: {seg000.text!r}"
+    )
+
+
+def test_ac1_html_entities_are_decoded():
+    # spec(T-006:AC-1)
+    docs = parse_video_dir(REAL_ENTITIES_DIR, FICTIONAL_ENTRY)
+    good = _docs_for(docs, ENTITIES_VIDEO_ID)
+    assert good, "expected the html-entities video to produce at least one Doc"
+
+    for doc in good:
+        assert "&nbsp;" not in doc.text, (
+            f"{doc.id}.text has an undecoded &nbsp; entity: {doc.text!r}"
+        )
+        assert "&amp;" not in doc.text, f"{doc.id}.text has an undecoded &amp; entity: {doc.text!r}"
 
 
 # --------------------------------------------------------------------------

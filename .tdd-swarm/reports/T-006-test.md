@@ -1,12 +1,12 @@
 # T-006 Test Agent Report — YouTube captions adapter
 
-**Status:** DONE (frozen failing tests written, confirmed RED against the stub, confirmed the
-fixtures/expectations are internally achievable via a throwaway reference implementation that
-follows the documented contract — see "Self-verification" below)
+**Status:** DONE — Round 1 (frozen failing tests against the stub) + Round 2 (post-review,
+real-data patch: 3 new failing tests for gaps `.tdd-swarm/reports/T-006-review.md` found that the
+Round-1 fixtures didn't model)
 
 **Test file:** `tests/unit/ingest/test_youtube.py` (+ `tests/unit/ingest/__init__.py`)
 
-**Fixtures:** `tests/fixtures/youtube/{mixed_batch,malformed_only,nosubs_only}/`
+**Fixtures:** `tests/fixtures/youtube/{mixed_batch,malformed_only,nosubs_only,real_markup,real_entities}/`
 
 **Stub touched:** `onrecord/ingest/youtube.py` — added the `parse_video_dir(directory,
 registry_entry) -> list[Doc]` signature (raises `NotImplementedError`) plus a full contract
@@ -128,3 +128,75 @@ No import errors, no fixture-not-found errors, and no other unexpected failure m
 Every test reads only committed fixture files under `tests/fixtures/youtube/`; the pull-script
 tests only stat/read the script's text, never execute it. No HTTP/yt-dlp calls anywhere in the
 suite.
+
+---
+
+## Round 2 — reality-based caption fixtures (post-review patch)
+
+**Trigger:** `.tdd-swarm/reports/T-006-review.md`, Critical + Important findings. Round-1 modeled
+auto-caption "rollup" as byte-identical consecutive cues; a real-data spot check against
+`corpus-raw/youtube/` (163 real video pairs) found 83% actually use YouTube's karaoke-tagged,
+*incrementally*-growing rollup format instead — never byte-identical — so the frozen dedupe never
+fires, and raw `<c>`/timestamp tags plus undecoded HTML entities (`&nbsp;`, `&amp;`) leak straight
+into `Doc.text`. Scope for this round: `tests/` + `tests/fixtures/youtube/**` only, per the
+coordinator's instruction — `onrecord/ingest/youtube.py` and `scripts/pull_captions.sh` are
+untouched (implementer scope for the fast-follow fix).
+
+**New fixtures** (read `corpus-raw/youtube/` only as reference, per the coordinator's pointer;
+never modified, never read by the tests themselves — everything the suite touches is committed):
+
+- `tests/fixtures/youtube/real_markup/` — one video (`KaraokeVid01`, `upload_date` `20260305`), 3
+  cues modeling the real "growing rollup" karaoke pattern found in
+  `corpus-raw/youtube/Loudoun_County_Board_of_Supervisors/-75a1WxvzdM.en.vtt` (cited by the
+  reviewer): cue 1 is settled plain text ("The budget review begins with the water fund"); cue 2
+  repeats cue 1's text on its first line and adds `<00:00:02.300><c> improvement</c>...`-tagged
+  growth on its second; cue 3 is the settled, tag-free finalization of cue 2's growth. Wording is
+  original — only the real file's cue-timing/markup *structure* is reproduced, kept under the
+  15-word/one-quote copyright limit and attributed to the source path in the test file's
+  docstring.
+- `tests/fixtures/youtube/real_entities/` — one video (`EntitiesVid01`), 2 cues modeling the real
+  "clean" (non-karaoke) variant's entity leakage found in
+  `corpus-raw/youtube/Culpeper_County_Board_of_Supervisors/AaLqpzq-6gU.en-en.vtt` (cited by the
+  reviewer): trailing `&nbsp;` after some words (sometimes doubled, `&nbsp;&nbsp;`, at a line
+  break) and one `&amp;`. Wording is entirely original; only the entity-placement pattern is
+  reproduced (not directly quoted, to keep this round to a single real-text quote overall — see
+  `real_markup/` above).
+
+**New tests** (appended to `tests/unit/ingest/test_youtube.py`, new "Round 2" section between the
+AC-2 and AC-3 blocks):
+
+| Criterion | Test | What it checks | Fails against current impl because |
+|---|---|---|---|
+| AC-1 | `test_ac1_karaoke_inline_tags_are_stripped` | `"<" not in doc.text` for the karaoke video's Doc(s) | `_parse_vtt_cues` joins raw cue lines verbatim; `<00:00:02.300><c>...</c>` tags pass straight through |
+| AC-2 | `test_ac2_incremental_rollup_no_phrase_level_duplication` | `"The budget review begins with the water fund"` appears exactly once in `seg000.text` | `_dedupe_consecutive_rollups` only drops byte-identical consecutive cues; cue 2 (which repeats cue 1's text as a prefix, then extends it) is not identical to cue 1, so nothing is dropped and the phrase survives twice |
+| AC-1 | `test_ac1_html_entities_are_decoded` | Neither `"&nbsp;"` nor `"&amp;"` appears in the entities video's Doc(s) | cue text is never passed through `html.unescape` (or equivalent) |
+
+**Revised AC-2 contract** (documented in the test file's module docstring, since tests aren't
+merged yet and this file's author still owns the contract this round): the byte-identical-only
+dedupe rule from Round 1 is now a special case of a broader rule — after tag-stripping and
+entity-decoding, no phrase may survive twice, consecutively-repeated-and-extended, in a window's
+text. The exact algorithm (keep-first vs. keep-last of a growing chain, merge, etc.) is left to the
+implementer; only the observable no-repeated-phrase outcome is pinned. This does not change any
+Round-1 assertion — the existing `mixed_batch/` exact-duplicate fixture is the zero-growth special
+case and remains satisfied by any implementation of the broader rule (verified: no Round-1 test
+file edits were needed).
+
+**Confirmed against the actual current implementation** (not a throwaway reference this round —
+`parse_video_dir` is real code now, commit `00bb196`), directly, before adding assertions:
+
+```
+real_markup/  -> Doc.text contains literal '<00:00:02.300><c> improvement</c>...' tags,
+                 and "The budget review begins with the water fund" appears twice
+real_entities/-> Doc.text contains literal '&nbsp;' (3x) and '&amp;' (1x)
+```
+
+**Test run** (`uv run pytest tests/unit/ingest/test_youtube.py -v`): **3 failed, 16 passed** — all
+3 new tests fail with plain `AssertionError`s carrying the exact offending text (not import/fixture
+errors); all 16 Round-1 tests remain green, unmodified. Full suite (`uv run pytest -q`): **3
+failed, 30 passed** (T-001's 14-test scaffold suite still unaffected). `spec-lint.sh
+tickets/T-006.md`: all 5 ACs still covered. `ruff format --check` / `ruff check` over
+`tests/ onrecord/ scripts/`: clean.
+
+No existing fixture or assertion needed adjustment for the revised dedupe semantics — the two new
+fixtures are additive and isolated (their own directories/video ids), so nothing already-frozen
+was touched.
