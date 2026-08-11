@@ -150,7 +150,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--raw-dir",
         default=DEFAULT_RAW_DIR,
-        help=f"Directory to recursively search for *.jsonl adapter output (default: {DEFAULT_RAW_DIR})",
+        help=f"Recursively search this dir for *.jsonl adapter output (default: {DEFAULT_RAW_DIR})",
     )
     parser.add_argument(
         "--out",

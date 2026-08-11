@@ -152,11 +152,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     search_p = subparsers.add_parser("search", help="Run a query against a saved index.")
     search_p.add_argument("query", help="Query text")
-    search_p.add_argument("--op", choices=["AND", "OR"], default="AND", help="Boolean op (default: AND)")
+    search_p.add_argument(
+        "--op", choices=["AND", "OR"], default="AND", help="Boolean op (default: AND)"
+    )
     search_p.add_argument(
         "--phrase", action="store_true", help="Run an exact-phrase query instead of --op boolean"
     )
-    search_p.add_argument("--k", type=int, default=DEFAULT_K, help=f"Max results (default: {DEFAULT_K})")
+    search_p.add_argument(
+        "--k", type=int, default=DEFAULT_K, help=f"Max results (default: {DEFAULT_K})"
+    )
     search_p.add_argument("--source", default=None, help="Filter results to this Doc.source_type")
     search_p.add_argument(
         "--index", default=DEFAULT_INDEX_DIR, help=f"Index directory (default: {DEFAULT_INDEX_DIR})"
