@@ -45,7 +45,7 @@ pins no literal value for it (see "deliberately not pinned" below).
 CONTRACTS PINNED HERE
 ---------------------
 Ticket-derived (tickets/T-026.md Context / ACs): `assert_cross_family`'s
-prefix map and its fail-closed behaviour; `build_judge_prompt`'s strict
+family map and its fail-closed behaviour; `build_judge_prompt`'s strict
 output protocol; `parse_verdict`'s tolerant extraction that never raises;
 `judge_answer`'s per-claim verdicts, failures-as-data (both unparseable
 output AND a raising `judge_fn` — plan-review M-8) and faithfulness math;
@@ -53,6 +53,41 @@ output AND a raising `judge_fn` — plan-review M-8) and faithfulness math;
 verdicts-don't-count gate and its `artifacts/rag_eval.jsonl` row shape
 (stated identically in tickets/T-025.md — a shared schema, not an import);
 the labels loader; and the T-014 secret-hygiene rule.
+
+FIX ROUND (post-freeze test-design review — see
+.tdd-swarm/reports/T-026-test-review.md against commit 8f4c217; verdict
+FIX-FIRST, 2 Critical + 4 Important + 7 Minor)
+-----------------------------------------------------------------------
+Additive/corrective within the original test scope. Closed here, each with
+the coordinator's ruling recorded as ratified contract (decisions 15-17
+below):
+* **C-1** `generator_model` was decorative in `run_faithfulness` — a
+  gpt-judge/gpt-generator pair was accepted off a token minted for a Claude
+  generator. Now pinned: `run_faithfulness` runs `assert_cross_family` and
+  refuses BEFORE any judge call (decision 15).
+* **C-2** the >= 0.8 spec bar was bypassable via `min_agreement=0.5`, and the
+  artifact recorded neither the threshold nor was `agreement` re-checked. Now
+  pinned: the artifact RECORDS `min_agreement`, and `run_faithfulness`
+  enforces the SPEC floor 0.8 against the artifact's `agreement` whatever the
+  validation run was called with (decision 16).
+* **I-3 / ORCHESTRATOR RULING (locked)** — the canonical family map moved to
+  a public `classify_family`, of which THIS suite is the single authority
+  (T-023's suite is being aligned to it). See decision 17.
+* **I-1** the T-014 library-logger silencing had no teeth (deleting it passed
+  all 148, because httpx's own record does not carry a bearer header). Now
+  pinned with a transport that emits an ERROR-level `httpx` record carrying
+  the Authorization header, plus a same-logger canary emitted OUTSIDE the
+  adapter's window proving the record would have been captured.
+* **I-2** count parity with `split_claims` rested on one all-distinct
+  fixture; de-duplicating and length-filtering variants passed. Now pinned by
+  duplicate/short-claim fixtures and a `total == len(split_claims(text))`
+  property.
+* **I-4** decision 14 (`default_judge(transport=...)`) disclosed; the
+  retry-budget non-pin corrected (it is bounded by the status queues).
+* Minors: M-1 (a `[1, 2]` fixture value could satisfy the line-number regex —
+  value swapped for a digit-free one), M-2 (`None` model ids), M-3/M-4/M-6
+  recorded as documented non-pins, M-5 (tag rationale), M-7 (the metric is
+  named MACRO wherever it is asserted).
 
 Test Agent decisions (NOT in the ticket's Context — inventions this suite
 freezes; the implementer should read them as such)
@@ -131,6 +166,50 @@ freezes; the implementer should read them as such)
     wave-9 merge.
 13. **`judge_answer` catches `Exception`, not `BaseException`** — a
     `KeyboardInterrupt` during a long paid eval run must still stop it.
+14. **`default_judge(model=None, transport=None)`** — `transport=` injects an
+    `httpx.MockTransport` so the adapter is exercised with zero live network,
+    exactly as `onrecord/rag/embeddings.py:211`, `ingest/fmp.py:176`,
+    `ingest/edgar.py:503` and `ingest/prices.py:292` already do. Disclosed
+    here per review I-4 (it was in use but undocumented); the key itself is
+    NOT a parameter in any test — it always arrives through
+    `OPENAI_API_KEY`, set to a sentinel or deleted.
+15. **RATIFIED (coordinator ruling, closes review C-1): `run_faithfulness`
+    re-runs `assert_cross_family(generator_model, judge_model)` and refuses
+    BEFORE any judge call.** The generator id is therefore LOAD-BEARING at
+    run time, not decorative: the artifact alone cannot license a
+    same-family run. Deliberately NOT added: a requirement that the
+    artifact's recorded `generator_model` EQUAL the run's. Validation
+    measures the judge against human labels — a measurement in which the
+    generator plays no part — so the only generator-dependent property is
+    cross-family, and that is now re-enforced live on every run. Requiring
+    equality would force a fresh paid validation every time the generator id
+    changes while buying no additional safety.
+16. **RATIFIED (coordinator ruling, closes review C-2): the artifact records
+    `min_agreement`, and `run_faithfulness` enforces the SPEC floor 0.8
+    against the artifact's `agreement`** — regardless of the `min_agreement`
+    the validation run used. `min_agreement` stays caller-settable (the
+    ticket gives it as a parameter), so a stricter bar is still possible and
+    a lower one is still recordable for the audit trail; what a lower bar can
+    no longer do is mint a token that makes verdicts count. Spec Sec 5 fixes
+    the number at 0.8 ("validated against ~10 hand labels before its verdicts
+    count"), so the run-side gate reads it from the spec, never from the
+    caller. Artifact key set is therefore SEVEN keys.
+17. **ORCHESTRATOR RULING (locked, closes review I-3) — `classify_family`
+    is public API and THIS suite is its single authority** (T-023's suite is
+    being aligned to it in parallel; two encodings of one map is the
+    LESSONS T-003/T-004 defect class). The canonical map:
+        anthropic <- `claude*` | `anthropic.*` | `us.anthropic.*` |
+                     `eu.anthropic.*`   (the Bedrock dotted forms)
+        openai    <- `gpt*` | `chatgpt*` | `o1*` | `o3*` | `o4*`
+        google    <- `gemini*` | `models/gemini*`
+        mistral   <- `mistral*` | `open-mistral*` | `open-mixtral*`
+        unknown   <- EVERYTHING else (`openrouter/auto`, `olmo*`, `voyage*`,
+                     `grok*`, `llama*`, `command-r*`, `gemma*`, empty, None)
+    -> fail closed. Note the two deliberate narrowings against the ticket's
+    sketch: the old `o*` prefix is now `o1|o3|o4` (it mislabelled `olmo-*`
+    and `openrouter/auto` as OpenAI), and `voyage*` is no longer a family of
+    its own (an embeddings vendor, never a judge or generator — it belongs in
+    the fail-closed bucket).
 
 DELIBERATELY NOT PINNED (documented gaps, not oversights)
 ---------------------------------------------------------
@@ -138,33 +217,73 @@ DELIBERATELY NOT PINNED (documented gaps, not oversights)
   ticket DoD). What IS pinned: it is a non-empty str whose family is neither
   unknown nor anthropic, i.e. `assert_cross_family(<claude id>,
   DEFAULT_JUDGE_MODEL)` must not raise. A hard-coded literal here would be
-  exactly the "model id from memory" failure the ticket forbids.
-* Case sensitivity of the family prefix map (`"GPT-4o"`). Either reading is
+  exactly the "model id from memory" failure the ticket forbids. Under
+  decision 17 a Bedrock- or Google-resource-shaped id also classifies, so a
+  hosted-provider provisioning choice is a config change, not a re-freeze.
+* Whether a PROVIDER-SLASH id (`anthropic/claude-3.5-sonnet`, the OpenRouter
+  form) normalizes to its underlying family or stays unknown. The ruling
+  enumerates the DOTTED Bedrock prefixes and puts `openrouter/auto` in the
+  unknown bucket, which leaves the slash form genuinely ambiguous — and both
+  readings are fail-safe here: as a generator it pairs cross-family with a
+  gpt judge either way, and as a JUDGE id it is refused either way (anthropic
+  collides with the Claude generator; unknown fails closed). Flagged for the
+  orchestrator rather than frozen on a guess.
+* Case sensitivity of the family map (`"GPT-4o"`). Either reading is
   fail-safe: case-sensitive yields "unknown" -> refuse.
 * `evidence_chunk` range validation against `len(chunks)` — `parse_verdict`
   cannot see the chunk list, and the ticket asks for no such check. All
   fixtures use in-range indices so neither pass-through nor nulling is
   constrained.
+* `parse_verdict`'s behaviour when the FIRST `{` opens an unparseable object
+  and a well-formed one follows it (review M-3): giving up and scanning
+  forward are both legal here. Giving up is the conservative reading
+  (`unparseable` counts NOT supported), and no fixture constrains it.
 * Whether `judge_answer` strips `[n]` markers from a claim before prompting.
   Prompt-content assertions therefore use marker-free sentence bodies, which
   are substrings under both readings. The `claim` FIELD, by contrast, is
   pinned verbatim to `split_claims` output — that is the shared-count
   contract with T-023's grounding.
-* Retry/backoff schedule and timeouts of `default_judge()` (T-021 precedent).
-* Whether `run_faithfulness` re-checks `assert_cross_family` itself: every
-  gate fixture here uses a genuinely cross-family pair, so either ordering
-  passes.
+* `default_judge()`'s retry/backoff SCHEDULE and timeouts (T-021 precedent).
+  Corrected per review I-4: the retry BUDGET is not unconstrained — the
+  MockTransport status queues bound it at <= 6 attempts for a single call
+  (`statuses=[401, 500, 500, 500, 500, 500]`) and <= 10 per call in the
+  degradation test (`[500] * 20` over two claims). The house precedent
+  (`embeddings.py`'s 3 retries = 4 attempts) fits comfortably inside both.
+  Related (review M-6): `monkeypatch.setattr(time, "sleep", ...)` only
+  neutralises backoff for an adapter that calls `time.sleep(...)`; a
+  `from time import sleep` adapter would sleep for real. Same soft pin the
+  T-021 review accepted; noted, not tightened.
 * Schema validation of `answers` rows (unlike labels rows, they are produced
   by the pipeline, not hand-authored).
+* `corpus_version` PLUMBING differs from T-025's runner for the same field
+  (review M-4): this module reads `ONRECORD_INDEX` — verbatim
+  `onrecord.eval.run._corpus_version`, decision 10 — while T-025's frozen
+  suite takes a `--manifest-dir` CLI argument. Same `read_manifest`, same
+  `"unversioned"` fallback, so the ROW schema does not drift; but two rows
+  written in one session can disagree if only one source is set. Recorded
+  for the orchestrator; unifying them is out of both tickets' scope.
 
 SECRET HYGIENE (LESSONS.md T-014, 2026-08-11)
 ----------------------------------------------
 The key must never appear in ANY log record. The AC-7 tests capture at the
 ROOT logger with library loggers left free to propagate at INFO, and each one
 carries a liveness precondition (a canary record proving the capture is live)
-so it cannot pass vacuously — plus a leaky-transport case proving the
-sentinel is genuinely REACHABLE from the exception the adapter must handle,
-i.e. that it WOULD surface absent redaction (the T-021 standard).
+so it cannot pass vacuously. Two of them go further and prove the sentinel is
+genuinely REACHABLE — that it WOULD surface absent redaction, which is the
+half T-021's own suite lacked:
+* `_leaky_transport` raises an `httpx.ConnectError` whose message embeds the
+  Authorization header, so the secret is reachable from the exception the
+  adapter must handle;
+* `_header_logging_transport` (fix round, review I-1) emits an ERROR-level
+  record ON THE `httpx` LOGGER carrying that header — the T-014 failure
+  reproduced in miniature, since the real leak was a library logger, not the
+  adapter's own. The ticket's "library loggers silenced/redacted around keyed
+  calls" is what suppresses it; the test asserts NO CAPTURED RECORD CONTAINS
+  THE SENTINEL rather than "no httpx record exists at all", so redaction
+  satisfies it exactly as silencing does. Its liveness half emits the SAME
+  message on the SAME logger immediately AFTER the adapter call returns and
+  asserts that one IS captured — proving the in-call absence was the
+  adapter's doing and not a dead capture.
 """
 
 import contextlib
@@ -196,6 +315,22 @@ LABELS_FILE = REPO_ROOT / "evalsets" / "faithfulness_labels.jsonl"
 
 VERDICT_ENUM = ("supported", "unsupported", "contradicted")
 PARSED_KEYS = {"verdict", "evidence_chunk"}
+
+# Spec Sec 5's hand-label agreement bar ("validated against ~10 hand labels
+# before its verdicts count"), also the ticket's `min_agreement` default. It
+# is the RUN-SIDE floor: `run_faithfulness` enforces it against the
+# artifact's recorded agreement whatever threshold the validation run used
+# (decision 16, closes review C-2).
+SPEC_MIN_AGREEMENT = 0.8
+VALIDATION_ARTIFACT_KEYS = {
+    "timestamp",
+    "judge_model",
+    "generator_model",
+    "agreement",
+    "passed",
+    "n",
+    "min_agreement",
+}
 
 
 # --------------------------------------------------------------------------
@@ -405,6 +540,7 @@ def _write_validation_artifact(
     passed: bool = True,
     agreement: float = 0.9,
     n: int = 10,
+    min_agreement: float = SPEC_MIN_AGREEMENT,
     drop_keys: tuple = (),
 ) -> Path:
     payload = {
@@ -414,6 +550,7 @@ def _write_validation_artifact(
         "agreement": agreement,
         "passed": passed,
         "n": n,
+        "min_agreement": min_agreement,
     }
     for key in drop_keys:
         payload.pop(key, None)
@@ -479,6 +616,36 @@ def _chat_handler(requests: list, content: str = "{}", statuses: list | None = N
                     }
                 ],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def _header_logging_transport(recorder: list) -> httpx.MockTransport:
+    """A transport whose LIBRARY LOG RECORD carries the bearer header.
+
+    This is LESSONS T-014 reproduced in miniature (review I-1): the leak that
+    actually happened was a *library* logger emitting the credential — FMP's
+    `?apikey=` query string, logged by httpx at INFO — not the adapter's own
+    logging. A bearer header does not travel in the URL, so httpx's real
+    record is credential-free and "no record contains the key" passes even
+    with the ticket's locked silencing DELETED. Here the emission is on the
+    `httpx` logger, at ERROR (above INFO, so no level trick hides it), and it
+    interpolates the request headers — so the silencing/redaction the ticket
+    locks is the only thing that can keep the sentinel out of the capture.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = f"retrying request: headers={dict(request.headers)}"
+        recorder.append(message)
+        logging.getLogger("httpx").error(message)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "{}"}}],
             },
         )
 
@@ -571,12 +738,18 @@ def _names_line(message: str, lineno: int) -> bool:
 
 def test_module_exposes_documented_public_api():
     # spec(T-026:AC-1)
+    # Tagged AC-1 as the first AC that touches the module: this is a cross-AC
+    # surface guard, not a cross-family behaviour check (review M-5; same
+    # loose-tag note T-021's review made, and kept for the same reason —
+    # without it every other AC fails with an opaque AttributeError instead
+    # of a named missing symbol).
     mod = _module()
     expected = [
         "CrossFamilyViolation",
         "JudgeNotValidated",
         "JudgeNotConfigured",
         "DEFAULT_JUDGE_MODEL",
+        "classify_family",
         "assert_cross_family",
         "build_judge_prompt",
         "parse_verdict",
@@ -604,19 +777,87 @@ def test_the_three_typed_errors_are_exception_classes():
 
 
 # ==========================================================================
-# AC-1 — assert_cross_family: prefix-map families, fail CLOSED on same-family
-# and on any unknown id.
+# AC-1 — classify_family (the canonical map, ORCHESTRATOR RULING) and
+# assert_cross_family: fail CLOSED on same-family and on any unknown id.
 # ==========================================================================
+
+# The canonical id -> family table. THIS suite is the single authority for
+# the map (decision 17, locked); T-023's suite is being aligned to it, so a
+# second encoding of these prefixes anywhere is the LESSONS T-003/T-004
+# defect class. Ids are derivation FIXTURES, not provisioning choices.
+CANONICAL_FAMILIES = [
+    # --- anthropic: bare + the three Bedrock dotted forms
+    ("claude-3-5-sonnet", "anthropic"),
+    ("claude-opus-4-1", "anthropic"),
+    ("claude-3-5-haiku-latest", "anthropic"),
+    ("anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic"),
+    ("us.anthropic.claude-sonnet-4-5-v1:0", "anthropic"),
+    ("eu.anthropic.claude-3-5-haiku-v1:0", "anthropic"),
+    # --- openai: gpt/chatgpt + the o-SERIES (narrowed from the ticket's `o*`)
+    ("gpt-4o", "openai"),
+    ("gpt-4o-mini", "openai"),
+    ("chatgpt-4o-latest", "openai"),
+    ("o1-preview", "openai"),
+    ("o3-mini", "openai"),
+    ("o4-mini", "openai"),
+    # --- google: bare + the API resource-name form
+    ("gemini-1.5-pro", "google"),
+    ("gemini-2.0-flash", "google"),
+    ("models/gemini-2.5-pro", "google"),
+    # --- mistral: bare + the open-weights ids (previously mislabelled openai)
+    ("mistral-large", "mistral"),
+    ("open-mistral-7b", "mistral"),
+    ("open-mixtral-8x22b", "mistral"),
+    # --- unknown: everything else, INCLUDING the `o`-prefixed non-OpenAI ids
+    # the old `o*` prefix silently claimed, and voyage (an embeddings vendor,
+    # never a judge or a generator).
+    ("olmo-2-13b", "unknown"),
+    ("openrouter/auto", "unknown"),
+    ("voyage-3", "unknown"),
+    ("voyage-3-lite", "unknown"),
+    ("grok-4", "unknown"),
+    ("llama-3-70b", "unknown"),
+    ("gemma-3-27b", "unknown"),
+    ("command-r-plus", "unknown"),
+    ("", "unknown"),
+    ("   ", "unknown"),
+    (None, "unknown"),
+]
+
+
+@pytest.mark.parametrize(("model_id", "family"), CANONICAL_FAMILIES)
+def test_classify_family_is_the_canonical_authority(model_id, family):
+    # spec(T-026:AC-1)
+    # ORCHESTRATOR RULING (locked, closes review I-3). `classify_family` is
+    # public because T-023's suite is being aligned to THIS map — one
+    # authority, imported, never re-derived. The two narrowings against the
+    # ticket's original sketch are both visible in the table above: `o*`
+    # became the o-series only (it had claimed `olmo-*` and `openrouter/auto`
+    # for OpenAI), and `voyage*` lost its family (fail closed instead).
+    assert _attr("classify_family")(model_id) == family, (
+        f"{model_id!r} must classify as {family!r} under the canonical map"
+    )
+
+
+def test_classify_family_returns_only_the_five_canonical_labels():
+    # spec(T-026:AC-1)
+    labels = {_attr("classify_family")(model_id) for model_id, _f in CANONICAL_FAMILIES}
+
+    assert labels <= {"anthropic", "openai", "google", "mistral", "unknown"}, (
+        f"the map yields exactly these five labels; got {sorted(labels)}"
+    )
 
 
 @pytest.mark.parametrize(
     ("generator_model", "judge_model"),
     [
         ("claude-3-5-sonnet", "gpt-4o"),  # the standing decision's real pairing
-        ("claude-opus-4-1", "o3-mini"),  # `o*` is openai too
+        ("claude-opus-4-1", "o3-mini"),  # the o-series is openai too
         ("claude-3-5-haiku-latest", "gemini-1.5-pro"),
         ("gpt-4o", "claude-3-5-sonnet"),  # order does not matter
-        ("gemini-1.5-pro", "voyage-3"),
+        ("us.anthropic.claude-sonnet-4-5-v1:0", "gpt-4o"),  # Bedrock generator id
+        ("claude-3-5-sonnet", "mistral-large"),  # mistral is a KNOWN family now
+        ("models/gemini-2.5-pro", "chatgpt-4o-latest"),  # both hosted-shaped
     ],
 )
 def test_cross_family_pairs_pass(generator_model, judge_model):
@@ -631,10 +872,13 @@ def test_cross_family_pairs_pass(generator_model, judge_model):
     [
         ("claude-3-5-sonnet", "claude-3-5-haiku"),  # AC-1's pinned same-family case
         ("gpt-4o", "gpt-4o-mini"),
-        ("gpt-4o", "o3-mini"),  # `gpt*` and `o*` are the SAME family (openai)
+        ("gpt-4o", "o3-mini"),  # `gpt*` and the o-series are ONE family
+        ("gpt-4o", "chatgpt-4o-latest"),
         ("o3-mini", "o4-mini"),
         ("gemini-1.5-pro", "gemini-2.0-flash"),
-        ("voyage-3", "voyage-3-lite"),
+        ("gemini-1.5-pro", "models/gemini-2.5-pro"),  # same family, two shapes
+        ("mistral-large", "open-mixtral-8x22b"),
+        ("claude-3-5-sonnet", "us.anthropic.claude-sonnet-4-5-v1:0"),  # bare vs Bedrock
         ("claude-3-5-sonnet", "claude-3-5-sonnet"),  # literally the same id
     ],
 )
@@ -643,7 +887,9 @@ def test_same_family_pairs_raise(generator_model, judge_model):
     # The `gpt-4o` / `o3-mini` case is the one a per-id (rather than
     # per-FAMILY) check silently waves through — two OpenAI models sharing a
     # training lineage grading each other is exactly what spec Sec 5's
-    # cross-family requirement exists to prevent.
+    # cross-family requirement exists to prevent. The bare-vs-Bedrock row is
+    # its hosted twin: the SAME Claude model under two id shapes must not
+    # look like two families.
     with pytest.raises(_attr("CrossFamilyViolation")):
         _attr("assert_cross_family")(generator_model, judge_model)
 
@@ -652,11 +898,16 @@ def test_same_family_pairs_raise(generator_model, judge_model):
     ("generator_model", "judge_model"),
     [
         ("llama-3-70b", "gpt-4o"),  # unknown generator
-        ("claude-3-5-sonnet", "mistral-large"),  # unknown judge
-        ("llama-3-70b", "mistral-large"),  # both unknown
+        ("claude-3-5-sonnet", "command-r-plus"),  # unknown judge
+        ("llama-3-70b", "grok-4"),  # both unknown
+        ("claude-3-5-sonnet", "olmo-2-13b"),  # `o`-prefixed but NOT the o-series
+        ("claude-3-5-sonnet", "openrouter/auto"),  # hosted router, provenance unknown
+        ("claude-3-5-sonnet", "voyage-3"),  # an embeddings vendor is not a judge
         ("", "gpt-4o"),  # empty id
         ("claude-3-5-sonnet", ""),
         ("   ", "gpt-4o"),  # whitespace-only id
+        (None, "gpt-4o"),  # a missing id must raise the TYPED error...
+        ("claude-3-5-sonnet", None),  # ...not an AttributeError from .startswith
     ],
 )
 def test_unknown_family_fails_closed(generator_model, judge_model):
@@ -664,7 +915,11 @@ def test_unknown_family_fails_closed(generator_model, judge_model):
     # FAIL CLOSED (ticket Context): an unverifiable pairing never silently
     # counts. Two unknown ids are NOT "different families" — they are two
     # unknowns, and a judge whose provenance cannot be established must not
-    # be allowed to certify the generator it may itself be.
+    # be allowed to certify the generator it may itself be. The `None` rows
+    # close review M-2: an implementation that reaches straight for
+    # `model_id.startswith(...)` raises AttributeError here, which is a crash,
+    # not a refusal — and a caller catching CrossFamilyViolation would not
+    # catch it.
     with pytest.raises(_attr("CrossFamilyViolation")):
         _attr("assert_cross_family")(generator_model, judge_model)
 
@@ -933,6 +1188,86 @@ def test_judge_answer_segments_claims_through_the_shared_split_claims_authority(
         "the sentence they follow — a naive split on '. ' gets this wrong"
     )
     assert result["total"] == 5
+
+
+# Count-parity fixtures (review I-2). The five-claim fixture above is all
+# distinct and all long, so it cannot discriminate a judge_answer that
+# de-duplicates or length-filters claims — both of which silently desynchronize
+# `total` from T-023's grounding denominator for the SAME text (locked shared
+# authority), producing grounding 2/3 beside faithfulness 1/2 in the README
+# with no error anywhere.
+COUNT_PARITY_ANSWERS = [
+    # Real answers repeat sentences — the de-dup killer.
+    "The filing was approved. [1] The filing was approved. [1] Rates rose. [2]",
+    # Same claim three times, no markers at all.
+    "Rates rose. Rates rose. Rates rose.",
+    # Very short claims — the length-filter killer.
+    "Yes. It did. Rates rose. [1]",
+    # Duplicates AND shorts together.
+    "Yes. Yes. It did. It did. [2]",
+]
+
+
+@pytest.mark.parametrize("answer_text", COUNT_PARITY_ANSWERS)
+def test_judge_answer_total_matches_split_claims_for_duplicate_and_short_claims(answer_text):
+    # spec(T-026:AC-3)
+    expected = split_claims(answer_text)
+    judge = ConstantJudge(_verdict_json("supported", 1))
+
+    result = _attr("judge_answer")(QUESTION, answer_text, CHUNKS, judge)
+
+    assert len(expected) >= 2, "precondition: the fixture must segment into several claims"
+    assert [entry["claim"] for entry in result["claims"]] == expected, (
+        "every claim split_claims produces is judged — duplicates included, however short"
+    )
+    assert result["total"] == len(expected), (
+        f"`total` IS the shared denominator T-023's grounding uses for this same text "
+        f"(locked); expected {len(expected)}, got {result['total']}"
+    )
+    assert judge.call_count == len(expected)
+
+
+_PARITY_BODY_POOL = ["Yes", "It did", "A", "Rates rose", "The filing was approved", "Load grew 12"]
+_PARITY_TERMINATORS = [".", "!", "?"]
+
+
+@st.composite
+def _multi_sentence_answers(draw):
+    """Multi-sentence answers drawn from a SMALL body pool, so repeated
+    sentences (the de-dup killer) occur naturally rather than by contrivance."""
+    n = draw(st.integers(min_value=1, max_value=6))
+    bodies = draw(st.lists(st.sampled_from(_PARITY_BODY_POOL), min_size=n, max_size=n))
+    terminators = draw(st.lists(st.sampled_from(_PARITY_TERMINATORS), min_size=n, max_size=n))
+    has_marker = draw(st.lists(st.booleans(), min_size=n, max_size=n))
+    pieces = []
+    for i in range(n):
+        piece = f"{bodies[i]}{terminators[i]}"
+        if has_marker[i]:
+            piece += f" [{i + 1}]"
+        pieces.append(piece)
+    return " ".join(pieces)
+
+
+@given(answer_text=_multi_sentence_answers())
+@settings(max_examples=200, deadline=None)
+def test_property_judge_answer_total_equals_len_split_claims(answer_text):
+    # spec(T-026:AC-3)
+    # The locked count-parity invariant as a PROPERTY (review I-2): the
+    # expectation is computed by calling the authority itself, so this is
+    # parity with `split_claims` whatever `split_claims` says — not a second
+    # encoding of the segmentation rule (LESSONS T-003/T-004).
+    expected = split_claims(answer_text)
+    judge = ConstantJudge(_verdict_json("supported", 1))
+
+    result = _attr("judge_answer")(QUESTION, answer_text, CHUNKS, judge)
+
+    assert [entry["claim"] for entry in result["claims"]] == expected
+    assert result["total"] == len(expected)
+    assert judge.call_count == len(expected), "exactly one paid call per segmented claim"
+    assert result["supported"] == len(expected), (
+        "a judge that says supported for every claim must score every claim supported — "
+        "a dropped or merged claim shows up here as an arithmetic mismatch too"
+    )
 
 
 def test_judge_answer_ac3_scripted_mix_of_verdicts_errors_and_garbage():
@@ -1214,14 +1549,9 @@ def test_validate_judge_writes_the_artifact_with_exactly_the_pinned_keys(tmp_pat
 
     assert artifact.exists(), "a PASSING validation writes the artifact (creating dirs as needed)"
     payload = json.loads(artifact.read_text(encoding="utf-8"))
-    assert set(payload) == {
-        "timestamp",
-        "judge_model",
-        "generator_model",
-        "agreement",
-        "passed",
-        "n",
-    }, f"artifact keys are pinned exactly (run_faithfulness reads them); got {sorted(payload)}"
+    assert set(payload) == VALIDATION_ARTIFACT_KEYS, (
+        f"artifact keys are pinned exactly (run_faithfulness reads them); got {sorted(payload)}"
+    )
     assert payload["judge_model"] == GPT_MODEL
     assert payload["generator_model"] == CLAUDE_MODEL, (
         "BOTH ids are recorded: the artifact is the evidence that THIS pairing was "
@@ -1230,6 +1560,11 @@ def test_validate_judge_writes_the_artifact_with_exactly_the_pinned_keys(tmp_pat
     assert payload["agreement"] == pytest.approx(0.8)
     assert payload["passed"] is True
     assert payload["n"] == 10
+    assert payload["min_agreement"] == pytest.approx(SPEC_MIN_AGREEMENT), (
+        "the artifact RECORDS the threshold the validation run used (decision 16, review "
+        "C-2) — without it a token minted at a lowered bar is indistinguishable from one "
+        "minted at the spec bar, and the audit trail cannot show the bar moved"
+    )
     datetime.fromisoformat(payload["timestamp"])  # raises if it is not ISO-8601
 
 
@@ -1299,6 +1634,12 @@ def test_validate_judge_threshold_is_inclusive_and_caller_settable(
     assert result["agreement"] == pytest.approx(1 - disagree_count / 10)
     assert result["passed"] is expected_pass
     assert artifact.exists() is expected_pass
+    if expected_pass:
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["min_agreement"] == pytest.approx(min_agreement), (
+            "whatever bar this run used is written down — including a LOWERED one, which "
+            "run_faithfulness then refuses to honour (decision 16)"
+        )
 
 
 def test_validate_judge_refuses_a_same_family_pair_before_any_judge_call(tmp_path):
@@ -1429,12 +1770,19 @@ def test_validate_judge_on_empty_labels_raises_value_error(tmp_path):
 # ==========================================================================
 
 
-def _run_faithfulness(tmp_path, artifact_path, answers=None, judge=None, judge_model=GPT_MODEL):
+def _run_faithfulness(
+    tmp_path,
+    artifact_path,
+    answers=None,
+    judge=None,
+    judge_model=GPT_MODEL,
+    generator_model=CLAUDE_MODEL,
+):
     return _attr("run_faithfulness")(
         ANSWERS_TWO if answers is None else answers,
         ClaimKeyedJudge(ANSWERS_TWO_SCRIPT) if judge is None else judge,
         judge_model,
-        CLAUDE_MODEL,
+        generator_model,
         validation_path=str(artifact_path),
     )
 
@@ -1492,6 +1840,113 @@ def test_run_faithfulness_refuses_on_a_judge_model_mismatch(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize(
+    ("generator_model", "why"),
+    [
+        ("gpt-4o-mini", "same family as the judge — GPT grading GPT"),
+        ("chatgpt-4o-latest", "same family under a different id shape"),
+        ("llama-3-70b", "unknown provenance — fail closed"),
+        (None, "no generator id at all"),
+    ],
+)
+def test_run_faithfulness_refuses_a_same_family_or_unknown_generator(
+    tmp_path, monkeypatch, generator_model, why
+):
+    # spec(T-026:AC-5)
+    # RATIFIED decision 15 (closes review C-1): `generator_model` is
+    # LOAD-BEARING at run time, not decorative. The artifact here is as valid
+    # as an artifact gets — passing, spec-bar agreement, judge_model matching,
+    # and its recorded generator_model EQUAL to the run's — so the ONLY thing
+    # left that can refuse is the live cross-family check. Without it, a token
+    # minted for a Claude generator licenses a GPT judge grading a GPT
+    # generator, with the verdicts counted (the reviewer measured exactly that
+    # run appending a `kind: faithfulness` row).
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(
+        tmp_path / "artifacts" / "judge_validation.json",
+        judge_model=GPT_MODEL,
+        generator_model=generator_model,
+        agreement=0.9,
+    )
+    judge = NeverCalledJudge()
+
+    with pytest.raises(_attr("CrossFamilyViolation")):
+        _run_faithfulness(
+            tmp_path, artifact, judge=judge, judge_model=GPT_MODEL, generator_model=generator_model
+        )
+
+    assert judge.call_count == 0, f"refused before any paid judge call ({why})"
+    assert not (tmp_path / "artifacts" / "rag_eval.jsonl").exists(), (
+        "a refused run appends no row — an unverifiable pairing must leave no number "
+        "behind that a README could quote"
+    )
+
+
+def test_run_faithfulness_refuses_an_artifact_minted_below_the_spec_floor(tmp_path, monkeypatch):
+    # spec(T-026:AC-5)
+    # RATIFIED decision 16 (closes review C-2). `min_agreement` is
+    # caller-settable, so `validate_judge(..., min_agreement=0.5)` legitimately
+    # writes `passed: true` at 0.5 agreement — the obvious move when a real
+    # validation lands at 0.72 the night before a demo. The RUN side reads the
+    # spec bar, not the caller's: 0.5 < 0.8, so the verdicts still do not
+    # count, and the artifact's recorded `min_agreement` shows the bar moved.
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(
+        tmp_path / "artifacts" / "judge_validation.json",
+        passed=True,
+        agreement=0.5,
+        min_agreement=0.5,
+    )
+    judge = NeverCalledJudge()
+
+    with pytest.raises(_attr("JudgeNotValidated")) as excinfo:
+        _run_faithfulness(tmp_path, artifact, judge=judge)
+
+    assert "0.8" in str(excinfo.value), (
+        f"the refusal must name the SPEC bar the artifact fell short of; got {excinfo.value!r}"
+    )
+    assert judge.call_count == 0
+    assert not (tmp_path / "artifacts" / "rag_eval.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("agreement", "counts"),
+    [
+        (1.0, True),
+        (0.9, True),
+        (0.8, True),  # the spec bar is INCLUSIVE
+        (0.79, False),
+        (0.5, False),
+        (0.0, False),
+    ],
+)
+def test_run_faithfulness_spec_floor_is_inclusive_at_zero_point_eight(
+    tmp_path, monkeypatch, agreement, counts
+):
+    # spec(T-026:AC-5)
+    # Decision 16's boundary. `passed: true` is written in every fixture here,
+    # so what discriminates is the recorded AGREEMENT against the spec bar —
+    # a gate that trusts `passed` alone accepts all six.
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(
+        tmp_path / "artifacts" / "judge_validation.json",
+        passed=True,
+        agreement=agreement,
+        min_agreement=min(agreement, SPEC_MIN_AGREEMENT),
+    )
+    judge = ClaimKeyedJudge(ANSWERS_TWO_SCRIPT)
+
+    if counts:
+        row = _run_faithfulness(tmp_path, artifact, judge=judge)
+        assert row["kind"] == "faithfulness"
+        assert judge.misses == [], judge.misses
+    else:
+        with pytest.raises(_attr("JudgeNotValidated")):
+            _run_faithfulness(tmp_path, artifact, judge=judge)
+        assert judge.call_count == 0
+        assert not (tmp_path / "artifacts" / "rag_eval.jsonl").exists()
+
+
+@pytest.mark.parametrize(
     ("content", "why"),
     [
         ("{not json at all", "corrupt JSON"),
@@ -1499,6 +1954,18 @@ def test_run_faithfulness_refuses_on_a_judge_model_mismatch(tmp_path, monkeypatc
         ('{"judge_model": "gpt-4o"}', "no passed key"),
         ('{"passed": true}', "no judge_model key"),
         ('{"passed": "true", "judge_model": "gpt-4o"}', "passed is a string, not a bool"),
+        (
+            '{"passed": true, "judge_model": "gpt-4o"}',
+            "no agreement key — the floor is unverifiable",
+        ),
+        (
+            '{"passed": true, "judge_model": "gpt-4o", "agreement": "0.9"}',
+            "agreement is a string, not a number",
+        ),
+        (
+            '{"passed": true, "judge_model": "gpt-4o", "agreement": null}',
+            "agreement is null",
+        ),
     ],
 )
 def test_run_faithfulness_fails_closed_on_an_unusable_artifact(tmp_path, monkeypatch, content, why):
@@ -1675,7 +2142,10 @@ def test_load_labels_example_filter_is_a_prefix_test_not_a_substring_test(tmp_pa
         ({"answer_text": 7}, "answer_text"),
         ({"claim": "   "}, "claim"),
         ({"chunk_texts": "not a list"}, "chunk_texts"),
-        ({"chunk_texts": [1, 2]}, "chunk_texts"),
+        # Digit-free bad value (review M-1): a `[1, 2]` value echoed back in
+        # the message would satisfy the line-2 regex on its own, so this row
+        # could have passed without the error ever naming a line number.
+        ({"chunk_texts": ["fine", None]}, "chunk_texts"),
         ({"human_verdict": "maybe"}, "human_verdict"),
         ({"human_verdict": "unparseable"}, "human_verdict"),
         ({"human_verdict": None}, "human_verdict"),
@@ -1910,6 +2380,51 @@ def test_no_root_log_record_contains_the_api_key_on_the_success_path(monkeypatch
         f"{_leaking_records(caplog, SENTINEL_KEY)}"
     )
     assert SENTINEL_KEY not in caplog.text
+
+
+def test_library_logger_records_during_the_keyed_call_never_carry_the_key(monkeypatch, caplog):
+    # spec(T-026:AC-7)
+    # The ticket's LOCKED T-014 clause — "library loggers silenced/redacted
+    # around keyed calls" — with teeth (review I-1: deleting the silencing
+    # passed all 148, because a bearer header never reaches httpx's own
+    # record). Here a LIBRARY logger emits the Authorization header at ERROR
+    # from inside the request, exactly as T-014's httpx did with FMP's
+    # `?apikey=` query string.
+    #
+    # The assertion is "no captured record contains the sentinel", NOT "no
+    # httpx record exists" — the ticket permits redaction as well as
+    # silencing, and a filter that scrubs the credential while keeping the
+    # record must pass.
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+    monkeypatch.delenv("ONRECORD_JUDGE_MODEL", raising=False)
+    emitted: list = []
+    judge_fn = _attr("default_judge")(transport=_header_logging_transport(emitted))
+
+    with _library_loggers_unmuted(), caplog.at_level(logging.INFO):
+        judge_fn("prompt")
+        _assert_capture_is_live(caplog)
+        during = [record.getMessage() for record in caplog.records]
+        # LIVENESS (the "it WOULD appear absent redaction" half): the SAME
+        # message on the SAME logger at the SAME level, emitted immediately
+        # after the adapter's window closes, MUST be captured. If it is not,
+        # the absence above proves nothing about the adapter.
+        logging.getLogger("httpx").error("post-call canary: %s", emitted[0])
+        after = [record.getMessage() for record in caplog.records[len(during) :]]
+
+    assert emitted and all(SENTINEL_KEY in message for message in emitted), (
+        "precondition: the library logger really did try to emit the bearer header — "
+        "otherwise this test proves nothing"
+    )
+    leaked = [message for message in during if SENTINEL_KEY in message]
+    assert leaked == [], (
+        f"a library logger emitted the credential during the keyed call and nothing "
+        f"suppressed or redacted it (LESSONS T-014, ticket Context — locked): {leaked}"
+    )
+    assert any(SENTINEL_KEY in message for message in after), (
+        "liveness failed: the identical record is not captured OUTSIDE the adapter's "
+        "window either, so the in-call absence is a dead capture rather than the "
+        "adapter's silencing/redaction"
+    )
 
 
 def test_no_root_log_record_contains_the_api_key_on_an_http_error_path(monkeypatch, caplog):
