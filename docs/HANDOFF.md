@@ -7,7 +7,7 @@
 - **Metrics (5 queries, 65 judgments):** boolean 0.000 / BM25 P@5 0.520, R@50 0.949, MRR 1.000, NDCG@10 0.622. History: `evalsets/scoreboard.jsonl` (prod reads it via `ONRECORD_SCOREBOARD` env).
 
 ## Long-running processes (this machine)
-- **Depth caption pull** (full channel archives → corpus-v2): may still be running. Check: `tail -2 /Users/quietguy/Documents/Dev/Gauntlet/corpus-raw/youtube/pull.log`. Restart (fully resumable, safe to re-run): the orchestrator script lives in the OLD session's scratchpad — recreate trivially: yt-dlp per channel with `--download-archive corpus-raw/youtube/archive.txt --write-auto-subs --skip-download`, channels from `scratchpad resolved_channels.json` equivalent; or re-resolve via ytsearch voting (see LESSONS: fabricated handles 404).
+- **Depth caption pull: COMPLETE** — 24,898 .vtt files total in /Users/quietguy/Documents/Dev/Gauntlet/corpus-raw/youtube/ (vs 4,037 that fed corpus-v1). Nothing running; corpus-v2 is a parse+rebuild away (step 1 below).
 - **Owner side-session**: nearby_receipts venue_type+snippet amendment (task chip) — check if its branch landed before touching `onrecord/ingest/prices.py`.
 
 ## Thursday (Early checkpoint) — remaining work, in priority order
