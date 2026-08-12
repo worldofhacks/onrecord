@@ -1,0 +1,50 @@
+{
+  "symbol": "VST",
+  "historical": [
+    {
+      "date": "2024-01-09",
+      "open": 185.9,
+      "high": 186.74,
+      "low": 184.93,
+      "close": 185.14,
+      "adjClose": 185.14,
+      "volume": 42841800,
+      "unadjustedVolume": 42841800,
+      "change": -0.76,
+      "changePercent": -0.41,
+      "vwap": 185.6,
+      "label": "January 09, 24",
+      "changeOverTime": -0.0041
+    },
+    {
+      "date": "2024-01-08",
+      "open": 182.09,
+      "high": 185.6,
+      "low": 181.5,
+      "close": 185.56,
+      "adjClose": 185.56,
+      "volume": 59144500,
+      "unadjustedVolume": 59144500,
+      "change": 3.47,
+      "changePercent": 1.91,
+      "vwap": 183.55,
+      "label": "January 08, 24",
+      "changeOverTime": 0.0191
+    },
+    {
+      "date": "2024-01-04",
+      "open": 182.13,
+      "high": 183.09,
+      "low": 180.88,
+      "close": 181.91,
+      "adjClose": 181.91,
+      "volume": 71983600,
+      "unadjustedVolume": 71983600,
+      "change": -0.22,
+      "changePercent": -0.12,
+      "vwap": 181.98,
+      "label": "January 04, 24",
+      "changeOverTime": -0.0012
+    }
+  ]
+}
