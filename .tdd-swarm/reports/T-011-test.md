@@ -14,6 +14,82 @@ existed from T-001, not modified).
 uv run pytest tests/unit/test_bm25.py -v
 ```
 
+## Update — post-review follow-up (k1=0 boundary-semantics regression tests)
+
+Review (`.tdd-swarm/reports/T-011-review.md`) **APPROVED T-011** but flagged
+one Important finding (I-1): `bm25_score(tf=0, ..., k1=0, ...)` raises
+`ZeroDivisionError` (`denom = tf + k1*(...) = tf + 0 = 0` when `k1=0` and
+`tf=0`), and this is reachable through `ranked_search` on any ordinary
+multi-term OR query where a candidate matches only a subset of the query
+terms (`tf=0` for the term it lacks) — not a contrived edge case. The
+original hypothesis strategy for the tf-monotonicity property floored `k1`
+at `0.1`, so it never generated `k1=0` and never caught this.
+
+4 new tests appended to the still-frozen `tests/unit/test_bm25.py` (no
+existing test edited; the 25 original tests are untouched except the single
+`k1` floor change described below), all tagged `spec(T-011:AC-2)`:
+
+1. **`test_bm25_score_k1_zero_zero_tf_returns_zero_not_zerodivision`** —
+   pins `bm25_score(tf=0, ..., k1=0, ...) == 0.0` (a zero-tf term
+   contributes nothing at any `k1`, must never raise).
+2. **`test_bm25_score_k1_zero_positive_tf_returns_pure_idf`** — pins that
+   `k1=0` collapses saturation to exactly `1.0` for any `tf>0`
+   (`tf*(0+1)/(tf+0) == tf/tf == 1`), so the score reduces to pure IDF,
+   independent of `tf`'s magnitude and of `b` (parametrized over
+   `tf ∈ {1,2,7,100}` × `b ∈ {0.0,0.75,1.0}`).
+3. **`test_bm25_score_avg_doc_len_zero_returns_zero_not_zerodivision`** —
+   optional cheap adjacent guard (per review): `avg_doc_len=0` returns
+   `0.0` rather than raising (`doc_len/avg_doc_len` is otherwise
+   undefined).
+4. **`test_ranked_search_k1_zero_partial_match_completes_and_ranks_by_summed_idf`**
+   — reuses the existing `ac5_index` fixture (which already contains
+   partial-match candidates, e.g. `doc_a` has `tf(transformer)=0`) with
+   `k1=0`: asserts `ranked_search` completes without exception and ranks by
+   the sum of `idf(term)` over only the terms each candidate actually
+   matches. Also asserts the adversarial consequence: `doc_a` (tf=1) and
+   `doc_b` (tf=3) for the same sole term now **tie exactly** at `k1=0`
+   (unlike the strict ordering at the `k1=1.5` default), since tf magnitude
+   stops mattering once saturation is fully collapsed to `1.0`.
+
+**Property strategy fix:** `_tf_monotonic_params`'s `k1` floor lowered from
+`0.1` to `0.0` so the existing
+`test_property_adding_a_query_term_occurrence_never_lowers_the_score`
+property now also exercises `k1=0` (previously silently excluded from
+coverage) — verified the property still holds at `k1=0` given the pinned
+guard semantics.
+
+Module docstring extended with a new item 3 (`k1=0` boundary semantics)
+documenting all of the above as a frozen contract addition, same pattern
+as prior tickets' post-review docstring extensions (e.g.
+`tests/unit/test_judgments.py`'s criterion-drift-guard addition).
+
+**Verified RED for the right reason:** the real implementation from
+T-011's Implementation Agent (`onrecord/rank/bm25.py`,
+`onrecord/search/ranked.py`) is already merged into this worktree (commit
+`7cee1fd`), so — unlike the original handoff — these 4 new tests fail
+against the REAL current code, not via the module-missing guard. All 4
+fail with a genuine, uncaught `ZeroDivisionError` inside
+`onrecord/rank/bm25.py:48` (`test_property_...` fails on hypothesis's very
+first generated `k1=0, tf=0` example: `params=(1, 0, 0, 1.0, 1.0, 0.0,
+0.0)`) — an exact reproduction of the review's I-1 finding, never a test
+bug. `uv run pytest tests/unit/test_bm25.py -v` → **4 failed, 21 passed**
+(all 21 original tests stay green, confirming this change is additive
+only). Full repo: `uv run pytest -q -m "not slow"` → **4 failed, 203
+passed, 1 deselected**.
+
+**Achievability re-verified**: temporarily patched `onrecord/rank/bm25.py`
+in place with the minimal 2-line guard (`if tf == 0 or avg_doc_len == 0:
+return 0.0`) directly in the worktree, ran `uv run pytest
+tests/unit/test_bm25.py -v` → **25 passed** (all original + all 4 new),
+confirming the new tests are exactly achievable with the documented fix.
+Then `git checkout -- onrecord/rank/bm25.py` to revert — `git status`
+confirms zero diff outside `tests/` (plus the untracked
+`.tdd-swarm/reports/T-011-review.md`, not authored by this agent).
+
+`uv run ruff format tests/` / `uv run ruff check tests/` both clean.
+`.tdd-swarm/spec-lint.sh tickets/T-011.md` → `spec-lint OK: all ACs
+covered for T-011`.
+
 ## Isolation approach
 
 Per the ticket's own framing, T-010's merged engine (analyzer, `InvertedIndex`

@@ -88,6 +88,38 @@ before freezing, then reverted -- see the Test Agent's handoff report):
    negative-index slice bug (`text[pos-80:...]` without clamping to 0 wraps
    around to the TAIL of the string in Python when `pos < 80`).
 
+3. **`k1=0` boundary semantics (post-review extension -- Important finding
+   I-1 in `.tdd-swarm/reports/T-011-review.md`).** The saturation
+   denominator is `tf + k1*(1 - b + b*doc_len/avg_doc_len)`; at `k1=0` this
+   collapses to exactly `tf`, so `tf=0` divides by zero. `tf=0` is NOT a
+   contrived edge case here: it is the ORDINARY case for any OR-semantics
+   candidate of a multi-term `ranked_search` query that matches only a
+   SUBSET of the query terms (an everyday partial-match query, reachable
+   in production -- not just a direct `bm25_score(tf=0, ...)` call). The
+   original hypothesis strategy for the tf-monotonicity property floored
+   `k1` at `0.1`, so it never generated `k1=0` and missed this. Pinned
+   here, verified against a throwaway reference implementation before
+   freezing:
+     - `bm25_score(tf=0, df, N, doc_len, avg_doc_len, k1=0, b)` returns
+       exactly `0.0` (a zero-tf term contributes nothing at ANY `k1`,
+       including `k1=0` -- must never raise).
+     - `bm25_score(tf>0, df, N, doc_len, avg_doc_len, k1=0, b)` returns
+       pure IDF: the saturation term collapses to exactly
+       `tf*(0+1)/(tf+0) == tf/tf == 1.0` for any `tf>0`, independent of
+       `tf`'s magnitude and of `b` (`k1=0` zeroes the entire
+       length-normalization bracket regardless of `b`'s value).
+     - `ranked_search(index, query, k1=0, ...)` on a partial-match
+       multi-term query completes without exception and ranks candidates
+       by the SUM of `idf(term)` over only the terms each candidate
+       actually matches (`tf>0`) -- tf magnitude stops mattering entirely
+       once saturation is fully collapsed, so e.g. a doc with `tf=1` and a
+       doc with `tf=3` for the SAME term now TIE at `k1=0`, even though
+       they don't at the `k1=1.5` default.
+
+   Also pinned as a cheap adjacent guard: `avg_doc_len=0` (an empty/
+   zero-length corpus) returns `0.0` rather than raising (the
+   `doc_len/avg_doc_len` ratio is otherwise undefined at `avg_doc_len=0`).
+
 Run with:
     uv run pytest tests/unit/test_bm25.py -v
 """
@@ -287,6 +319,47 @@ def test_bm25_score_marginal_gain_shrinks_with_tf_saturation():
         f"marginal gain must shrink under saturation: (tf=1->2) gain={gain_low} "
         f"must exceed (tf=9->10) gain={gain_high}"
     )
+
+
+# --------------------------------------------------------------------------
+# AC-2 (post-review extension) -- k1=0 boundary semantics. Regression for
+# Important finding I-1 (.tdd-swarm/reports/T-011-review.md): k1=0 combined
+# with tf=0 raised ZeroDivisionError (denom = tf + 0*(...) = tf = 0), and
+# tf=0 is the ordinary case for any partial-match OR-semantics candidate --
+# NOT a contrived direct-call-only edge case. See module docstring item 3.
+# --------------------------------------------------------------------------
+
+
+def test_bm25_score_k1_zero_zero_tf_returns_zero_not_zerodivision():
+    # spec(T-011:AC-2) -- a term the doc lacks (tf=0) must contribute
+    # exactly 0.0 at k1=0, never raise ZeroDivisionError.
+    bm25_mod = _import_bm25_module()
+    score = bm25_mod.bm25_score(0, 3, 20, 10.0, 10.0, k1=0.0, b=0.75)
+    assert score == 0.0
+
+
+def test_bm25_score_k1_zero_positive_tf_returns_pure_idf():
+    # spec(T-011:AC-2) -- k1=0 collapses saturation to exactly 1.0 for any
+    # tf > 0 (tf*(0+1)/(tf+0) == tf/tf == 1), so the score reduces to pure
+    # IDF -- independent of tf's magnitude and of b.
+    bm25_mod = _import_bm25_module()
+    N, df, doc_len, avg_doc_len = 10, 3, 20.0, 20.0
+    expected_idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
+    assert expected_idf > 0.0
+
+    for tf in (1, 2, 7, 100):
+        for b in (0.0, 0.75, 1.0):
+            score = bm25_mod.bm25_score(tf, df, N, doc_len, avg_doc_len, k1=0.0, b=b)
+            assert score == pytest.approx(expected_idf), f"tf={tf} b={b}"
+
+
+def test_bm25_score_avg_doc_len_zero_returns_zero_not_zerodivision():
+    # spec(T-011:AC-2) -- cheap adjacent guard (optional per review): an
+    # empty/zero-length corpus makes doc_len/avg_doc_len undefined at
+    # avg_doc_len=0; pinned to return 0.0 rather than raise.
+    bm25_mod = _import_bm25_module()
+    score = bm25_mod.bm25_score(3, 2, 10, 5.0, 0.0)
+    assert score == 0.0
 
 
 # --------------------------------------------------------------------------
@@ -495,6 +568,67 @@ def test_ranked_search_k1_and_b_are_actually_threaded_through(ac5_index):
 
 
 # --------------------------------------------------------------------------
+# AC-2/AC-5 (post-review extension) -- ranked_search with k1=0 on a
+# partial-match multi-term query. Regression for Important finding I-1: the
+# ac5_index fixture already contains candidates that match only a SUBSET of
+# {"substation", "transformer"} (e.g. doc_a has tf(transformer)=0) -- an
+# ordinary OR-semantics partial match, which crashed pre-fix. At k1=0 every
+# tf>0 contributes an identical saturation of 1.0, so score reduces to the
+# SUM of idf(term) over only the terms the doc actually matches -- and tf
+# magnitude stops mattering (doc_a tf=1 and doc_b tf=3 now TIE).
+# --------------------------------------------------------------------------
+
+
+def _ref_k1_zero_doc_score(idx: InvertedIndex, internal_id: int, terms: list[str]) -> float:
+    """Hand-computed k1=0 score: sum of idf(term) over terms with tf>0 only
+    (a tf=0 term contributes exactly 0, per the pinned k1=0 semantics --
+    this does NOT call `_bm25_ref`, which would itself divide by zero)."""
+    N = idx.doc_count()
+    total = 0.0
+    for term in terms:
+        tf = _tf_in_doc(idx, term, internal_id)
+        if tf == 0:
+            continue
+        df = idx.df(term)
+        total += math.log(1 + (N - df + 0.5) / (df + 0.5))
+    return total
+
+
+def _expected_ac5_order_k1_zero(idx: InvertedIndex, internal_id_by_external: dict[str, int]):
+    candidates = ["doc_a", "doc_b", "doc_c", "doc_d", "doc_e", "doc_m", "doc_z"]  # doc_f excluded
+    scored = [
+        (doc_id, _ref_k1_zero_doc_score(idx, internal_id_by_external[doc_id], _QUERY_TERMS))
+        for doc_id in candidates
+    ]
+    scored.sort(key=lambda pair: (-pair[1], pair[0]))
+    return scored
+
+
+def test_ranked_search_k1_zero_partial_match_completes_and_ranks_by_summed_idf(ac5_index):
+    # spec(T-011:AC-2) -- regression for T-011-review.md Important finding
+    # I-1: must not raise ZeroDivisionError, and must rank by summed IDF of
+    # only the actually-matched (tf>0) terms once k1=0 fully collapses
+    # saturation.
+    idx, internal_id_by_external = ac5_index
+    ranked_mod = _import_ranked_module()
+
+    results = ranked_mod.ranked_search(idx, _QUERY, k=10, k1=0.0, analyzer=TRIVIAL_ANALYZER)
+
+    expected = _expected_ac5_order_k1_zero(idx, internal_id_by_external)
+    assert [r.doc_id for r in results] == [doc_id for doc_id, _ in expected]
+    for r, (_, expected_score) in zip(results, expected, strict=True):
+        assert r.score == pytest.approx(expected_score)
+
+    # tf magnitude must stop mattering entirely at k1=0: doc_a (tf=1) and
+    # doc_b (tf=3) for the SAME sole term "substation" now tie exactly,
+    # unlike at the k1=1.5 default where doc_b strictly outscores doc_a.
+    by_id = {r.doc_id: r.score for r in results}
+    assert by_id["doc_a"] == pytest.approx(by_id["doc_b"]), (
+        "at k1=0, tf=1 and tf=3 for the same term must score identically (full saturation)"
+    )
+
+
+# --------------------------------------------------------------------------
 # AC-6 -- snippet is ~160 chars centered on the doc's first query-term
 # occurrence, with the term visible. Marker words at known distances from
 # the term (near: comfortably inside +/-80; far: comfortably outside)
@@ -628,7 +762,13 @@ def _tf_monotonic_params(draw):
     avg_doc_len = draw(
         st.floats(min_value=1.0, max_value=500.0, allow_nan=False, allow_infinity=False)
     )
-    k1 = draw(st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    # Floor lowered from 0.1 to 0.0 (post-review fix -- T-011-review.md
+    # Important finding I-1): the original 0.1 floor never generated k1=0,
+    # so this property never exercised the tf=0/k1=0 division-by-zero case.
+    # At k1=0 the property still holds (score(tf=0)=0.0, score(tf>0)=idf>0,
+    # and score(tf)==score(tf+1) for tf>=1 -- all consistent with "never
+    # lowers").
+    k1 = draw(st.floats(min_value=0.0, max_value=5.0, allow_nan=False, allow_infinity=False))
     b = draw(st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False))
     return N, df, tf, doc_len, avg_doc_len, k1, b
 
