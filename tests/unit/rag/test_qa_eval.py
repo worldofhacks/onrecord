@@ -1202,6 +1202,62 @@ def test_cli_resolve_answer_fn_seam_exists_at_module_level():
     assert callable(qa_eval._resolve_answer_fn)
 
 
+def test_cli_answer_recall_kind_threads_k_into_resolve_retrieve_fn_seam(tmp_path, monkeypatch):
+    # spec(T-025:AC-5) -- review finding C-1
+    # (.tdd-swarm/reports/T-025-review.md): `--kind answer_recall` must
+    # thread `--k` into the `_resolve_retrieve_fn` seam -- the symmetric,
+    # module-level monkeypatch target for the answer_recall CLI path,
+    # analogous to `_resolve_answer_fn` (which the seam-existence test above
+    # already covers for the refusal path). This does NOT reach into the
+    # "deliberately not pinned" territory the module docstring names (the
+    # real BM25/index wiring *inside* `_resolve_retrieve_fn`'s lazily-
+    # imported body stays untested here) -- it pins only the CALLING
+    # CONVENTION: `main()` must pass the requested depth through to the seam
+    # factory, not silently resolve it with no arguments at all while the
+    # emitted artifact stamps whatever `--k` was requested regardless (a
+    # graded artifact lying about its own parameters).
+    qa_eval = _import_qa_eval_module()
+    qa_path = tmp_path / "qa.jsonl"
+    _write_jsonl(qa_path, [_qa_row("r1", "q1", ["yt:AbCdEfGhIjK:seg049"])])
+    out_path = tmp_path / "out.jsonl"
+
+    recorded_ks: list[int | None] = []
+
+    def fake_resolve_retrieve_fn(k=None):
+        recorded_ks.append(k)
+
+        def retrieve_fn(question: str) -> list[str]:
+            # Reveal the ACTUAL depth the seam was built with: return
+            # exactly `k` distinct ids. A seam built with the requested
+            # depth genuinely ignored (e.g. hardcoded to 10) would return
+            # only 10 ids here and never surface seg049 at position 49.
+            return [f"yt:AbCdEfGhIjK:seg{i:03d}" for i in range(k or 0)]
+
+        return retrieve_fn
+
+    monkeypatch.setattr(qa_eval, "_resolve_retrieve_fn", fake_resolve_retrieve_fn)
+
+    rc = qa_eval.main(
+        ["--kind", "answer_recall", "--qa", str(qa_path), "--out", str(out_path), "--k", "50"]
+    )
+    assert rc == 0
+
+    assert recorded_ks == [50], (
+        "main() must call _resolve_retrieve_fn with the requested --k depth "
+        f"(review C-1: today it is called with no arguments at all); got {recorded_ks!r}"
+    )
+
+    row = json.loads(out_path.read_text().splitlines()[0])
+    assert row["kind"] == "answer_recall"
+    assert row["metrics"]["k"] == 50
+    assert row["metrics"]["mean_recall"] == 1.0, (
+        "with the seam correctly built at depth 50, the labeled doc at position "
+        "49 must be retrieved and recall must be 1.0 -- a seam stuck at the "
+        "stale default depth of 10 would score 0.0 here while the artifact "
+        "still (falsely) reports k=50"
+    )
+
+
 # --------------------------------------------------------------------------
 # AC-6 -- committed evalsets validate against their own loaders
 # --------------------------------------------------------------------------
