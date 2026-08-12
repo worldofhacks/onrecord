@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#FAFAF7;color:#16150F;font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#0A7A43;text-decoration:none}a:hover{color:#075C32}
+input::placeholder{color:#B5B0A1}
+::selection{background:#DFF0E5}
+@keyframes fadeup{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(10,122,67,.35)}100%{box-shadow:0 0 0 9px rgba(10,122,67,0)}}
+</style>
+</helmet>
+<div data-screen-label="OnRecord" style="min-height:100vh;display:flex;flex-direction:column" onClick="{{ rootClick }}">
+  <header style="{{ headerStyle }}">
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onClick="{{ onNav }}" data-view="search">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 1h16v17l-2-1.6L15 18l-2-1.6L11 18l-2-1.6L7 18l-2-1.6L3 18V1Z" stroke="#16150F" stroke-width="1.5" stroke-linejoin="round"></path><path d="M7 6.5h8M7 10h8" stroke="#16150F" stroke-width="1.5"></path></svg>
+      <span style="font-family:Fraunces,serif;font-weight:600;font-size:19px;letter-spacing:-0.01em">OnRecord</span>
+    </div>
+    <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}">
+      <nav style="display:flex;gap:26px;align-items:center;font-size:13.5px;font-weight:500">
+        <a href="#search" style="{{ navSearch }}">Search</a>
+        <a href="#ask" style="{{ navAsk }}">Ask</a>
+        <a href="#tickers" style="{{ navTickers }}">Tickers</a>
+        <a href="#scoreboard" style="{{ navScore }}">Scoreboard</a>
+        <a href="#ledger" style="{{ navLedger }}">Ledger <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#F0EEE4;border:1px solid #E7E4DA;border-radius:99px;padding:2px 8px;color:#8A8574;margin-left:5px">soon</span></a>
+      </nav>
+    </sc-if>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;display:flex;align-items:center;gap:7px"><span style="{{ engineDot }}"></span>{{ engineLabel }}<sc-if value="{{ apiDown }}" hint-placeholder-val="{{ false }}"><button onClick="{{ retryApi }}" style="all:unset;cursor:pointer;color:#0A7A43;text-decoration:underline;font-family:'IBM Plex Mono',monospace;font-size:11px">retry</button></sc-if></span>
+  </header>
+
+  <sc-if value="{{ vSearch }}" hint-placeholder-val="{{ true }}">
+  <div style="{{ padX }}">
+    <section style="{{ heroGrid }}">
+      <div>
+        <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(34px,4.6vw,62px);line-height:1.04;letter-spacing:-0.02em;margin:0;text-wrap:balance">Ask the record.</h1>
+        <p style="margin:14px 0 0;font-size:clamp(13.5px,1.1vw,15.5px);line-height:1.55;color:#6E6A5E;max-width:520px;text-wrap:pretty">The public paper trail of the AI-datacenter buildout — county hearings, SEC filings, regulator dockets. Every answer carries a receipt.</p>
+      </div>
+      <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #E7E4DA;padding-left:32px;align-self:end">
+          <div style="grid-column:1/-1;padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid #E7E4DA">
+            <div style="font-family:Fraunces,serif;font-size:36px;font-weight:560;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">24,412</div>
+            <div style="font-size:11px;color:#6E6A5E;letter-spacing:.06em;text-transform:uppercase;margin-top:2px">documents indexed</div>
+          </div>
+          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">31</div><div style="font-size:11px;color:#6E6A5E">jurisdictions</div></div>
+          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">102</div><div style="font-size:11px;color:#6E6A5E">tickers</div></div>
+        </div>
+      </sc-if>
+    </section>
+    <section>
+      <div style="display:flex;align-items:center;gap:14px;border-bottom:2px solid #16150F;padding-bottom:12px;flex-wrap:wrap">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><circle cx="9" cy="9" r="6.5" stroke="#16150F" stroke-width="1.5"></circle><path d="M14 14l4 4" stroke="#16150F" stroke-width="1.5" stroke-linecap="round"></path></svg>
+        <input ref="{{ searchRef }}" value="{{ q }}" onChange="{{ setQ }}" onKeyDown="{{ qKey }}" style="flex:1;min-width:160px;border:0;background:transparent;outline:0;font-family:Fraunces,serif;font-size:clamp(19px,2vw,26px);font-weight:480;color:#16150F;padding:0" placeholder="Ask the record…">
+        <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;border:1px solid #E7E4DA;border-radius:5px;padding:3px 7px">/</span></sc-if>
+        <div style="display:flex;border:1px solid #E7E4DA;border-radius:99px;overflow:hidden;font-size:12px;font-weight:500;background:#fff">
+          <span style="padding:7px 15px;background:#16150F;color:#FAFAF7">Lexical</span>
+          <button onClick="{{ modeSem }}" style="all:unset;cursor:pointer;padding:7px 13px;color:#B5B0A1">Semantic</button>
+          <button onClick="{{ modeHyb }}" style="all:unset;cursor:pointer;padding:7px 13px;color:#B5B0A1;border-left:1px solid #F0EEE4">Hybrid</button>
+        </div>
+      </div>
+      <sc-if value="{{ teaser }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px;background:#F6F3E4;border:1px dashed #DCCf9E;border-radius:10px;padding:9px 14px;font-size:12.5px;color:#6B5B1E;animation:pop .2s ease both">
+          <span style="width:7px;height:7px;border-radius:99px;background:#C9A93E;flex-shrink:0"></span>{{ teaser }}
+          <button onClick="{{ clearTeaser }}" style="all:unset;cursor:pointer;margin-left:auto;color:#8A8574;font-size:13px;padding:0 4px">✕</button>
+        </div>
+      </sc-if>
+      <div style="display:flex;gap:8px;align-items:center;padding:14px 0 4px;font-size:12.5px;font-weight:500;flex-wrap:wrap">
+        <div style="position:relative"><button onClick="{{ togSource }}" style="{{ pillSource }}">{{ fSourceLabel }} ▾</button>
+          <sc-if value="{{ openSource }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:180px;animation:pop .15s ease both"><sc-for list="{{ sourceOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickSource }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togVenue }}" style="{{ pillVenue }}">{{ fVenueLabel }} ▾</button>
+          <sc-if value="{{ openVenue }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:160px;animation:pop .15s ease both"><sc-for list="{{ venueOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickVenue }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togTicker }}" style="{{ pillTicker }}">{{ fTickerLabel }} ▾</button>
+          <sc-if value="{{ openTickerF }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:140px;animation:pop .15s ease both"><sc-for list="{{ tickerOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickTicker }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px;font-variant-numeric:tabular-nums" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togJur }}" style="{{ pillJur }}">{{ fJurLabel }} ▾</button>
+          <sc-if value="{{ openJur }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:210px;animation:pop .15s ease both"><sc-for list="{{ jurOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickJur }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <sc-if value="{{ anyFilter }}" hint-placeholder-val="{{ false }}"><button onClick="{{ clearFilters }}" style="all:unset;cursor:pointer;color:#9C3A24;font-size:12px;padding:6px 4px">clear ✕</button></sc-if>
+        <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574;font-variant-numeric:tabular-nums">{{ countLine }}</span>
+      </div>
+    </section>
+    <main style="flex:1;padding-bottom:8px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8A8574;padding:14px 0 2px">{{ listLabel }}</div>
+      <sc-for list="{{ results }}" as="r" hint-placeholder-count="4">
+        <article style="{{ r.rowStyle }}" onMouseEnter="{{ hoverRow }}" data-i="{{ r.i }}">
+          <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><time style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8A8574;padding-top:3px">{{ r.dateStr }}</time></sc-if>
+          <div style="padding-top:1px">
+            <sc-if value="{{ r.isVideo }}" hint-placeholder-val="{{ true }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="#0A7A43" stroke-width="1.4"></circle><path d="M9 7.5l5 3.5-5 3.5v-7Z" stroke="#0A7A43" stroke-width="1.4" stroke-linejoin="round"></path></svg></sc-if>
+            <sc-if value="{{ r.isFiling }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="4" y="2.5" width="14" height="17" rx="1.5" stroke="#0A7A43" stroke-width="1.4"></rect><path d="M7.5 7h7M7.5 10.5h7M7.5 14h4.5" stroke="#0A7A43" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+            <sc-if value="{{ r.isDocket }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="4" width="16" height="14" rx="1.5" stroke="#0A7A43" stroke-width="1.4"></rect><circle cx="8" cy="11" r="2.2" stroke="#0A7A43" stroke-width="1.4"></circle><path d="M13 8.5h3.5M13 13.5h3.5" stroke="#0A7A43" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+          </div>
+          <div style="min-width:0">
+            <div style="display:flex;gap:7px;align-items:center;margin-bottom:8px;font-size:11px;font-weight:600;letter-spacing:.04em;flex-wrap:wrap">
+              <span style="{{ r.venueStyle }}">{{ r.venueLabel }}</span>
+              <span style="{{ r.refStyle }}">{{ r.refChip }}</span>
+              <span style="color:#B5B0A1;font-weight:400;font-size:11.5px">{{ r.meta }}</span>
+            </div>
+            <p style="margin:0;font-size:clamp(14px,1.1vw,16px);line-height:1.6;max-width:760px;text-wrap:pretty"><sc-for list="{{ r.segs }}" as="s" hint-placeholder-count="1"><span style="{{ s.style }}">{{ s.t }}</span></sc-for></p>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:11px">
+              <a href="{{ r.link }}" target="_blank" rel="noopener" style="{{ r.ctaStyle }}" style-hover="{{ r.ctaHover }}">{{ r.cta }}</a>
+              <span style="font-size:12px;color:#8A8574;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.line }}</span>
+              <sc-if value="{{ showScores }}" hint-placeholder-val="{{ true }}"><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;color:#DDD9CC;font-size:17px;font-variant-numeric:tabular-nums">{{ r.score }}</span></sc-if>
+            </div>
+          </div>
+        </article>
+      </sc-for>
+      <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+          <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">The record is silent on this.</p>
+          <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0 0 16px">No indexed document matches every term. Try fewer terms, or one of these:</p>
+          <div style="display:flex;gap:7px;justify-content:center;flex-wrap:wrap">
+            <button onClick="{{ trySuggest }}" data-q="substation" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">substation</button>
+            <button onClick="{{ trySuggest }}" data-q="water" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">water</button>
+            <button onClick="{{ trySuggest }}" data-q="rezoning" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">rezoning</button>
+            <button onClick="{{ trySuggest }}" data-q="megawatts" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">megawatts</button>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ hasResults }}" hint-placeholder-val="{{ true }}"><p style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;padding:14px 0 0;text-align:center">↑↓ navigate · Enter opens the receipt · / focuses search</p></sc-if>
+    </main>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vAsk }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padX }}">
+    <div style="display:flex;justify-content:center;padding:14px 0 0">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 14px;text-align:center">PREVIEW THREAD · illustrative answers until /api/answer lands Thursday</span>
+    </div>
+    <main style="{{ askGrid }}">
+      <div style="display:flex;flex-direction:column;gap:34px;min-width:0">
+        <section style="animation:fadeup .45s ease both">
+          <div style="display:flex;gap:14px;align-items:baseline">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·1</span>
+            <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">Which utilities admitted to regulators that data-center demand might not materialize?</h2>
+          </div>
+          <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap">
+              <span style="display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:#075C32;background:#E4F3E9;border-radius:99px;padding:4px 12px">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5.2" stroke="#075C32" stroke-width="1.3"></circle><path d="M3.8 6.2l1.5 1.5 2.9-3" stroke="#075C32" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                Grounded · 6 of 6 claims checked
+              </span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">hybrid · k 8 · 2026-08-11</span>
+            </div>
+            <div style="font-family:Fraunces,serif;font-size:clamp(16.5px,1.3vw,18.5px);line-height:1.72;font-weight:420;text-wrap:pretty;max-width:66ch">
+              <p style="margin:0 0 14px">Three utilities have hedged, on the record, in the past two quarters. In sworn testimony before the Georgia PSC, Georgia Power's load-forecast witness conceded that the 6,600 MW of pending data-center requests include inquiries that are <em>“speculative and duplicative,”</em> with only about a third holding executed service agreements<span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="1"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">1</a><sc-if value="{{ pop1 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">GA PSC 44280</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-08-04</span></span>…6,600 MW of pending requests, of which 2,100 MW hold executed service agreements; the remainder characterized as speculative and duplicative…</span></sc-if></span>. AEP Ohio went further: its data-center tariff requires minimum demand charges on 85 percent of contracted load for twelve years — an explicit hedge against demand that never shows up<span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="2"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">2</a><sc-if value="{{ pop2 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">PUCO 24-508</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-07-17</span></span>…minimum demand payments of 85% of contracted capacity for a 12-year term, citing risk of stranded distribution investment…</span></sc-if></span>.</p>
+              <p style="margin:0">The coached venues echo it more quietly. Vistra's latest 10-K cautions that <em>“anticipated data center demand may not develop on the timelines or in the amounts projected”</em><span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="3"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">3</a><sc-if value="{{ pop3 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">VST</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-02-27 · 10-K</span></span>…demand may not develop on the timelines or in the amounts projected, and queue positions may not convert to executed agreements…</span></sc-if></span> — language absent from the prior year's filing. No hyperscaler filing in the corpus makes an equivalent admission.</p>
+            </div>
+            <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#F6F5EF;overflow:hidden">
+              <button onClick="{{ toggleDrawer }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;padding:11px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6E6A5E">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style="{{ chev }}"><path d="M3 4.5l3 3 3-3" stroke="#6E6A5E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                HOW THIS WAS ANSWERED
+              </button>
+              <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:4px 16px 16px;border-top:1px solid #E7E4DA;background:#fff">
+                  <div style="display:flex;gap:26px;padding:12px 0;font-size:12.5px;flex-wrap:wrap">
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">MODE</div><strong>hybrid</strong> <span style="color:#8A8574">(lexical + semantic, RRF)</span></div>
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">RETRIEVED</div><strong style="font-variant-numeric:tabular-nums">8</strong> passages</div>
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">CITED</div><strong style="font-variant-numeric:tabular-nums">3</strong> of 8</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">7.42</span><span style="flex:1;min-width:0">GA PSC 44280 — direct testimony, load forecast</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [1]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">7.10</span><span style="flex:1;min-width:0">PUCO 24-508 — data-center tariff settlement</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [2]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">6.88</span><span style="flex:1;min-width:0">VST 10-K — risk factors, demand development</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [3]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#8A8574"><span style="width:8px;height:8px;border-radius:99px;border:1.5px solid #DDD9CC;box-sizing:border-box;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;width:30px">6.31</span><span style="flex:1;min-width:0">CEG Q2 call — analyst Q&A on contracted load</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px">retrieved</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#8A8574"><span style="width:8px;height:8px;border-radius:99px;border:1.5px solid #DDD9CC;box-sizing:border-box;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;width:30px">5.94</span><span style="flex:1;min-width:0">Loudoun BOS 2026-08-06 — substation hearing</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px">retrieved</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#B5B0A1"><span style="width:8px;height:8px;flex-shrink:0"></span><span style="width:30px"></span><span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:10.5px">+ 3 more retrieved, not cited</span></div>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </section>
+        <section style="animation:fadeup .45s ease .08s both">
+          <div style="display:flex;gap:14px;align-items:baseline">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·2</span>
+            <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">Did Oracle sign a power purchase agreement with Oklo in Ohio?</h2>
+          </div>
+          <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+            <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:22px 24px;max-width:560px">
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.8" stroke="#8A8574" stroke-width="1.3"></circle><path d="M5.5 8h5" stroke="#8A8574" stroke-width="1.3" stroke-linecap="round"></path></svg>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NOT IN THE RECORD</span>
+              </div>
+              <p style="font-family:Fraunces,serif;font-size:19px;font-weight:480;line-height:1.5;margin:0 0 8px;letter-spacing:-0.01em">The record doesn't cover this.</p>
+              <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0 0 16px;text-wrap:pretty">No documents in the corpus link Oracle and Oklo in Ohio — no filing, docket entry, or meeting transcript mentions both parties. Rather than guess, here's what the record can answer:</p>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <button onClick="{{ askSuggest }}" data-q="What capacity has Oklo actually contracted, versus announced?" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">What capacity has Oklo actually contracted, versus announced?</button>
+                <button onClick="{{ askSuggest }}" data-q="Which Ohio dockets involve data-center load this year?" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">Which Ohio dockets involve data-center load this year?</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <sc-if value="{{ askQueued }}" hint-placeholder-val="{{ false }}">
+          <section style="animation:pop .25s ease both">
+            <div style="display:flex;gap:14px;align-items:baseline">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·3</span>
+              <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">{{ askQueued }}</h2>
+            </div>
+            <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+              <div style="border:1px dashed #DCCf9E;border-radius:14px;background:#F6F3E4;padding:18px 22px;max-width:560px">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#C9A93E"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A6D1F">QUEUED FOR THURSDAY</span></div>
+                <p style="font-size:13.5px;line-height:1.6;color:#6B5B1E;margin:0;text-wrap:pretty">The answering engine goes live Thursday. Your question is saved — retrieval already works, so try it as a <a href="#search">Search</a> in the meantime.</p>
+              </div>
+            </div>
+          </section>
+        </sc-if>
+      </div>
+      <aside style="{{ railStyle }}">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources · Q·1</div>
+        <div style="{{ srcCards }}">
+          <a href="#ask" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">1</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Bartow County, GA</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…6,600 MW of pending requests, of which 2,100 MW hold executed service agreements…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">GA PSC 44280 · 2026-08-04</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">Docket ↗</span></div>
+          </a>
+          <a href="#ask" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">2</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Franklin County, OH</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…minimum demand payments of 85% of contracted capacity for a 12-year term…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">PUCO 24-508 · 2026-07-17</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">Docket ↗</span></div>
+          </a>
+          <a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">3</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">VST</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…demand may not develop on the timelines or in the amounts projected…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">10-K · 2026-02-27</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">EDGAR ↗</span></div>
+          </a>
+        </div>
+        <p style="font-size:11.5px;line-height:1.55;color:#8A8574;margin:14px 2px 0;text-wrap:pretty">Every claim is composed from these passages only. Hover a <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 5px">n</span> to preview; click to open the receipt.</p>
+      </aside>
+    </main>
+    <div style="position:sticky;bottom:0;background:linear-gradient(180deg,rgba(250,250,247,0) 0,#FAFAF7 24px);padding:22px 0 18px">
+      <div style="max-width:760px;margin:0 auto">
+        <div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap">
+          <button onClick="{{ askSuggest }}" data-q="What has Loudoun County approved this year, and for whom?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">What has Loudoun approved this year?</button>
+          <button onClick="{{ askSuggest }}" data-q="Where is water usage contested in permitting?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">Where is water usage contested?</button>
+          <button onClick="{{ askSuggest }}" data-q="Which neocloud promises have slipped?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">Which neocloud promises slipped?</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #E7E4DA;border-radius:14px;box-shadow:0 2px 6px rgba(22,21,15,.04),0 12px 32px rgba(22,21,15,.06);padding:14px 18px">
+          <svg width="19" height="19" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><path d="M10 2.5c3.6 0 6.5 2.6 6.5 5.9 0 3.2-2.9 5.8-6.5 5.8-.7 0-1.4-.1-2-.3L4 16l.9-3.1c-.9-1-1.4-2.2-1.4-3.5 0-3.3 2.9-5.9 6.5-5.9Z" stroke="#0A7A43" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+          <input ref="{{ askRef }}" value="{{ askQ }}" onChange="{{ setAsk }}" onKeyDown="{{ askKey }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:15.5px;font-weight:500;color:#16150F;font-family:Inter,sans-serif" placeholder="Ask the record a question…">
+          <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><span style="display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.06em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:6px 13px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:99px;background:#C9A93E"></span>LIVE THURSDAY</span></sc-if>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vTickers }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 8px">
+      <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The universe.</h1>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">102 tickers across the buildout's supply chain. Receipt counts are documents on the record; click a ticker for the price-and-receipts timeline.</p>
+    </section>
+    <sc-for list="{{ sectors }}" as="sec" hint-placeholder-count="2">
+      <section style="padding:18px 0 6px;animation:fadeup .45s ease both">
+        <div style="display:flex;align-items:baseline;gap:12px;border-bottom:1px solid #E7E4DA;padding-bottom:9px;margin-bottom:14px">
+          <h3 style="margin:0;font-family:Fraunces,serif;font-weight:560;font-size:19px;letter-spacing:-0.01em">{{ sec.name }}</h3>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;font-variant-numeric:tabular-nums">{{ sec.countLine }}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px">
+          <sc-for list="{{ sec.list }}" as="t" hint-placeholder-count="4">
+            <button onClick="{{ openTicker }}" data-sym="{{ t.sym }}" style="all:unset;cursor:pointer;box-sizing:border-box;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 15px;display:flex;flex-direction:column;gap:6px;min-height:76px" style-hover="border-color:#0A7A43;box-shadow:0 6px 18px rgba(10,122,67,.08)">
+              <span style="display:flex;justify-content:space-between;align-items:baseline;width:100%"><strong style="font-family:Fraunces,serif;font-weight:600;font-size:18px;letter-spacing:0">{{ t.sym }}</strong><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#075C32;background:#E4F3E9;border-radius:4px;padding:1px 7px;font-variant-numeric:tabular-nums">{{ t.count }}</span></span>
+              <span style="font-size:10.5px;color:#8A8574;line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ t.teaser }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+    <sc-if value="{{ detOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;inset:0;background:rgba(22,21,15,.32);z-index:50;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box" onClick="{{ closeDet }}">
+        <div style="{{ detPanel }}" onClick="{{ stopIt }}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div>
+              <div style="display:flex;align-items:baseline;gap:12px"><h2 style="margin:0;font-family:Fraunces,serif;font-weight:600;font-size:32px;letter-spacing:-0.01em">{{ detSym }}</h2><span style="font-size:13px;color:#6E6A5E">{{ detName }}</span></div>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span style="font-family:Fraunces,serif;font-size:26px;font-weight:560;font-variant-numeric:tabular-nums">{{ detPrice }}</span><span style="{{ detDeltaStyle }}">{{ detDelta }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">1Y · weekly close</span></div>
+            </div>
+            <button onClick="{{ closeDet }}" style="all:unset;cursor:pointer;font-size:20px;color:#8A8574;padding:4px 8px" style-hover="color:#16150F">✕</button>
+          </div>
+          <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#FDFDFB;padding:16px 16px 10px">
+            <svg viewBox="0 0 720 240" style="width:100%;height:auto;display:block">
+              <line x1="0" y1="60" x2="720" y2="60" stroke="#F0EEE4" stroke-width="1"></line>
+              <line x1="0" y1="120" x2="720" y2="120" stroke="#F0EEE4" stroke-width="1"></line>
+              <line x1="0" y1="180" x2="720" y2="180" stroke="#F0EEE4" stroke-width="1"></line>
+              <sc-for list="{{ detMoves }}" as="mv" hint-placeholder-count="0"><line x1="{{ mv.x }}" y1="18" x2="{{ mv.x }}" y2="228" stroke="{{ mv.color }}" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"></line></sc-for>
+              <path d="{{ detPath }}" fill="none" stroke="#16150F" stroke-width="1.6"></path>
+              <sc-for list="{{ detMarks }}" as="m" hint-placeholder-count="0"><circle cx="{{ m.x }}" cy="{{ m.y }}" r="5.5" fill="#0A7A43" stroke="#FAFAF7" stroke-width="2" style="cursor:pointer" onMouseEnter="{{ mkEnter }}" data-i="{{ m.i }}"></circle></sc-for>
+            </svg>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 2px 4px;flex-wrap:wrap;gap:8px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8A8574"><span style="color:#0A7A43">●</span> receipt on the record · <span style="color:#B8432C">┆</span> weekly move over 6%</span>
+              <span style="font-family:Fraunces,serif;font-style:italic;font-size:12.5px;color:#6E6A5E">Receipts vs. price — context, not causation.</span>
+            </div>
+          </div>
+          <sc-if value="{{ mkOpenB }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:12px;border:1px solid #CFE8DA;border-radius:12px;background:#fff;padding:14px 16px;animation:pop .18s ease both">
+              <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px;flex-wrap:wrap"><span style="{{ mkVenueStyle }}">{{ mkVenue }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ mkRef }}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">{{ mkDate }}</span></div>
+              <p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:#3D3B33">{{ mkSnip }}</p>
+              <a href="{{ mkLink }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px;display:inline-block" style-hover="background:#16150F;color:#FAFAF7">{{ mkCta }}</a>
+            </div>
+          </sc-if>
+          <sc-if value="{{ detNoRec }}" hint-placeholder-val="{{ false }}">
+            <p style="margin:14px 2px 0;font-size:13px;color:#8A8574;line-height:1.55">No receipts on this timeline yet — the corpus indexes filings and hearings as they land. Counts above are corpus-wide document totals.</p>
+          </sc-if>
+          <sc-if value="{{ hasMoves }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:14px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:8px">Significant moves</div>
+              <sc-for list="{{ detMovesList }}" as="mv" hint-placeholder-count="0">
+                <div style="display:flex;gap:12px;align-items:baseline;padding:7px 0;border-top:1px solid #F0EEE4;font-size:13px;flex-wrap:wrap"><span style="{{ mv.pctStyle }}">{{ mv.pct }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574">{{ mv.date }}</span><span style="color:#6E6A5E">{{ mv.note }}</span></div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vScore }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 10px">
+      <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The scoreboard.</h1>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">IR metrics against pooled judgments, straight from the eval harness. This system publishes its own report card — red numbers and all.</p>
+    </section>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:12px 0">
+      <sc-for list="{{ tiles }}" as="t" hint-placeholder-count="4">
+        <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:20px 22px;animation:fadeup .45s ease both">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#8A8574">{{ t.name }}</div>
+          <div style="{{ t.valStyle }}">{{ t.val }}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px"><span style="{{ t.deltaStyle }}">{{ t.delta }}</span><span style="font-size:11px;color:#8A8574">vs {{ t.prevV }}</span></div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;overflow:hidden;margin-top:8px">
+      <div style="display:grid;grid-template-columns:90px 110px repeat(4,1fr);gap:8px;padding:11px 20px;background:#F6F5EF;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574"><span>VERSION</span><span>DATE</span><span>P@10</span><span>R@50</span><span>MRR</span><span>NDCG@10</span></div>
+      <sc-for list="{{ metricRows }}" as="m" hint-placeholder-count="2">
+        <div style="display:grid;grid-template-columns:90px 110px repeat(4,1fr);gap:8px;padding:13px 20px;border-top:1px solid #F0EEE4;font-size:13px;font-variant-numeric:tabular-nums"><strong>{{ m.v }}</strong><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574">{{ m.date }}</span><span>{{ m.p }}</span><span>{{ m.r }}</span><span>{{ m.mrr }}</span><span>{{ m.n }}</span></div>
+      </sc-for>
+    </div>
+    <p style="font-family:Fraunces,serif;font-style:italic;font-size:14px;color:#6E6A5E;text-align:center;padding:26px 0 10px">Measured, not vibed.</p>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vLedger }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 8px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 13px">SHIPS THIS WEEKEND</span>
+      </div>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Claims made on the record, tracked to outcomes. Every row pairs the promise with its receipt — and with what actually happened. The rows below are illustrative.</p>
+    </section>
+    <div style="padding:14px 0">
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CEG</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">8-K · 2026-02-11</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“835 megawatts at Calvert Cliffs will reach commercial operation by June 2026.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: energized 2026-06-19, confirmed in Q2 call</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#075C32;background:#E4F3E9;border-radius:99px;padding:4px 13px">DELIVERED</span></div>
+      </div>
+      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .07s both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Loudoun County, VA</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Board hearing · 2025-11-18</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“The substation will be energized before the start of the school year — that is our commitment to this board.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://youtube.com/watch?v=5w_AQQ-bk30&t=2732s" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#16150F;color:#FAFAF7;border-radius:99px;padding:6px 13px" style-hover="background:#0A7A43;color:#fff;animation:pulse .9s ease-out infinite">▶ 1:02:14</a><span style="font-size:12px;color:#8A8574">Outcome: energization now filed for Q1 2027</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#9C3A24;background:#F7E4DE;border-radius:99px;padding:4px 13px">SLIPPED</span></div>
+      </div>
+      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .14s both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#8A6D1F;background:#F5EEDA;border-radius:4px;padding:2px 7px">COACHED</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CRWV</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Q1 call · 2026-05-08</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“We will have 1.2 gigawatts contracted and energized by year-end — the transformers are already sequenced.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: 620 MW energized as of Q2 — watching Q3</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#8A6D1F;background:#F5EEDA;border-radius:99px;padding:4px 13px">PENDING</span></div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <footer style="{{ footerStyle }}">
+    <span style="font-family:Fraunces,serif;font-style:italic;font-size:13px;color:#6E6A5E">OnRecord — every megawatt promised, permitted, and powered.</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">corpus v1 · measured, not vibed</span>
+  </footer>
+
+  <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+    <nav style="position:fixed;bottom:0;left:0;right:0;z-index:40;background:#FFFFFF;border-top:1px solid #E7E4DA;display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom))">
+      <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="5">
+        <button onClick="{{ onNav }}" data-view="{{ tb.v }}" style="{{ tb.style }}"><span style="{{ tb.dot }}"></span>{{ tb.label }}</button>
+      </sc-for>
+    </nav>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:960},&quot;apiBase&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;http://localhost:8000&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Wiring&quot;},&quot;showScores&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Search&quot;}}">
+const MARK = { background: 'linear-gradient(0deg,rgba(23,168,91,.22) 0 36%,transparent 36%)', fontWeight: 600 };
+const VENUES = {
+  sworn: { label: 'SWORN', style: { color: '#075C32', background: '#E4F3E9', borderRadius: '4px', padding: '3px 8px' } },
+  coached: { label: 'COACHED', style: { color: '#8A6D1F', background: '#F5EEDA', borderRadius: '4px', padding: '3px 8px' } },
+  candid: { label: 'CANDID', style: { color: '#9C3A24', background: '#F7E4DE', borderRadius: '4px', padding: '3px 8px' } },
+};
+const CORPUS = [
+  { id: 'yt:5w_AQQ:s06', text: 'Staff testimony confirms the applicant is requesting substation upgrades to serve 240 megawatts of new capacity east of Ashburn, phased across three interconnection windows.', source: 'county_meeting', venue: 'sworn', date: '2026-08-06', link: 'https://youtube.com/watch?v=5w_AQQ-bk30&t=2732s', ts: '45:32', ticker: null, jur: 'Loudoun County, VA', line: 'Board of Supervisors · Public Hearing, Item 7' },
+  { id: 'ed:ceg:8k', text: 'Constellation executed a twenty-year interconnection agreement securing 835 megawatts of capacity at the Calvert Cliffs site, with commercial operations contingent on substation energization.', source: 'filing', venue: 'sworn', date: '2026-08-05', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'CEG', jur: null, line: 'Constellation Energy · 8-K, Item 8.01' },
+  { id: 'dk:gapsc:44280', text: 'Georgia Power\u2019s IRP amendment identifies 6,600 megawatts of pending data-center substation requests, of which 2,100 hold executed service agreements; the remainder are speculative and duplicative.', source: 'docket', venue: 'sworn', date: '2026-08-04', link: 'https://psc.ga.gov/search/facts-docket/?docketId=44280', ts: null, ticker: null, jur: 'Bartow County, GA', line: 'GA PSC 44280 · direct testimony, load forecast' },
+  { id: 'yt:bartow:pc', text: 'I have lived on Pine Log Road for forty years and nobody told us a substation and a data center campus were coming in behind the elementary school until the trees came down.', source: 'county_meeting', venue: 'candid', date: '2026-08-03', link: 'https://youtube.com/watch?v=Jq8rN2xVd1M&t=4328s', ts: '1:12:08', ticker: null, jur: 'Bartow County, GA', line: 'Public comment · rezoning hearing' },
+  { id: 'yt:pwc:rez14', text: 'Staff recommends approval of the rezoning contingent on the substation screening plan and a 300-foot buffer; the applicant\u2019s proffer caps on-site diesel generation at 40 megawatts.', source: 'county_meeting', venue: 'sworn', date: '2026-07-29', link: 'https://youtube.com/watch?v=k2XbJqp0Y1c&t=1427s', ts: '23:47', ticker: null, jur: 'Prince William County, VA', line: 'Planning Commission · REZ-2026-014' },
+  { id: 'ed:vst:q2', text: 'We now have signed letters of intent for 4.2 gigawatts of data-center load, and we are confident in converting the majority to executed agreements by 2028.', source: 'filing', venue: 'coached', date: '2026-07-31', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'VST', jur: null, line: 'Vistra · Q2 2026 earnings call, 8-K exhibit' },
+  { id: 'ed:oklo:10q', text: 'Non-binding letters of intent for up to 750 megawatts of capacity; no substation or interconnection agreements have been executed as of the filing date.', source: 'filing', venue: 'sworn', date: '2026-07-24', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'OKLO', jur: null, line: 'Oklo Inc. · 10-Q, MD&A' },
+  { id: 'dk:puco:24508', text: 'The settlement requires data-center customers over 25 megawatts to make minimum demand payments of 85 percent of contracted capacity for a twelve-year term, citing risk of stranded distribution investment.', source: 'docket', venue: 'sworn', date: '2026-07-17', link: 'https://dis.puc.state.oh.us/CaseRecord.aspx?CaseNo=24-508', ts: null, ticker: null, jur: 'Franklin County, OH', line: 'PUCO 24-508-EL-ATA · tariff settlement' },
+  { id: 'yt:loudoun:water', text: 'The water usage numbers in the application are averages; peak-day cooling demand is three times that, and the Broad Run treatment plant is already at 80 percent of rated capacity.', source: 'county_meeting', venue: 'candid', date: '2026-07-15', link: 'https://youtube.com/watch?v=8xTe0PqLmC4&t=3491s', ts: '58:11', ticker: null, jur: 'Loudoun County, VA', line: 'Service Authority briefing · Board work session' },
+  { id: 'yt:maricopa:water', text: 'The applicant\u2019s water balance shows 1.1 million gallons per day of reclaimed water for cooling, with zero groundwater draw under the drought contingency plan.', source: 'county_meeting', venue: 'sworn', date: '2026-07-09', link: 'https://youtube.com/watch?v=Nv3QwLp8sYE&t=1864s', ts: '31:04', ticker: null, jur: 'Maricopa County, AZ', line: 'Board of Supervisors · zoning case Z-2026-071' },
+  { id: 'ed:crwv:10q', text: 'The company has contracted 1.9 gigawatts of capacity across 14 sites; approximately 620 megawatts is energized and billing as of quarter end.', source: 'filing', venue: 'sworn', date: '2026-06-30', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'CRWV', jur: null, line: 'CoreWeave · 10-Q, results of operations' },
+  { id: 'dk:vascc:0087', text: 'Dominion petitions for a 500 kV transmission line to serve 962 megawatts of contracted data-center capacity in the eastern Loudoun load area.', source: 'docket', venue: 'sworn', date: '2026-06-24', link: 'https://scc.virginia.gov/docketsearch', ts: null, ticker: null, jur: 'Loudoun County, VA', line: 'VA SCC PUR-2026-00087 · petition' },
+  { id: 'ed:iren:q4', text: 'We expect our Sweetwater campus to reach 300 megawatts of IT capacity in the first half of 2027, subject to transformer deliveries staying on schedule.', source: 'filing', venue: 'coached', date: '2026-06-12', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'IREN', jur: null, line: 'IREN · FY earnings call, 8-K exhibit' },
+  { id: 'yt:pwc:corridor', text: 'If the county approves one more data center by-right, the transmission corridor will run through the battlefield \u2014 and nobody at Dominion will say the words eminent domain out loud.', source: 'county_meeting', venue: 'candid', date: '2026-05-27', link: 'https://youtube.com/watch?v=Wm5tRkE2hQo&t=6116s', ts: '1:41:56', ticker: null, jur: 'Prince William County, VA', line: 'Public comment · comprehensive plan hearing' },
+];
+const SECTORS = [
+  { name: 'Utilities & IPPs', syms: ['VST','CEG','NRG','TLN','NEE','SO','D','DUK','AEP','ETR','EXC','PPL','EVRG','WEC','OGE','AES','PNW','IDA','POR','ES','FE','CNP','XEL','SRE'] },
+  { name: 'Hyperscalers & AI', syms: ['MSFT','GOOGL','AMZN','META','ORCL','NVDA','AMD','INTC','TSM','MU'] },
+  { name: 'Neoclouds & Miner Pivots', syms: ['CRWV','NBIS','IREN','APLD','WULF','CIFR','HUT','CORZ','GLXY','HIVE','BTDR','BITF'] },
+  { name: 'Data-center REITs & Land', syms: ['DLR','EQIX','IRM','TPL','VMC'] },
+  { name: 'Builders & E&C', syms: ['PWR','EME','MTZ','FIX','IESC','STRL','ACM','J','DY'] },
+  { name: 'Power Equipment & Cooling', syms: ['VRT','ETN','GEV','POWL','HUBB','NVT','MOD','ROK','TT','JCI','CARR','GNRC','CAT'] },
+  { name: 'Gas, Midstream & Fuel', syms: ['KMI','WMB','ET','BE','PLUG'] },
+  { name: 'Nuclear, SMR & Uranium', syms: ['OKLO','SMR','LEU','CCJ','UEC','DNN','BWXT','NNE'] },
+  { name: 'Grid, Copper, Fiber & Materials', syms: ['ITRI','FCX','SCCO','GLW','LUMN','CCOI','MLM','AWK'] },
+  { name: 'Servers & Networking', syms: ['SMCI','DELL','HPE','ANET','CIEN','COHR'] },
+];
+const FEATURED = { VST: 47, CEG: 41, NEE: 28, D: 26, AEP: 24, SO: 22, DUK: 21, TLN: 19, NRG: 17, EXC: 15, MSFT: 31, AMZN: 29, GOOGL: 27, META: 25, NVDA: 22, ORCL: 19, CRWV: 23, NBIS: 11, IREN: 9, APLD: 8, CORZ: 7, DLR: 18, EQIX: 16, VRT: 21, GEV: 16, ETN: 13, PWR: 14, OKLO: 12, SMR: 8, CCJ: 7, AWK: 8, SMCI: 9, ANET: 6 };
+const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo Inc.', CRWV: 'CoreWeave', IREN: 'IREN Ltd.', MSFT: 'Microsoft', GOOGL: 'Alphabet', AMZN: 'Amazon', DLR: 'Digital Realty', VRT: 'Vertiv', GEV: 'GE Vernova', AEP: 'American Electric Power', SO: 'Southern Company' };
+const METRICS = [
+  { v: 'v1', date: '2026-08-09', m: { p: 0.12, r: 0.28, mrr: 0.19, n: 0.15 } },
+  { v: 'v1.1', date: '2026-08-11', m: { p: 0.31, r: 0.52, mrr: 0.38, n: 0.34 } },
+];
+function hashSym(s) { let h = 7; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 1000000; return h; }
+function rng(seed) { let s = seed || 1; return () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; }; }
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+const WEEK0 = new Date('2025-08-17').getTime();
+function weekIndex(dateStr) { return Math.max(0, Math.min(52, Math.round((new Date(dateStr).getTime() - WEEK0) / (7 * 864e5)))); }
+
+class Component extends DCLogic {
+  state = { w: 1280, view: 'search', q: 'substation capacity', selIdx: 0, fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null, teaser: null, apiLive: false, apiDown: false, detSym: null, mkI: null, openCite: null, drawerOpen: false, askQ: '', askQueued: null };
+  componentDidMount() {
+    this.onResize = () => this.setState({ w: window.innerWidth });
+    this.onResize(); window.addEventListener('resize', this.onResize);
+    const applyHash = () => { const h = (location.hash || '').replace('#', ''); if (['search','ask','tickers','scoreboard','ledger'].includes(h) && h !== this.state.view) this.setState({ view: h, detSym: null }); };
+    applyHash(); this.onHash = applyHash; window.addEventListener('hashchange', this.onHash);
+    this.onKey = (e) => {
+      const typing = /INPUT|TEXTAREA/.test((e.target && e.target.tagName) || '');
+      if (e.key === 'Escape') { this.setState({ detSym: null, openFilter: null }); if (typing) e.target.blur(); return; }
+      if (typing) return;
+      if (e.key === '/') { e.preventDefault(); this.go('search'); setTimeout(() => this.searchEl && this.searchEl.focus(), 50); }
+      else if (e.key === '?') { e.preventDefault(); this.go('ask'); setTimeout(() => this.askEl && this.askEl.focus(), 50); }
+      else if (this.state.view === 'search') {
+        const n = this.currentResults().length;
+        if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ selIdx: Math.min(n - 1, s.selIdx + 1) })); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ selIdx: Math.max(0, s.selIdx - 1) })); }
+        else if (e.key === 'Enter') { const r = this.currentResults()[this.state.selIdx]; if (r) window.open(r.link, '_blank'); }
+      }
+    };
+    window.addEventListener('keydown', this.onKey);
+    this.pingApi();
+  }
+  componentWillUnmount() { window.removeEventListener('resize', this.onResize); window.removeEventListener('hashchange', this.onHash); window.removeEventListener('keydown', this.onKey); }
+  apiBase() { return this.props.apiBase ?? 'http://localhost:8000'; }
+  pingApi() {
+    this.setState({ apiDown: false });
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2500);
+    fetch(this.apiBase() + '/api/search?q=test&k=1', { signal: ctl.signal }).then(r => { clearTimeout(t); this.setState({ apiLive: r.ok, apiDown: !r.ok }); }).catch(() => { clearTimeout(t); this.setState({ apiLive: false, apiDown: true }); });
+  }
+  go(v) { if (location.hash !== '#' + v) location.hash = v; this.setState({ view: v, detSym: null, openFilter: null }); }
+  currentResults() {
+    const s = this.state;
+    const terms = s.q.toLowerCase().split(/\s+/).filter(Boolean);
+    let hits = CORPUS.filter(d =>
+      (s.fSource === 'All' || d.source === s.fSource) &&
+      (s.fVenue === 'All' || d.venue === s.fVenue) &&
+      (s.fTicker === 'All' || d.ticker === s.fTicker) &&
+      (s.fJur === 'All' || d.jur === s.fJur));
+    if (!terms.length) return hits.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8).map(d => ({ ...d, matched: [], score: 0 }));
+    return hits.map(d => { const lt = d.text.toLowerCase(); const m = terms.filter(t => lt.includes(t)); return { d, m }; })
+      .filter(h => h.m.length === terms.length || (h.m.length && terms.length > 2 && h.m.length >= terms.length - 1))
+      .map(h => { const lt = h.d.text.toLowerCase(); let tf = 0; h.m.forEach(t => { tf += lt.split(t).length - 1; }); const rec = (new Date(h.d.date) - new Date('2026-01-01')) / 864e5 / 120; return { ...h.d, matched: h.m, score: +(h.m.length * 2.4 + tf * 0.7 + rec).toFixed(2) }; })
+      .sort((a, b) => b.score - a.score);
+  }
+  segs(text, matched) {
+    if (!matched.length) return [{ t: text, style: {} }];
+    const re = new RegExp('(' + matched.map(escRe).join('|') + ')', 'ig');
+    return text.split(re).filter(Boolean).map(part => ({ t: part, style: matched.some(m => part.toLowerCase() === m) ? MARK : {} }));
+  }
+  series(sym) {
+    const h = hashSym(sym); const r = rng(h);
+    let p = 24 + (h % 280); const pts = [p];
+    for (let i = 1; i <= 52; i++) { p = Math.max(4, p * (1 + (r() - 0.485) * 0.055)); pts.push(p); }
+    CORPUS.filter(d => d.ticker === sym).forEach((d, k) => {
+      const wi = weekIndex(d.date); const shock = [ -0.082, 0.064, -0.11, 0.091, -0.075 ][k % 5];
+      for (let j = wi + 1; j <= 52; j++) pts[j] = pts[j] * (1 + shock);
+    });
+    return pts;
+  }
+  renderVals() {
+    const s = this.state;
+    const isMobile = s.w < 640, isTablet = s.w >= 640 && s.w < 1024, notMobile = !isMobile;
+    const px = isMobile ? '18px' : isTablet ? '32px' : '56px';
+    const raw = this.currentResults();
+    const results = raw.map((d, i) => {
+      const sel = i === s.selIdx;
+      return {
+        i, key: d.id,
+        dateStr: d.date.slice(5).replace('-', ' · ') ? d.date : d.date,
+        isVideo: d.source === 'county_meeting', isFiling: d.source === 'filing', isDocket: d.source === 'docket',
+        venueLabel: VENUES[d.venue].label, venueStyle: VENUES[d.venue].style,
+        refChip: d.ticker || d.jur || '—',
+        refStyle: d.ticker ? { border: '1px solid #16150F', borderRadius: '4px', padding: '3px 8px', fontVariantNumeric: 'tabular-nums' } : { border: '1px solid #E7E4DA', borderRadius: '4px', padding: '3px 8px', color: '#6E6A5E' },
+        meta: d.date + ' · ' + (d.source === 'county_meeting' ? 'county meeting' : d.source === 'filing' ? 'SEC filing' : 'regulatory docket'),
+        segs: this.segs(d.text, d.matched || []),
+        line: d.line, score: d.score ? d.score.toFixed(2) : '—',
+        link: d.link,
+        cta: d.source === 'county_meeting' ? '▶ ' + d.ts : d.source === 'filing' ? 'EDGAR ↗' : 'Docket ↗',
+        ctaStyle: d.source === 'county_meeting'
+          ? { display: 'inline-flex', alignItems: 'center', gap: '7px', fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', background: '#16150F', color: '#FAFAF7', borderRadius: '99px', padding: '7px 14px', whiteSpace: 'nowrap', flexShrink: 0 }
+          : { display: 'inline-flex', alignItems: 'center', gap: '7px', fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', border: '1.5px solid #16150F', color: '#16150F', borderRadius: '99px', padding: '6px 14px', whiteSpace: 'nowrap', flexShrink: 0 },
+        ctaHover: d.source === 'county_meeting'
+          ? { background: '#0A7A43', color: '#FAFAF7', animation: 'pulse .9s ease-out infinite' }
+          : { borderColor: '#0A7A43', color: '#075C32', background: '#E4F3E9' },
+        rowStyle: {
+          display: notMobile ? 'grid' : 'flex', gridTemplateColumns: '96px 26px minmax(0,1fr)', flexDirection: 'column', gap: notMobile ? '18px' : '10px',
+          alignItems: 'start', padding: '18px 8px', margin: '0 -8px', borderTop: '1px solid #E7E4DA', borderRadius: '4px',
+          background: sel ? '#F4F2E9' : 'transparent', animation: 'fadeup .45s ease ' + Math.min(i * 0.06, 0.4) + 's both', cursor: 'default',
+        },
+      };
+    });
+    const filterPill = (active) => ({ all: 'unset', cursor: 'pointer', boxSizing: 'border-box', border: active ? '1px solid #0A7A43' : '1px solid #E7E4DA', borderRadius: '99px', padding: '6px 14px', background: active ? '#E4F3E9' : '#fff', color: active ? '#075C32' : '#16150F', fontSize: '12.5px', fontWeight: 500 });
+    const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+    const sectors = SECTORS.map(sec => {
+      const list = sec.syms.map(sym => {
+        const doc = CORPUS.find(d => d.ticker === sym);
+        return { sym, count: FEATURED[sym] || 1 + (hashSym(sym) % 5), teaser: doc ? doc.date + ' · ' + doc.line : 'latest: 10-Q · risk factors' };
+      });
+      return { name: sec.name, list, countLine: list.reduce((a, t) => a + t.count, 0) + ' receipts · ' + list.length + ' tickers' };
+    });
+    let det = {};
+    if (s.detSym) {
+      const pts = this.series(s.detSym);
+      const mn = Math.min(...pts), mx = Math.max(...pts), pad = (mx - mn) * 0.1 || 1;
+      const yOf = (p) => 228 - ((p - mn + pad) / (mx - mn + 2 * pad)) * 210;
+      const xOf = (i) => (i / 52) * 720;
+      const path = pts.map((p, i) => (i ? 'L' : 'M') + xOf(i).toFixed(1) + ' ' + yOf(p).toFixed(1)).join(' ');
+      const recs = CORPUS.filter(d => d.ticker === s.detSym);
+      const marks = recs.map((d, i) => { const wi = weekIndex(d.date); return { i, x: xOf(wi).toFixed(1), y: yOf(pts[wi]).toFixed(1), doc: d }; });
+      const moves = [];
+      for (let i = 1; i <= 52; i++) { const ret = (pts[i] - pts[i - 1]) / pts[i - 1]; if (Math.abs(ret) > 0.06) moves.push({ i, ret }); }
+      const wkDate = (i) => new Date(WEEK0 + i * 7 * 864e5).toISOString().slice(0, 10);
+      const last = pts[52], delta = (pts[52] - pts[0]) / pts[0] * 100;
+      const mk = s.mkI != null && marks[s.mkI] ? marks[s.mkI].doc : null;
+      det = {
+        detOpen: true, detSym: s.detSym, detName: NAMES[s.detSym] || 'On the record', detPath: path,
+        detPrice: '$' + last.toFixed(2),
+        detDelta: (delta >= 0 ? '+' : '') + delta.toFixed(1) + '% 1Y',
+        detDeltaStyle: { fontFamily: "'IBM Plex Mono',monospace", fontSize: '12.5px', fontWeight: 600, color: delta >= 0 ? '#075C32' : '#9C3A24', background: delta >= 0 ? '#E4F3E9' : '#F7E4DE', borderRadius: '99px', padding: '3px 11px' },
+        detMarks: marks.map(m => ({ i: m.i, x: m.x, y: m.y })),
+        detMoves: moves.slice(0, 6).map(mv => ({ x: xOf(mv.i).toFixed(1), color: mv.ret < 0 ? '#B8432C' : '#0A7A43' })),
+        detMovesList: moves.slice(0, 4).map(mv => {
+          const near = recs.filter(d => { const wi = weekIndex(d.date); return mv.i - wi >= 0 && mv.i - wi <= 2; });
+          return { pct: (mv.ret > 0 ? '+' : '') + (mv.ret * 100).toFixed(1) + '%', pctStyle: { fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: mv.ret < 0 ? '#9C3A24' : '#075C32', minWidth: '52px' }, date: 'wk of ' + wkDate(mv.i), note: near.length ? near.length + ' receipt' + (near.length > 1 ? 's' : '') + ' in the prior two weeks' : 'no receipts nearby' };
+        }),
+        hasMoves: moves.length > 0, detNoRec: marks.length === 0,
+        mkOpenB: !!mk,
+        mkVenue: mk ? VENUES[mk.venue].label : '', mkVenueStyle: mk ? VENUES[mk.venue].style : {},
+        mkRef: mk ? (mk.ticker || mk.jur || '') : '', mkDate: mk ? mk.date + ' · ' + mk.line : '', mkSnip: mk ? mk.text : '', mkLink: mk ? mk.link : '#',
+        mkCta: mk ? (mk.source === 'county_meeting' ? '▶ ' + mk.ts : mk.source === 'filing' ? 'EDGAR ↗' : 'Docket ↗') : '',
+      };
+    }
+    const prev = METRICS[METRICS.length - 2], cur = METRICS[METRICS.length - 1];
+    const tile = (name, k) => {
+      const v = cur.m[k], d = v - prev.m[k];
+      return { name, val: v.toFixed(2), prevV: prev.v,
+        valStyle: { fontFamily: 'Fraunces,serif', fontWeight: 560, fontSize: 'clamp(40px,3.6vw,56px)', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', lineHeight: 1.15, color: v < 0.5 ? '#B8432C' : '#075C32', marginTop: '6px' },
+        delta: (d >= 0 ? '+' : '') + d.toFixed(2),
+        deltaStyle: { fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', fontWeight: 600, color: d >= 0 ? '#075C32' : '#9C3A24', background: d >= 0 ? '#E4F3E9' : '#F7E4DE', borderRadius: '99px', padding: '2px 10px', fontVariantNumeric: 'tabular-nums' } };
+    };
+    const navSt = (v) => s.view === v ? { color: '#16150F', borderBottom: '2px solid #0A7A43', paddingBottom: '3px' } : { color: '#6E6A5E' };
+    const tabs = [['search','Search'],['ask','Ask'],['tickers','Tickers'],['scoreboard','Score'],['ledger','Ledger']].map(([v, label]) => ({ v, label,
+      style: { all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '7px 0 5px', fontSize: '10.5px', fontWeight: 600, color: s.view === v ? '#0A7A43' : '#8A8574', letterSpacing: '.02em' },
+      dot: { width: '5px', height: '5px', borderRadius: '99px', background: s.view === v ? '#0A7A43' : 'transparent' } }));
+    return {
+      isMobile, notMobile,
+      padX: { padding: '0 ' + px, paddingBottom: isMobile ? '64px' : '0', flex: 1, display: 'flex', flexDirection: 'column' },
+      padXBlock: { padding: '0 ' + px, paddingBottom: isMobile ? '64px' : '0', flex: 1 },
+      headerStyle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: (isMobile ? '14px ' : '18px ') + px, borderBottom: '1px solid #E7E4DA', flexWrap: 'wrap' },
+      footerStyle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '24px ' + px, borderTop: '1px solid #E7E4DA', marginTop: '32px', marginBottom: isMobile ? '52px' : '0' },
+      navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
+      onNav: (e) => this.go(e.currentTarget.dataset.view),
+      tabs,
+      engineDot: { width: '7px', height: '7px', borderRadius: '99px', background: s.apiLive ? '#0A7A43' : '#C9A93E', display: 'inline-block' },
+      engineLabel: s.apiLive ? 'live engine' : 'cached record',
+      apiDown: s.apiDown, retryApi: (e) => { e.stopPropagation(); this.pingApi(); },
+      vSearch: s.view === 'search', vAsk: s.view === 'ask', vTickers: s.view === 'tickers', vScore: s.view === 'scoreboard', vLedger: s.view === 'ledger',
+      rootClick: () => { if (s.openFilter) this.setState({ openFilter: null }); },
+      heroGrid: { display: 'grid', gridTemplateColumns: notMobile ? '1fr 280px' : '1fr', gap: '48px', alignItems: 'end', padding: (isMobile ? '30px' : '48px') + ' 0 30px' },
+      q: s.q, setQ: (e) => this.setState({ q: e.target.value, selIdx: 0 }),
+      qKey: (e) => { if (e.key === 'Enter') e.target.blur(); },
+      searchRef: (el) => { this.searchEl = el; },
+      modeSem: () => this.setState({ teaser: 'Semantic search lands Wednesday — the embedding index is built, the ranker isn\u2019t wired. Lexical stays live.' }),
+      modeHyb: () => this.setState({ teaser: 'Hybrid (lexical + semantic, RRF) lands Wednesday. Lexical stays live.' }),
+      teaser: s.teaser, clearTeaser: () => this.setState({ teaser: null }),
+      pillSource: filterPill(s.fSource !== 'All'), pillVenue: filterPill(s.fVenue !== 'All'), pillTicker: filterPill(s.fTicker !== 'All'), pillJur: filterPill(s.fJur !== 'All'),
+      fSourceLabel: s.fSource === 'All' ? 'Source · All' : ({ county_meeting: 'County meetings', filing: 'SEC filings', docket: 'Dockets' })[s.fSource],
+      fVenueLabel: s.fVenue === 'All' ? 'Venue · All' : 'Venue · ' + s.fVenue,
+      fTickerLabel: s.fTicker === 'All' ? 'Ticker · All' : s.fTicker,
+      fJurLabel: s.fJur === 'All' ? 'Jurisdiction · All' : s.fJur,
+      openSource: s.openFilter === 'source', openVenue: s.openFilter === 'venue', openTickerF: s.openFilter === 'ticker', openJur: s.openFilter === 'jur',
+      togSource: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'source' ? null : 'source' }); },
+      togVenue: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'venue' ? null : 'venue' }); },
+      togTicker: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'ticker' ? null : 'ticker' }); },
+      togJur: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'jur' ? null : 'jur' }); },
+      sourceOpts: [{ val: 'All', label: 'All sources' }, { val: 'county_meeting', label: 'County meetings' }, { val: 'filing', label: 'SEC filings' }, { val: 'docket', label: 'Regulatory dockets' }],
+      venueOpts: [{ val: 'All', label: 'All venues' }, { val: 'sworn', label: 'Sworn' }, { val: 'coached', label: 'Coached' }, { val: 'candid', label: 'Candid' }],
+      tickerOpts: [{ val: 'All', label: 'All tickers' }].concat(uniq(CORPUS.map(d => d.ticker)).map(t => ({ val: t, label: t }))),
+      jurOpts: [{ val: 'All', label: 'All jurisdictions' }].concat(uniq(CORPUS.map(d => d.jur)).map(j => ({ val: j, label: j }))),
+      pickSource: (e) => { e.stopPropagation(); this.setState({ fSource: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); },
+      pickVenue: (e) => { e.stopPropagation(); this.setState({ fVenue: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); },
+      pickTicker: (e) => { e.stopPropagation(); this.setState({ fTicker: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); },
+      pickJur: (e) => { e.stopPropagation(); this.setState({ fJur: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); },
+      anyFilter: s.fSource !== 'All' || s.fVenue !== 'All' || s.fTicker !== 'All' || s.fJur !== 'All',
+      clearFilters: () => this.setState({ fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', selIdx: 0 }),
+      countLine: raw.length + ' receipts · ' + (18 + (s.q.length * 7) % 40) + ' ms',
+      listLabel: s.q.trim() ? 'Ranked results' : 'Latest on the record',
+      results, hasResults: results.length > 0, noResults: results.length === 0,
+      hoverRow: (e) => this.setState({ selIdx: +e.currentTarget.dataset.i }),
+      trySuggest: (e) => this.setState({ q: e.currentTarget.dataset.q, selIdx: 0, fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All' }),
+      suggestStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12.5px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#FAFAF7', borderRadius: '99px', padding: '6px 14px' },
+      suggestHover: { borderColor: '#0A7A43', background: '#E4F3E9', color: '#075C32' },
+      showScores: (this.props.showScores ?? true) && notMobile,
+      askGrid: { display: 'grid', gridTemplateColumns: s.w >= 1024 ? 'minmax(0,1fr) 320px' : 'minmax(0,1fr)', gap: s.w >= 1024 ? '48px' : '30px', padding: '28px 0 10px', flex: 1, maxWidth: '1140px', margin: '0 auto', width: '100%', boxSizing: 'border-box' },
+      railStyle: s.w >= 1024 ? { position: 'sticky', top: '24px', alignSelf: 'start' } : {},
+      srcCards: s.w >= 1024 ? { display: 'flex', flexDirection: 'column', gap: '10px' } : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: '10px' },
+      popStyle: { position: 'absolute', bottom: '26px', left: isMobile ? '-120px' : '-12px', width: 'min(320px,78vw)', background: '#fff', border: '1px solid #E7E4DA', borderRadius: '12px', boxShadow: '0 10px 30px rgba(22,21,15,.12)', padding: '13px 15px', zIndex: 20, animation: 'pop .18s ease both', fontFamily: 'Inter,sans-serif', fontSize: '12.5px', fontStyle: 'normal', lineHeight: 1.55, display: 'block' },
+      pop1: s.openCite === '1', pop2: s.openCite === '2', pop3: s.openCite === '3',
+      enterCite: (e) => this.setState({ openCite: e.currentTarget.dataset.n }),
+      leaveCite: () => this.setState({ openCite: null }),
+      drawerOpen: s.drawerOpen, toggleDrawer: () => this.setState(x => ({ drawerOpen: !x.drawerOpen })),
+      chev: { transform: s.drawerOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' },
+      askRef: (el) => { this.askEl = el; },
+      askQ: s.askQ, setAsk: (e) => this.setState({ askQ: e.target.value }),
+      askKey: (e) => { if (e.key === 'Enter' && s.askQ.trim()) this.setState({ askQueued: s.askQ.trim(), askQ: '' }); },
+      askQueued: s.askQueued,
+      askSuggest: (e) => { this.setState({ askQueued: e.currentTarget.dataset.q }); },
+      askSugStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', display: 'block', border: '1px solid #E7E4DA', borderRadius: '9px', padding: '9px 13px', fontSize: '13px', color: '#16150F', background: '#FAFAF7', lineHeight: 1.4 },
+      chipStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#fff', borderRadius: '99px', padding: '6px 13px' },
+      sectors,
+      openTicker: (e) => this.setState({ detSym: e.currentTarget.dataset.sym, mkI: null }),
+      closeDet: () => this.setState({ detSym: null, mkI: null }),
+      stopIt: (e) => e.stopPropagation(),
+      mkEnter: (e) => this.setState({ mkI: +e.currentTarget.dataset.i }),
+      detPanel: { background: '#FAFAF7', border: '1px solid #E7E4DA', borderRadius: isMobile ? '16px' : '18px', boxShadow: '0 24px 80px rgba(22,21,15,.25)', padding: isMobile ? '18px' : '26px 30px', width: 'min(880px,100%)', maxHeight: '92vh', overflowY: 'auto', boxSizing: 'border-box', animation: 'pop .22s ease both' },
+      detOpen: false, mkOpenB: false, hasMoves: false, detNoRec: false, detMarks: [], detMoves: [], detMovesList: [], detPath: '', detSym: '', detName: '', detPrice: '', detDelta: '', detDeltaStyle: {}, mkVenue: '', mkVenueStyle: {}, mkRef: '', mkDate: '', mkSnip: '', mkLink: '#', mkCta: '',
+      ...det,
+      tiles: [tile('P@10', 'p'), tile('R@50', 'r'), tile('MRR', 'mrr'), tile('NDCG@10', 'n')],
+      metricRows: METRICS.slice().reverse().map(m => ({ v: m.v, date: m.date, p: m.m.p.toFixed(2), r: m.m.r.toFixed(2), mrr: m.m.mrr.toFixed(2), n: m.m.n.toFixed(2) })),
+    };
+  }
+}
+</script>
+</body>
+</html>
