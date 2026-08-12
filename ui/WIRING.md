@@ -85,14 +85,14 @@ It is never rendered while the API answers. `retry` re-runs the full bootstrap
    magnitude.** Same visual density as the design (6 dashed rules, 4 listed
    rows), but with 365 days of real data the first-6-chronologically slice would
    have shown the oldest moves rather than the ones the record explains.
-5. **The `mkI` hover card states what is known instead of inventing a passage.**
-   The pinned `nearby_receipts` shape is `{id, date, source_type, deep_link}` —
-   no `venue_type` and no snippet text. The chip therefore shows the source in a
-   neutral treatment (same chip geometry as `VENUES`) and the body reads
-   "Receipt on the record inside this move's window — open the source to read
-   the passage in context." **Recommendation for the prices ticket: add
-   `venue_type` and `snippet` to `nearby_receipts`** and this card becomes a
-   full receipt with zero UI change beyond the two field reads.
+5. **The `mkI` hover card renders the full receipt — the recommendation shipped
+   as T-014R.** AMENDMENT-2 (tests/unit/ingest/test_prices.py) extended
+   `nearby_receipts` to six keys: `{id, date, source_type, deep_link,
+   venue_type, snippet}`. The card now shows the real venue badge via the
+   design's `VENUES` treatment (`SWORN`/`COACHED`/`CANDID`) and quotes the
+   receipt's 160-char passage as the body. The neutral source chip and the
+   "Receipt on the record inside this move's window…" stated-fact line survive
+   only as fallbacks for payloads predating the amendment.
 
 ## 5. Known gaps / gracefully pending
 
