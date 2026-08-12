@@ -8,9 +8,13 @@ consistency decision, tickets/T-027.md) -- T-023 and T-026 import
 `split_claims` from here and MUST NOT reimplement segmentation themselves.
 
 Contract (tickets/T-027.md):
-- Split on `.` `!` `?` (ASCII) when the terminator is followed by whitespace
-  or end-of-string -- this whitespace-or-EOS guard is what lets abbreviations
-  and decimal numbers survive unsplit.
+- Split on `.` `!` `?` (ASCII) when the terminator is followed by whitespace,
+  end-of-string, or an immediately-adjacent `[n]` citation marker (AMENDMENT-2(a),
+  orchestrator-ruled, locked) -- the whitespace-or-EOS guard is what lets
+  abbreviations and decimal numbers survive unsplit; the marker alternative
+  additionally covers unspaced-marker shapes like "voted.[1] Next" without
+  weakening that guard (a digit or `[` is never itself whitespace/EOS, so
+  decimals/abbreviations are unaffected).
 - Split on `。` `！` `？` (CJK/full-width) UNCONDITIONALLY, i.e. with no
   whitespace-or-EOS guard: real Japanese/Chinese prose is not spaced after
   its terminators, and full-width terminators never occur inside decimals or
@@ -39,10 +43,12 @@ import re
 # by an alnum char) so e.g. "Vinci." does not falsely match "Inc.".
 ABBREVIATIONS: tuple[str, ...] = ("Inc.", "No.", "U.S.", "Corp.", "Co.")
 
-# ASCII terminators only end a sentence when followed by whitespace or
-# end-of-string (protects abbreviations and decimals, e.g. "240.5"). CJK
-# terminators end a sentence unconditionally -- no such guard.
-_TERMINATOR_RE = re.compile(r"(?P<ascii>[.!?])(?=\s|\Z)|(?P<cjk>[。！？])")
+# ASCII terminators end a sentence when followed by whitespace, end-of-string,
+# or an immediately-adjacent `[n]` citation marker (AMENDMENT-2(a), locked --
+# protects abbreviations/decimals like "240.5" exactly as before, since a
+# digit is none of whitespace/EOS/`[`). CJK terminators end a sentence
+# unconditionally -- no such guard.
+_TERMINATOR_RE = re.compile(r"(?P<ascii>[.!?])(?=\s|\Z|\[\d+\])|(?P<cjk>[。！？])")
 
 # Absorb zero or more `[n]` markers (each optionally preceded by whitespace)
 # immediately following a terminator, so they stay attached to their claim.
