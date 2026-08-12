@@ -69,3 +69,7 @@ Posture: mvp (see posture.md). Deadline: MVP checkpoint tonight 23:59.
 - T-012: tests-written (28 red, daddbdd; IDF variants reconciled via proven scalar-multiple domain + divergence fixture)
 - T-012: impl DONE (f6acc8a, 31/31; orchestrator gates + live differential runner green)
 - T-012: done. WAVE 5 COMPLETE — Early-checkpoint core (BM25 + differential + API + prices) fully merged, 292 tests green
+- T-015: impl DONE (a91dd6b, 12/12 + suite 304; gates re-run green; explicit-ONRECORD_CORPUS bootstrap decision documented)
+- T-016: UI wiring DONE (b603d00; search/tickers/metrics/ask live, prices graceful-pending, demo data only in api-down state; 36-item browser checklist awaiting orchestrator)
+- T-015: fix DONE (748ae35, 15/15 + suite 307; gates re-run green) — re-review dispatched
+- WAVE 6 merged (T-015 + T-016); 307 tests green; orchestrator browser pass next, then T-017, then deploy
