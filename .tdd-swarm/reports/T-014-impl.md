@@ -1,8 +1,69 @@
 # T-014 Implementation Report — Prices layer (EOD series cache,
 significant-move detection, receipts-vs-price window join, /api/prices)
 
-**Status:** DONE — all 17 frozen tests in `tests/unit/ingest/test_prices.py`
-pass; all local gates green.
+**Status:** DONE — all 22 frozen tests in `tests/unit/ingest/test_prices.py`
+pass (17 original + 5 post-review regression tests); all local gates green.
+
+## Revision 2 (post-review fix — commit `fix(T-014): library-logger key
+redaction, range_days trim, cache-path sanitization, zero-close log`)
+
+Review (`.tdd-swarm/reports/T-014-review.md`) **REJECTED** revision 1 on
+Critical finding C1 plus three lower-severity findings the Test Agent then
+pinned as 5 new regression tests (commit `2230659`, append-only past the
+original 17). All 5 addressed, `onrecord/ingest/prices.py` only:
+
+- **C1 (Critical) — FMP key leak via `httpx`'s own INFO-level request
+  logger** (a leak vector independent of this module's own logging calls,
+  not covered by the original T-008-lesson mitigation). Fixed with a
+  `_httpx_logger_suppressed()` context manager that raises
+  `logging.getLogger("httpx")` to WARNING for the duration of each
+  `fetch_eod` network-call window (both the stooq and FMP attempts),
+  restoring its previous level afterward — scoped, not a permanent
+  process-wide change, so it doesn't affect other httpx users elsewhere in
+  the process. Verified against the new sentinel-value test, which
+  captures at the ROOT logger (no name filter) while reproducing the
+  repo's own `logging.basicConfig(level=logging.INFO)` condition.
+- **I1 (Important) — `range_days` was a dead parameter.** Added
+  `_trim_to_range(series, range_days)`: a post-fetch trim to the trailing
+  `[last_date - (range_days - 1) days, last_date]` calendar-day window,
+  anchored to the series' own most recent date (never wall-clock "today"),
+  applied only on a real fetch (never on a fresh-cache-hit return, which
+  stays verbatim per the original frozen AC-4 contract) and before the
+  cache write, so the cached and returned series stay identical.
+- **Latent security — unsanitized `ticker` in cache-path construction.**
+  Added `_is_safe_ticker()` (`^[A-Za-z0-9.\-]{1,15}$`) checked at the top
+  of `fetch_eod`, before any cache read or network call. An unsafe ticker
+  (path separator, e.g. `"A/B"`, `"../evil"`) is rejected outright and
+  treated like any other source failure: one INFO log line, `[]` returned,
+  never raises, no filesystem access attempted at all.
+- **M3 (Minor) — silent `prior_close == 0` skip in `significant_moves`.**
+  Now logs one WARNING line (`onrecord.ingest.prices`) naming the skipped
+  date before continuing.
+
+No test disputes; no scope changes beyond `onrecord/ingest/prices.py`
+(M1/M2 minor findings from the review were not re-pinned as tests and were
+left as-is per the coordinator's explicit fix list).
+
+### Revision 2 verification
+
+```
+uv run pytest tests/unit/ingest/test_prices.py -v
+```
+-> **22 passed** (17 original + 5 new).
+
+```
+.tdd-swarm/run-local-gates.sh . tickets/T-014.md
+```
+-> `ruff format --check` clean, `ruff check` clean, full suite **205
+passed** (183 pre-existing baseline + 22, zero regressions), `spec-lint OK:
+all ACs covered for T-014` -> **ALL LOCAL GATES GREEN**.
+
+`git diff --stat -- tests/`: empty (frozen tests untouched by the
+implementation agent). Only `onrecord/ingest/prices.py` modified.
+
+---
+
+## Revision 1 (original implementation)
 
 **File scope:** `onrecord/ingest/prices.py` only (new file — no
 pre-existing stub for this ticket). `tests/` and `tests/fixtures/prices/**`

@@ -16,9 +16,11 @@ inference, causal claims, and the actual `/api/prices` HTTP route wiring
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +36,43 @@ _CACHE_FRESHNESS = timedelta(days=1)
 
 _STOOQ_URL = "https://stooq.com/q/d/l/"
 _FMP_URL_TEMPLATE = "https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
+
+# A ticker must be a single, flat, filesystem-safe path component — no path
+# separators, no traversal segments — since it becomes `<cache_dir>/
+# <ticker>.json` verbatim. Anything else is rejected outright (post-review
+# finding: latent cache-path-escape/nesting risk once an untrusted route
+# wires `ticker` from user input; see .tdd-swarm/reports/T-014-review.md).
+_SAFE_TICKER_RE = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
+
+
+def _is_safe_ticker(ticker: str) -> bool:
+    """True if `ticker` is safe to use as-is in a cache filename component."""
+    return bool(_SAFE_TICKER_RE.fullmatch(ticker))
+
+
+@contextlib.contextmanager
+def _httpx_logger_suppressed():
+    """Temporarily raise `httpx`'s own request/response logger
+    (`logging.getLogger("httpx")`) to WARNING, restoring its previous level
+    on exit.
+
+    httpx logs a full "HTTP Request: {method} {url} ..." line at INFO for
+    every request by default — including the complete query string, i.e. a
+    literal `?apikey=<value>` for the FMP fallback request. This is a leak
+    vector independent of this module's own logging calls (T-008 lesson:
+    never log the URL/params/exception text for a keyed request) whenever
+    some ancestor logger's effective level allows INFO through — e.g. this
+    repo's own ingest CLI entrypoints already call
+    `logging.basicConfig(level=logging.INFO, ...)`. Scoped to just the
+    network-call window (not a permanent process-wide change) so it doesn't
+    affect other httpx users elsewhere in the process."""
+    httpx_logger = logging.getLogger("httpx")
+    previous_level = httpx_logger.level
+    httpx_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        httpx_logger.setLevel(previous_level)
 
 
 # --------------------------------------------------------------------------
@@ -170,6 +209,26 @@ def _write_cache(cache_dir: str | Path, ticker: str, series: list[dict]) -> None
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _trim_to_range(series: list[dict], range_days: int) -> list[dict]:
+    """Trim `series` (ascending by date) to the trailing `range_days`
+    CALENDAR-day window anchored to the series' own most recent date (never
+    wall-clock "today"): `[last_date - (range_days - 1) days, last_date]`
+    inclusive. No-op on an empty series or a non-positive `range_days`."""
+    if not series or range_days <= 0:
+        return series
+
+    last_date = _parse_date(series[-1]["date"])
+    if last_date is None:
+        return series
+
+    window_start = last_date - timedelta(days=range_days - 1)
+    return [
+        row
+        for row in series
+        if (parsed := _parse_date(row["date"])) is not None and parsed >= window_start
+    ]
+
+
 def _try_stooq(client: httpx.Client, ticker: str) -> list[dict] | None:
     """Attempt the stooq fetch; return a parsed series on success, None on
     any failure. Never raises. Diagnostic detail stays below INFO (never
@@ -234,11 +293,19 @@ def fetch_eod(
     cache-freshness and source-selection rules."""
     effective_cache_dir = cache_dir if cache_dir is not None else _DEFAULT_CACHE_DIR
 
+    if not _is_safe_ticker(ticker):
+        logger.info(
+            "fetch_eod: rejecting unsafe ticker %r (must be a flat alphanumeric/./- "
+            "cache-filename-safe symbol); returning empty series",
+            ticker,
+        )
+        return []
+
     cached = _read_fresh_cache(effective_cache_dir, ticker)
     if cached is not None:
         return cached
 
-    with httpx.Client(transport=transport) as client:
+    with _httpx_logger_suppressed(), httpx.Client(transport=transport) as client:
         series = _try_stooq(client, ticker)
 
         if series is None:
@@ -250,6 +317,7 @@ def fetch_eod(
         logger.info("fetch_eod: all price sources failed for %s; returning empty series", ticker)
         return []
 
+    series = _trim_to_range(series, range_days)
     _write_cache(effective_cache_dir, ticker, series)
     return series
 
@@ -268,6 +336,10 @@ def significant_moves(series: list[dict], threshold_pct: float = 5.0) -> list[di
         prior_close = series[i - 1]["close"]
         today_close = series[i]["close"]
         if prior_close == 0:
+            logger.warning(
+                "significant_moves: skipping %s — prior close is 0.0 (undefined return)",
+                series[i]["date"],
+            )
             continue
         return_pct = (today_close - prior_close) / prior_close * 100
         if abs(return_pct) >= threshold_pct:
