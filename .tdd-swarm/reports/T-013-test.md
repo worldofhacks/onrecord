@@ -1,5 +1,94 @@
 # T-013 Test Agent Report — FastAPI layer (/api/search, /api/tickers, /api/metrics, /api/answer, /health)
 
+**Status:** DONE (see "Update — op whitelist + k bounds" below for the
+current state; original section preserved beneath it).
+
+## Update — op whitelist + k bounds → 422 (post-review fix round)
+
+**Trigger:** Review (`.tdd-swarm/reports/T-013-review.md`) APPROVED T-013
+but flagged 1 Important + folded in 1 Minor, both live-confirmed against the
+real ~24k-doc corpus: `GET /api/search?op=XOR` crashes with an unhandled
+`ValueError` → a raw **500**, not a clean 422, because `op` had no
+whitelist before reaching `boolean_search` (which itself only accepts
+`"AND"`/`"OR"`, uppercase); separately, `k<=0` (e.g. `k=-5`) silently
+returns a confusing-but-not-crashing result set via Python's negative-slice
+semantics on `hits[:k]` instead of erroring. Both closed here by extending
+the still-frozen `tests/unit/test_api.py` (no other files touched) — same
+pattern as T-009's criterion-drift extension.
+
+**New pinned contract** (module docstring's new "Extension — `op` whitelist
++ `k` lower bound" section has full detail):
+- `op` whitelist is **exactly `"AND"` / `"OR"`, case-sensitive, uppercase
+  only** — Test Agent design decision, resolving the review's explicit ask
+  to "pin whether case-insensitive-accepted or 422." Chose uppercase-only
+  to mirror `mode`'s existing Literal-style whitelist and
+  `boolean_search`'s own uppercase-only contract, rather than inventing a
+  case-folding rule nothing else in the codebase has. `"and"`/`"or"`/`"Or"`
+  and any other value all 422.
+- `k` must be a positive integer (`>= 1`), mirroring `onrecord/cli.py`'s
+  `--k` convention exactly (`_positive_int`: "`--k` must be `>= 1`");
+  `k <= 0` is 422.
+
+**7 new failing tests** (all `spec(T-013:AC-1)` — same AC as the rest of
+`/api/search`'s request-handling correctness, not a new AC), plus 3 new
+"valid value still works" guard tests (passing, proving the pinned fix
+doesn't over-reject legitimate `op=AND`/`op=OR`/`k=1` requests):
+
+| Test | Result | What it checks |
+|---|---|---|
+| `test_search_invalid_op_returns_422_never_500` (parametrized `XOR`/`and`/`or`/`Or`) | **FAILED** — clean `assert 500 == 422` (not an uncaught exception) | reproduces the reviewer's exact live repro as a proper test failure |
+| `test_search_valid_uppercase_op_still_works` (parametrized `AND`/`OR`) | passed | fix doesn't break the legitimate values |
+| `test_search_non_positive_k_returns_422` (parametrized `0`/`-1`/`-5`) | **FAILED** — clean `assert 200 == 422` | `k<=0` currently 200s instead of 422ing |
+| `test_search_k_equal_to_one_still_works` | passed | `k=1` (smallest valid) still works, no off-by-one |
+
+**Test-harness change**: `_client(...)` gained an additive
+`raise_server_exceptions: bool = True` keyword (default preserves every
+prior call site byte-for-byte). The new op=XOR-style tests pass
+`raise_server_exceptions=False` so an unhandled server exception comes back
+as an actual `500` `Response` object (matching how a real deployed
+`uvicorn` process behaves) instead of `TestClient`'s default of re-raising
+the exception straight into the test process — which would otherwise turn
+"op=XOR should 422, not 500" into an uncaught-exception test **ERROR**
+instead of a clean, readable `assert resp.status_code == 422` failure
+against a real `500` response. Confirmed both ways empirically before
+settling on `False` for these 7 tests.
+
+**Verification:**
+1. `uv run --with fastapi --with 'httpx>=0.27' -- pytest tests/unit/test_api.py -v`
+   against the current implementation (`onrecord/api.py` as committed by
+   the Implementation Agent, `c58f0c5`) → **7 failed, 24 passed** — the
+   original 21 tests are untouched and still green; exactly the 7 new
+   `op`/`k` scenarios fail, cleanly (`assert 500 == 422` / `assert 200 ==
+   422`, never an uncaught exception or collection error).
+2. Full-repo regression, plain `uv run pytest -q` (fastapi is now a real
+   pyproject dependency post-implementation, so no `--with` needed) →
+   **7 failed, 207 passed** (204 prior baseline + 3 new passing guard
+   tests = 207; the 7 new op/k tests are the only red).
+3. `bash .tdd-swarm/spec-lint.sh tickets/T-013.md` → still `spec-lint OK:
+   all ACs covered for T-013`.
+4. `uv run ruff format tests/unit/test_api.py` (1 file reformatted) then
+   `uv run ruff format --check tests/` → clean; `uv run ruff check tests/`
+   → `All checks passed!`.
+5. `git status --short` before commit: only `tests/unit/test_api.py`
+   modified — no implementation files touched. (`.tdd-swarm/reports/
+   T-013-review.md` is present in the worktree as the Reviewer's own
+   artifact but is not this Test Agent's file and is left uncommitted
+   here, per "commit only your files.")
+
+**Notes for the Implementation Agent (round 2):**
+- Simplest fix for `op`: type it `Literal["AND", "OR"]` (api.py:169),
+  exactly mirroring how `mode` already gets free pydantic validation
+  (api.py:168) — no manual whitelist code needed.
+- Simplest fix for `k`: `Query(ge=1)` (or equivalent) instead of a bare
+  `int = 20` default (api.py:170).
+- Do not edit the 10 new/changed tests in `tests/unit/test_api.py` to make
+  them pass — frozen, same as the rest of the file. If a genuine ambiguity
+  is found, escalate rather than editing directly.
+
+---
+
+## Original report (initial handoff)
+
 **Status:** DONE (frozen failing tests written; confirmed RED against the
 current worktree, which has no `onrecord/api.py`; confirmed GREEN against a
 throwaway reference implementation built outside the worktree, temporarily

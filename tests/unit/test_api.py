@@ -74,13 +74,16 @@ when more than one is given (never OR'd together).
   - `op` (default `"OR"` — Test Agent design decision: the ticket's own
     example querystring shows `op=OR`, read here as the illustrative
     *default* value, paralleling `mode=lexical` and `k=20` in the same
-    example string): `"AND"`/`"OR"`, threaded straight into the
-    boolean-fallback path's `boolean_search(index, q, op)` call.
-    Validation of an invalid `op` value is NOT pinned/tested here
-    (implementer's choice).
-  - `k` (default `20`, per the ticket's own example): truncation happens
-    AFTER metadata filtering (mirrors `onrecord/cli.py`'s established
-    filter-then-truncate order).
+    example string): whitelisted to EXACTLY `"AND"` / `"OR"` — case-
+    SENSITIVE, uppercase only; `"and"`/`"or"`/`"Or"`/any other value all
+    422 (see "Extension — op whitelist + k lower bound" below; this was
+    unpinned at first freeze, closed in a post-review fix round). Once
+    validated, threaded straight into the boolean-fallback path's
+    `boolean_search(index, q, op)` call.
+  - `k` (default `20`, per the ticket's own example): must be a positive
+    integer (`>= 1`) — `k <= 0` is 422 (see "Extension" below; also
+    unpinned at first freeze). Truncation happens AFTER metadata filtering
+    (mirrors `onrecord/cli.py`'s established filter-then-truncate order).
   - Analyzer: this Test Agent builds every fixture index with
     `InvertedIndex.build(docs)` — i.e. `analyzer=None`, the REAL analyzer
     (T-002, already merged) — rather than the "trivial analyzer" the task
@@ -192,6 +195,53 @@ called out explicitly here because this Test Agent hit exactly that gotcha
 while writing the throwaway reference app used to verify these tests are
 achievable.
 
+Extension — `op` whitelist + `k` lower bound (post-review fix round)
+----------------------------------------------------------------------
+Trigger: Reviewer + Security Agent review of the initial implementation
+(`.tdd-swarm/reports/T-013-review.md`) found — and live-confirmed against
+the real ~24k-doc corpus — that `GET /api/search?op=XOR` crashes with an
+unhandled `ValueError` (from `onrecord.search.boolean.boolean_search`'s own
+`raise ValueError(f"unknown boolean op: {op!r}")`) → a raw 500, not the
+clean 422 a malformed client request should get (Important finding #1);
+separately, `k<=0` (e.g. `k=-5`) silently returns a confusing-but-not-
+crashing result set via Python's negative-slice semantics on `hits[:k]`
+instead of a 400/422 (Minor finding #2). Neither was a violation of any
+originally-frozen AC (both were explicitly out-of-scope at first freeze —
+see the now-removed line in "Out of scope" below), but both are closed here
+by extending AC-1's frozen contract rather than deferring to a follow-up
+ticket — same pattern as T-009's criterion-drift extension
+(`.tdd-swarm/reports/T-009-test.md`).
+
+New pinned contract (both additive `spec(T-013:AC-1)` tests — same AC as
+the rest of `/api/search`'s request-handling correctness, not a new AC):
+- `op` is a whitelist: exactly `"AND"` or `"OR"`, case-sensitive, uppercase
+  only (Test Agent design decision — the review asked to "pin whether
+  case-insensitive-accepted or 422"; uppercase-only was chosen to mirror
+  `mode`'s existing Literal-style whitelist and
+  `onrecord.search.boolean.boolean_search`'s own uppercase-only `"AND"`/
+  `"OR"` contract, rather than inventing a case-folding rule nothing else
+  in the codebase has). Any other value — including a same-word
+  different-case value like `"and"` or `"Or"` — is 422, never a silent
+  accept and never a crash.
+- `k` must be a positive integer (`>= 1`); `k <= 0` is 422 — mirrors
+  `onrecord/cli.py`'s `--k` convention (`_positive_int`: "`--k` must be
+  `>= 1`") exactly.
+- A "valid value still works" guard test accompanies each (uppercase
+  `AND`/`OR` still 200s correctly; `k=1`, the smallest valid positive `k`,
+  still 200s with exactly 1 result) — proves the fix didn't over-reject
+  legitimate requests.
+
+Test-harness extension: `_client(...)` gained an additive
+`raise_server_exceptions: bool = True` keyword (default preserves every
+prior call site's behavior byte-for-byte unchanged) so the new op=XOR-style
+tests can open a TestClient with `raise_server_exceptions=False` — matching
+how a real deployed `uvicorn` server behaves (an unhandled exception becomes
+a 500 HTTP response) rather than `TestClient`'s own default of re-raising
+the exception straight into the test process, which would otherwise turn
+"op=XOR should 422, not 500" into an uncaught-exception test ERROR instead
+of a clean, readable `assert resp.status_code == 422` failure against an
+actual `500` response.
+
 Fixture corpora
 ----------------
 `AC1_DOCS` (5 docs): all 4 filter dimensions (source_type, venue_type,
@@ -215,8 +265,9 @@ Out of scope for this file (explicitly): CORS header behavior (ticket
 mentions `localhost:5173` but it's not one of AC-1..AC-5 and this Test
 Agent kept to the assigned AC list rather than expanding scope
 unilaterally); `mode=lexical` via the real `ranked_search` (T-011)/BM25
-path — untestable in this worktree, see above; op-value/`k`-value
-validation edge cases; CORS.
+path — untestable in this worktree, see above. (`op`/`k` validation *was*
+listed here at first freeze; closed by the "Extension" section above —
+see `.tdd-swarm/reports/T-013-test.md`'s "op whitelist + k bounds" update.)
 """
 
 from __future__ import annotations
@@ -276,13 +327,21 @@ def _build_index(tmp_path: Path, docs: list[Doc], name: str = "index") -> Path:
 
 
 @contextlib.contextmanager
-def _client(api_module, monkeypatch, index_dir: Path):
+def _client(api_module, monkeypatch, index_dir: Path, *, raise_server_exceptions: bool = True):
     """Point ONRECORD_INDEX at `index_dir` (present or deliberately absent)
     and open a TestClient context -- this re-runs onrecord.api's ASGI
     startup handler, which must re-read the env var at call time (module
-    docstring's AC-5 section) for this per-test swapping to work at all."""
+    docstring's AC-5 section) for this per-test swapping to work at all.
+
+    `raise_server_exceptions` defaults to `True` (TestClient's own default,
+    preserving every existing call site unchanged); pass `False` -- as the
+    "Extension" section's op-whitelist/k-bound tests do -- to get an actual
+    500 HTTP response back for an unhandled server-side exception, matching
+    how a real deployed `uvicorn` process behaves, instead of TestClient
+    re-raising the exception into the test process itself.
+    """
     monkeypatch.setenv("ONRECORD_INDEX", str(index_dir))
-    with TestClient(api_module.app) as client:
+    with TestClient(api_module.app, raise_server_exceptions=raise_server_exceptions) as client:
         yield client
 
 
@@ -553,6 +612,72 @@ def test_search_k_truncates_after_filtering(tmp_path, monkeypatch):
     results = resp.json()["results"]
     assert len(results) == 2
     assert [r["doc_id"] for r in results] == expected_order[:2]
+
+
+# --------------------------------------------------------------------------
+# AC-1 extension -- op whitelist + k lower bound (post-review fix round)
+#
+# Trigger: .tdd-swarm/reports/T-013-review.md Important finding #1 (op=XOR
+# live-confirmed 500, not 422) + Minor finding #2 (k<=0 silently returns a
+# confusing-but-wrong result set instead of erroring). See the module
+# docstring's "Extension -- op whitelist + k lower bound" section for the
+# full pinned contract, the uppercase-only case-sensitivity decision, and
+# the raise_server_exceptions=False rationale used below.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("op", ["XOR", "and", "or", "Or"])
+def test_search_invalid_op_returns_422_never_500(tmp_path, monkeypatch, op):
+    # spec(T-013:AC-1)
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir, raise_server_exceptions=False) as client:
+        resp = client.get("/api/search", params={"q": "substation", "mode": "lexical", "op": op})
+
+    assert resp.status_code == 422, (
+        f"op={op!r} must 422 (a validation error) -- never 500, and never a "
+        f"silent case-insensitive accept (uppercase-only is the pinned contract)"
+    )
+    assert isinstance(resp.json(), dict), "a 422 must carry a JSON validation body"
+
+
+@pytest.mark.parametrize("op", ["AND", "OR"])
+def test_search_valid_uppercase_op_still_works(tmp_path, monkeypatch, op):
+    # spec(T-013:AC-1) -- guards against an over-eager fix that rejects the
+    # legitimate values while closing the XOR/lowercase hole
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get(
+            "/api/search", params={"q": "substation earnings", "mode": "lexical", "op": op}
+        )
+
+    assert resp.status_code == 200
+    expected = {"d2", "d5"} if op == "AND" else {"d1", "d2", "d3", "d5"}
+    assert {r["doc_id"] for r in resp.json()["results"]} == expected
+
+
+@pytest.mark.parametrize("k", [0, -1, -5])
+def test_search_non_positive_k_returns_422(tmp_path, monkeypatch, k):
+    # spec(T-013:AC-1)
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir, raise_server_exceptions=False) as client:
+        resp = client.get("/api/search", params={"q": "substation", "mode": "lexical", "k": k})
+
+    assert resp.status_code == 422, f"k={k} must 422, matching cli.py's --k >= 1 convention"
+
+
+def test_search_k_equal_to_one_still_works(tmp_path, monkeypatch):
+    # spec(T-013:AC-1) -- k=1 (the smallest valid positive k) must still
+    # succeed, guarding against an off-by-one in the new lower-bound check
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/search", params={"q": "substation", "mode": "lexical", "k": 1})
+
+    assert resp.status_code == 200
+    assert len(resp.json()["results"]) == 1
 
 
 # --------------------------------------------------------------------------
