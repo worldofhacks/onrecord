@@ -4,10 +4,101 @@ detection, receipts-vs-price window join, /api/prices payload)
 **Status:** DONE (frozen failing tests written, confirmed RED for the right
 reason against the current empty state, confirmed GREEN against a
 throwaway correct implementation built and run in-worktree, then fully
-reverted — zero diff outside `tests/`).
+reverted — zero diff outside `tests/`). **Update below**: extended
+post-review-REJECTED with 5 new regression tests (4 named findings + 1
+optional Minor), all confirmed RED against the current (rejected)
+implementation, original 17 untouched and still green.
 
 **Test file:** `tests/unit/ingest/test_prices.py`
 **Fixtures:** `tests/fixtures/prices/{stooq_sample.csv, fmp_historical_price_full.json}`
+
+## Update — post-review (REJECTED) extension: 5 new regression tests
+
+Review (`.tdd-swarm/reports/T-014-review.md`) REJECTED the implementation
+(commit `ab0d9ed`) on one Critical, one Important, one latent-security
+finding, plus an optional Minor. All four are now encoded as new,
+frozen-on-top tests appended to `tests/unit/ingest/test_prices.py` (the
+original 17 tests from the initial handoff, commit `4397d52`, are
+untouched — `git diff 4397d52 -- tests/unit/ingest/test_prices.py` only
+ever appends). No fixture files needed changing; the `range_days` test
+synthesizes its 2-year CSV in-test via a new `_build_synthetic_daily_csv`
+helper rather than committing a ~730-line fixture file.
+
+1. **`test_fetch_eod_fmp_key_never_leaks_via_any_logger_at_repo_info_level`**
+   (`spec(T-014:AC-5)`, Critical C1) — regression for the verified
+   `httpx`-own-logger key leak. Sets a sentinel `FMP_API_KEY`, forces both
+   stooq and FMP to fail (mocked), reproduces the repo's own
+   `logging.basicConfig(level=logging.INFO, ...)` condition (paired with a
+   direct `root_logger.setLevel(logging.INFO)`, since `basicConfig` is a
+   documented no-op once a handler already exists on the root logger —
+   true inside pytest), captures at the ROOT logger (`caplog.at_level(
+   logging.INFO)`, no `logger=` filter — sees every logger, not just
+   `onrecord.ingest.prices`), and asserts the sentinel appears in ZERO
+   captured records. **Confirmed failing for the right reason**: captured
+   output shows `('httpx', 'HTTP Request: GET
+   https://financialmodelingprep.com/.../historical-price-full/VST
+   ?apikey=SUPERSECRET-sentinel-fmpkey-zzz9999 "HTTP/1.1 500 ..."')` — the
+   exact leak the review's sentinel experiment found, reproduced
+   independently here via `httpx.Client`'s own `logging.getLogger("httpx")`
+   INFO-level request log, live-verified with a standalone probe script
+   before writing the test.
+2. **`test_fetch_eod_range_days_trims_to_trailing_calendar_window`**
+   (`spec(T-014:AC-1)`, Important I1) — a synthetic 2-year, one-row-per-
+   calendar-day CSV (`_build_synthetic_daily_csv`, 730 rows from
+   2022-01-01) fed through a mocked stooq transport with `range_days=30`.
+   **Trailing-window semantics pinned** (not given by the ticket): the
+   window is `[<series' own latest date> - 29 days, <series' own latest
+   date>]` inclusive, calendar days, anchored to the DATA's own latest
+   date (never wall-clock "today" — the fixture's dates are unrelated to
+   the test run date). Also asserts the cache persists the SAME
+   (already-trimmed) series that's returned, not the untrimmed 2-year
+   history. **Confirmed failing for the right reason**: earliest returned
+   date is `2022-01-01` (the full untrimmed history) instead of the
+   expected `2023-12-02` — directly reproduces I1's "dead parameter"
+   finding.
+3. **`test_fetch_eod_malicious_ticker_cache_write_never_escapes_or_nests_in_cache_dir`**
+   (`spec(T-014:AC-4)`, latent-security, parametrized over `"../evil"` and
+   `"A/B"`) — a fully successful mocked fetch (so `_write_cache` is
+   actually reached, whether the fix rejects-early or sanitizes-and-
+   proceeds) with a malicious `ticker`, `cache_dir` one level inside
+   `tmp_path`. Asserts every file written as a side effect has
+   `written_file.resolve().parent == cache_dir.resolve()` EXACTLY — not a
+   level up (directory-traversal escape) and not a level down (an
+   unsanitized `/` creating a nested subdirectory). One assertion catches
+   both failure modes cleanly. **Confirmed failing for the right reason**:
+   `"../evil"` writes `<tmp_path>/evil.json` (one level above `cache_dir` —
+   a real escape); `"A/B"` writes `<cache_dir>/A/B.json` (an unsanitized
+   nested subdirectory) — both exactly reproduce the review's
+   traced-through-code analysis of `_cache_path`'s unsanitized
+   `Path(cache_dir) / f"{ticker}.json"`.
+4. **`test_significant_moves_zero_prior_close_is_skipped_with_a_log_line`**
+   (`spec(T-014:AC-2)`, optional Minor M3, cheap) — a `prior_close == 0.0`
+   day must still leave >=1 log record from `onrecord.ingest.prices`, not
+   vanish silently. **Confirmed failing for the right reason**: the
+   current implementation's `if prior_close == 0: continue` has no log
+   call at all (0 records captured).
+
+**Verified RED for the right reason**: `uv run pytest
+tests/unit/ingest/test_prices.py -v` → **5 failed, 17 passed** (the
+original 17 from the initial handoff all still pass against the current
+implementation — confirming they're untouched/still valid — and exactly
+the 4 new-finding tests + 1 optional Minor test fail, each inspected
+individually above to confirm the failure reproduces the named review
+finding rather than a test bug). Full repo: **5 failed, 200 passed** (200
+= 183 pre-T-014 baseline + 17 original T-014 tests, all still green).
+`.tdd-swarm/spec-lint.sh tickets/T-014.md` → `spec-lint OK: all ACs
+covered for T-014`. `uv run ruff format --check .` / `uv run ruff check .`
+(whole repo) both clean after `ruff format`/`ruff check --fix` on
+`tests/`.
+
+No fixture changes were needed for this round; only
+`tests/unit/ingest/test_prices.py` changed (append-only past the original
+17 tests + one new in-test synthetic-CSV helper + a docstring "AMENDMENT"
+section pinning the trailing-window/leak-suppression/ticker-sanitization
+contract extensions for the Implementation Agent, mirroring the
+T-008/T-010 precedent for post-review contract amendments).
+
+---
 
 **Run command:**
 ```

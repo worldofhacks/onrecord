@@ -151,6 +151,59 @@ dict``
   gated by a numbered AC in tickets/T-014.md (AC-1..AC-5 above cover its
   constituent pieces individually), so it is pinned here for the
   Implementation Agent but not separately re-tested in this file.
+
+======================================================================
+AMENDMENT (post-review, REJECTED — see .tdd-swarm/reports/T-014-review.md,
+findings C1/I1/latent-security). Extends the contract above; the tests
+above this line are untouched/frozen as originally handed off (commit
+4397d52). New tests only, added below.
+======================================================================
+
+- **C1 (CRITICAL, fixed here) — no logger other than
+  `onrecord.ingest.prices` may ever emit the FMP API key.** The original
+  AC-5 tests only ever filtered `caplog.records` to
+  `r.name == "onrecord.ingest.prices"`, which is structurally blind to a
+  leak from a DIFFERENT logger namespace — and `httpx.Client` has its own
+  built-in `logging.getLogger("httpx")` INFO-level request/response log
+  line (`"HTTP Request: {method} {url} ..."`) that includes the full query
+  string, i.e. a literal `?apikey=<value>`, whenever some ancestor
+  logger's effective level allows INFO through (its own level is `NOTSET`
+  by default, so it inherits whatever the ROOT logger's level is). This
+  repo's own `onrecord/ingest/edgar.py`/`onrecord/ingest/build_corpus.py`
+  CLI entrypoints already call `logging.basicConfig(level=logging.INFO,
+  ...)`, which is exactly that condition. The fix must ensure the FMP key
+  never appears in ANY captured log record (any logger name) once that
+  condition holds — e.g. by suppressing/raising `logging.getLogger(
+  "httpx")`'s level within this module, or by stripping the `apikey` query
+  param before it ever reaches a URL httpx itself might log.
+- **I1 (IMPORTANT, fixed here) — `range_days` must actually bound the
+  returned/cached series.** A post-fetch trim is explicitly acceptable
+  (no requirement to change the outgoing HTTP request). **Trailing-window
+  semantics (pinned; not given by the ticket):** the window is
+  `[<series' own most recent date> - (range_days - 1) days, <series' own
+  most recent date>]` inclusive, in CALENDAR days — anchored to the
+  fetched data's own latest date, never to wall-clock "today" (the test
+  fixture's dates are unrelated to the test run date). Whatever gets
+  returned is also what gets cached (cache and return value stay
+  consistent with each other, per the pre-existing cache-shape contract
+  above).
+- **Latent-security (fixed here) — `ticker` must never reach
+  `_cache_path`/`_write_cache` unsanitized.** A `ticker` containing a path
+  separator (`"A/B"`) or a `".."` traversal segment (`"../evil"`) must
+  either be rejected outright (treated like any other source failure: log
+  + return `[]`, never raise — the recommended, simplest fix) or sanitized
+  into a safe, FLAT filename component before any cache-path is built.
+  Either way, no filesystem write may ever land outside `cache_dir`, and
+  no write may create an unexpected nested subdirectory under `cache_dir`
+  either (the invariant tested: every file written as a side effect of a
+  `fetch_eod` call has `written_file.resolve().parent ==
+  cache_dir.resolve()`, exactly — not a level up (escape), not a level
+  down (nesting)).
+- **M3 (Minor, optional/cheap, fixed here) — a `prior_close == 0` day in
+  `significant_moves` must log at least one line** (any level >= WARNING
+  is fine; exact wording unpinned) when it's skipped, rather than
+  vanishing with zero trace — a $0.00 close is itself a data anomaly worth
+  surfacing, not a routine "no significant move" case.
 """
 
 from __future__ import annotations
@@ -159,7 +212,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -694,4 +747,218 @@ def test_fetch_eod_stooq_fails_without_fmp_key_returns_empty_and_never_contacts_
     assert len(own_records) == 1, (
         f"expected exactly ONE summary log line, got {len(own_records)}: "
         f"{[r.getMessage() for r in caplog.records]}"
+    )
+
+
+# ==========================================================================
+# AMENDMENT — added post review REJECTED
+# (.tdd-swarm/reports/T-014-review.md: Critical C1, Important I1,
+# latent-security ticker-sanitization finding, optional Minor M3).
+# New tests only; the tests above this line are untouched/frozen as
+# originally handed off (commit 4397d52).
+# ==========================================================================
+
+
+def _build_synthetic_daily_csv(start: date, num_days: int) -> str:
+    """A synthetic stooq-shaped CSV with exactly ONE row per CALENDAR day
+    (not just trading days) starting at `start` — deliberately unrealistic
+    vs. real stock data, but it makes a trailing-N-day window's row count
+    exact and unambiguous for testing `range_days` trimming, with no
+    weekend/holiday-gap noise to reason about."""
+    lines = ["Date,Open,High,Low,Close,Volume"]
+    for i in range(num_days):
+        d = start + timedelta(days=i)
+        close = 100.0 + i * 0.01
+        lines.append(f"{d.isoformat()},{close:.2f},{close:.2f},{close:.2f},{close:.2f},1000000")
+    return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------
+# C1 (CRITICAL) — the FMP API key must never leak into log output from ANY
+# logger, not just onrecord.ingest.prices's own (httpx's built-in
+# INFO-level request logger is the verified leak vector).
+# --------------------------------------------------------------------------
+
+
+def test_fetch_eod_fmp_key_never_leaks_via_any_logger_at_repo_info_level(
+    tmp_path, monkeypatch, caplog
+):
+    # spec(T-014:AC-5)
+    """Regression for review finding C1 (CRITICAL). httpx's OWN
+    request/response logger (`logging.getLogger("httpx")`) emits an
+    INFO-level line containing the full request URL -- including a literal
+    `?apikey=<value>` query parameter -- for every request, whenever some
+    ancestor logger's effective level allows INFO through (its own level is
+    NOTSET by default, so it inherits the ROOT logger's level). This repo's
+    own ingest CLI entrypoints already run at exactly that level
+    (onrecord/ingest/edgar.py, onrecord/ingest/build_corpus.py both call
+    `logging.basicConfig(level=logging.INFO, ...)`), so this test
+    reproduces that exact condition, then asserts the sentinel key is
+    absent from EVERY captured log record regardless of logger name -- not
+    just onrecord.ingest.prices's own (which is all the original AC-5
+    tests checked, and exactly why this leak slipped through review the
+    first time)."""
+    sentinel_key = "SUPERSECRET-sentinel-fmpkey-zzz9999"
+    monkeypatch.setenv("FMP_API_KEY", sentinel_key)
+    fetch_eod = _callable_or_fail("fetch_eod")
+
+    transport, calls = _make_transport(
+        {
+            "stooq.com": lambda req: httpx.Response(500, text="stooq down"),
+            "financialmodelingprep.com": lambda req: httpx.Response(500, text="fmp down"),
+        }
+    )
+
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    try:
+        # Reproduce the repo's own process-wide INFO logging configuration.
+        # `logging.basicConfig` is a documented no-op once the root logger
+        # already has a handler attached (true inside pytest, which installs
+        # its own capturing handler for the session) -- so it's paired with
+        # a direct `setLevel` call for a repro that's reliable regardless of
+        # pytest's own logging setup, not just a best-effort echo of it.
+        logging.basicConfig(level=logging.INFO)
+        root_logger.setLevel(logging.INFO)
+
+        with caplog.at_level(logging.INFO):  # ROOT logger (no `logger=` filter) -> every logger
+            result = _call_or_fail(
+                fetch_eod, "VST", range_days=365, transport=transport, cache_dir=tmp_path
+            )
+    finally:
+        root_logger.setLevel(original_level)
+
+    assert result == []
+    assert calls["stooq.com"] >= 1
+    assert calls["financialmodelingprep.com"] >= 1
+
+    leaking_records = [
+        (r.name, r.getMessage()) for r in caplog.records if sentinel_key in r.getMessage()
+    ]
+    assert leaking_records == [], (
+        f"FMP API key leaked into log output from a logger other than (or in addition to) "
+        f"onrecord.ingest.prices's own -- likely httpx's built-in request/response logger, "
+        f"which logs the full URL including '?apikey=...' at INFO by default: "
+        f"{leaking_records}. All captured records: "
+        f"{[(r.name, r.getMessage()) for r in caplog.records]}"
+    )
+    assert sentinel_key not in caplog.text
+
+
+# --------------------------------------------------------------------------
+# I1 (IMPORTANT) — range_days must actually bound the returned series to a
+# trailing window, not be a dead parameter.
+# --------------------------------------------------------------------------
+
+
+def test_fetch_eod_range_days_trims_to_trailing_calendar_window(tmp_path, monkeypatch):
+    # spec(T-014:AC-1)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    fetch_eod = _callable_or_fail("fetch_eod")
+
+    start = date(2022, 1, 1)
+    total_days = 730  # ~2 years, one synthetic row per calendar day (see helper docstring)
+    csv_text = _build_synthetic_daily_csv(start, total_days)
+    last_date = start + timedelta(days=total_days - 1)  # 2023-12-31 — the series' own last date
+
+    transport, calls = _make_transport(
+        {"stooq.com": lambda req: httpx.Response(200, text=csv_text)}
+    )
+
+    result = _call_or_fail(fetch_eod, "VST", range_days=30, transport=transport, cache_dir=tmp_path)
+
+    assert calls["stooq.com"] >= 1
+    assert result, "expected a non-empty trimmed series"
+    result_dates = [datetime.strptime(row["date"], "%Y-%m-%d").date() for row in result]
+
+    assert max(result_dates) == last_date, (
+        "the trailing window must end at the series' own most recent date (not wall-clock "
+        f"'today'), got latest date {max(result_dates)}"
+    )
+    window_start = last_date - timedelta(days=29)  # 30 calendar days inclusive of last_date
+    assert min(result_dates) == window_start, (
+        f"range_days=30 against a 2-year fixture must trim to the trailing 30-calendar-day "
+        f"window [{window_start}, {last_date}], got earliest returned date {min(result_dates)}"
+    )
+    assert len(result) == 30, (
+        f"expected exactly 30 rows (one per calendar day in the synthetic fixture) inside "
+        f"the trailing 30-day window, got {len(result)} rows"
+    )
+    assert all(window_start <= d <= last_date for d in result_dates), (
+        f"no row outside the trailing range_days=30 window may be returned: {result_dates}"
+    )
+
+    cached = json.loads((tmp_path / "VST.json").read_text())
+    assert cached["series"] == result, (
+        "the cache must persist the SAME (already-trimmed) series that fetch_eod returns, "
+        "not the untrimmed 2-year history"
+    )
+
+
+# --------------------------------------------------------------------------
+# Latent security — a ticker containing a path separator or ".." traversal
+# segment must never cause a cache-file write outside (or nested inside a
+# new subdirectory of) cache_dir.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("malicious_ticker", ["../evil", "A/B"])
+def test_fetch_eod_malicious_ticker_cache_write_never_escapes_or_nests_in_cache_dir(
+    tmp_path, monkeypatch, malicious_ticker
+):
+    # spec(T-014:AC-4)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    fetch_eod = _callable_or_fail("fetch_eod")
+
+    cache_dir = tmp_path / "prices_cache"
+    cache_dir.mkdir()
+    csv_text = _read_fixture_text("stooq_sample.csv")
+    # A FULLY SUCCESSFUL fetch (matches any host) -- the exact scenario that
+    # reaches `_write_cache` today. A ticker-rejecting fix would never get
+    # this far (no request at all); a sanitize-and-proceed fix may well
+    # reach this same successful response -- this transport supports BOTH
+    # acceptable strategies.
+    transport, _calls = _make_transport({"": lambda req: httpx.Response(200, text=csv_text)})
+
+    before = set(tmp_path.rglob("*"))
+
+    result = _call_or_fail(
+        fetch_eod, malicious_ticker, range_days=365, transport=transport, cache_dir=cache_dir
+    )
+    assert isinstance(result, list), (
+        f"fetch_eod must never raise for a path-unsafe ticker {malicious_ticker!r}"
+    )
+
+    after = set(tmp_path.rglob("*"))
+    new_files = [p for p in (after - before) if p.is_file()]
+    for new_file in new_files:
+        assert new_file.resolve().parent == cache_dir.resolve(), (
+            f"ticker {malicious_ticker!r} caused a cache write that escapes OR nests "
+            f"outside the flat cache dir: {new_file.resolve()} (its parent must be exactly "
+            f"{cache_dir.resolve()}, never a level up [escape] or a level down [nesting])"
+        )
+
+
+# --------------------------------------------------------------------------
+# M3 (Minor, optional) — a prior_close == 0 day is skipped WITH a log line,
+# not silently.
+# --------------------------------------------------------------------------
+
+
+def test_significant_moves_zero_prior_close_is_skipped_with_a_log_line(caplog):
+    # spec(T-014:AC-2)
+    significant_moves = _callable_or_fail("significant_moves")
+    series = _series([("2024-03-01", 0.0), ("2024-03-04", 10.0)])
+
+    with caplog.at_level(logging.WARNING, logger="onrecord.ingest.prices"):
+        result = _call_or_fail(significant_moves, series, threshold_pct=5.0)
+
+    assert result == [], (
+        f"a zero prior close makes the % return undefined/infinite -- must be skipped, not "
+        f"flagged: {result}"
+    )
+    own_records = [r for r in caplog.records if r.name == "onrecord.ingest.prices"]
+    assert len(own_records) >= 1, (
+        "a $0.00 prior-close day is a data anomaly and should leave at least one log line, "
+        "not vanish with zero trace"
     )
