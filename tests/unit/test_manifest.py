@@ -53,17 +53,76 @@ Test-Agent-pinned decisions (not otherwise nailed down by tickets/T-018.md)
    future regression (e.g. raising instead of falling back) is caught, and
    is called out here so its pre-existing green status isn't mistaken for a
    broken test.
+
+===========================================================================
+Fix round (per `.tdd-swarm/reports/T-018-test-review.md`, verdict FIX-FIRST)
+===========================================================================
+Additive only — none of the original 22 tests above were touched. Six new
+tests below close both Important findings plus four cheap Minors:
+
+- **IMPORTANT-1**: a manifest that IS valid JSON/a dict (so `read_manifest`
+  must hand it back as-is per AC-3 — it does not validate schema) but is
+  missing the `corpus_version` key must not crash `run()` with `KeyError`;
+  it must fall back to `"unversioned"` like any other "failure" the
+  ticket's "any failure -> unversioned" wording covers.
+- **IMPORTANT-2 (ORCHESTRATOR RULING, LOCKED)**: `build_corpus` writes
+  DETERMINISTIC gzip (`mtime=0` in the header) and `snapshot_sha256` is the
+  sha256 of the snapshot FILE BYTES — two builds of byte-identical raw
+  input at different wall-clock times must produce a byte-identical
+  `corpus.jsonl.gz` and an equal `snapshot_sha256`. This is what lets a
+  fetched/rebuilt Release-asset snapshot be verified by hashing, the
+  ticket's stated purpose for the key. The test simulates "different
+  wall-clock times" by monkeypatching `time.time()` across the two builds
+  (the gzip header's mtime field is what `time.time()` feeds when a writer
+  doesn't pin `mtime=0`) rather than sleeping in the suite.
+- MINOR-3: `read_manifest` must not require a `Path` specifically (a bare
+  `str` must work too — "tolerant ... never raises").
+- MINOR-4: hardens the weak `test_makefile_other_targets_unchanged`
+  substring guard with an exact-recipe-block comparison for
+  `setup`/`test`/`eval`/`demo` (a new, separate helper/test — the original
+  substring-guard test is untouched).
+- MINOR-7: pins `--version`'s ticket-mandated `int` type — a bad value must
+  fail via `argparse`'s own int-conversion error, not merely "unrecognized
+  arguments" (today's failure reason, since the flag doesn't exist at all
+  yet) — the test asserts on the stderr text to tell the two apart.
+- MINOR-8: the literal AC-1 scenario (`--version 2`, no `--out`) previously
+  only checked `corpus.jsonl.gz` + index doc_count, not that the derived
+  `corpus/v2` dir *also* gets a `manifest.json` (already indirectly closed
+  by other tests, but the literal scenario was uncovered).
+
+Skipped, with reasons:
+- MINOR-5 (a `make -n ingest V=2 RAW=...` syntactic-validity check): not
+  applied — the ticket's own AC-5 text sanctions "asserted textually ...
+  `make` itself isn't invoked in unit tests", and the Tier-2 gate already
+  runs the real `make ingest V=2 RAW=...` live. Adding a `make` subprocess
+  dependency to Tier-1 unit tests would also partially supersede MINOR-6's
+  pinned idiom, which the review says to keep unless MINOR-5 is adopted.
+- MINOR-6 (relax the `$(if $(RAW),...)` idiom pin to a behavioral check):
+  no action — superseded only if MINOR-5 were adopted (it isn't); the
+  review's own verdict on this idiom pin is "defensible ... recorded as a
+  known over-constraint," already documented as decision #4 above.
+- N-2 (harden the git-sha-in-a-real-repo test against ambient global git
+  config): no action — the review's own verdict was "verified clean on
+  this machine ... no action required"; the suggested hardening also edits
+  an *existing* frozen test, which this additive-only fix round must not
+  do.
+- N-1 and N-3 are report-text nits (a stale tally, a relative-path
+  spec-lint invocation) with no code implication; corrected in the
+  fix-round report, not here.
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import re
 import subprocess
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 import onrecord.eval.run as evalrun
 import onrecord.ingest.build_corpus as build_corpus
@@ -530,3 +589,196 @@ def test_makefile_other_targets_unchanged():
     assert "uv run pytest -q" in text
     assert "uv run python -m onrecord.eval.run" in text
     assert "uv run python -m onrecord.cli demo" in text
+
+
+# ==========================================================================
+# FIX ROUND (per .tdd-swarm/reports/T-018-test-review.md, verdict FIX-FIRST)
+# ==========================================================================
+
+
+# --------------------------------------------------------------------------
+# IMPORTANT-1 — a manifest that is valid JSON/a dict but lacks the
+# `corpus_version` key must not crash `run()`; must fall back to
+# "unversioned" like any other manifest "failure".
+# --------------------------------------------------------------------------
+
+
+def test_run_history_row_falls_back_to_unversioned_when_manifest_lacks_corpus_version_key(
+    tmp_path, monkeypatch
+):
+    # spec(T-018:AC-4) -- test-design review IMPORTANT-1: the review
+    # reproduced a KeyError crash in run() for exactly this manifest shape
+    # (valid dict, missing corpus_version) under the natural "reads
+    # read_manifest(...) and returns its corpus_version" implementation the
+    # ticket's own Context prose suggests.
+    index_dir = tmp_path / "index"
+    index_dir.mkdir(parents=True)
+    payload_without_corpus_version = {
+        "created_at": "2026-08-12T00:00:00+00:00",
+        "doc_count": 1,
+        "source_counts": {"filing": 1},
+        "git_sha": "deadbeef",
+        "snapshot_sha256": "0" * 64,
+    }
+    (index_dir / "manifest.json").write_text(json.dumps(payload_without_corpus_version))
+
+    # AC-3 sanity check: this manifest is valid JSON and a dict -- not
+    # "corrupt" -- so read_manifest must hand it back as-is, schema warts
+    # and all. The KeyError the review found happens in _corpus_version()'s
+    # CONSUMPTION of this dict, not in the read itself.
+    assert build_corpus.read_manifest(index_dir) == payload_without_corpus_version
+
+    monkeypatch.setenv("ONRECORD_INDEX", str(index_dir))
+    judgments_path = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments_path, _AC4_JUDGMENT_ROWS)
+    history_path = tmp_path / "scoreboard.jsonl"
+
+    # Must not raise KeyError.
+    evalrun.run(judgments_path, retrieve_fn=_fake_retrieve, history_path=history_path)
+
+    rows = [json.loads(line) for line in history_path.read_text().splitlines() if line.strip()]
+    assert rows[-1]["corpus_version"] == "unversioned"
+
+
+# --------------------------------------------------------------------------
+# IMPORTANT-2 (orchestrator ruling, locked) — deterministic gzip: two builds
+# of identical raw input at different wall-clock times must produce a
+# byte-identical corpus.jsonl.gz and an equal snapshot_sha256.
+# --------------------------------------------------------------------------
+
+
+def test_manifest_snapshot_sha256_is_deterministic_across_builds_at_different_wall_times(
+    tmp_path, monkeypatch
+):
+    # spec(T-018:AC-1) -- ORCHESTRATOR RULING (locked, test-design review
+    # IMPORTANT-2): build_corpus must write deterministic gzip (mtime=0) so
+    # snapshot_sha256 verifies a REBUILT snapshot, not only a byte-for-byte
+    # re-download -- the ticket's stated purpose for the checksum key
+    # ("proves a fetched/rebuilt snapshot is the frozen one"). Simulated
+    # wall-clock drift via a monotonically-increasing fake time.time() (an
+    # always-different value on every call, however many times gzip's
+    # header-writer calls it) rather than sleeping in the suite.
+    raw_dir = tmp_path / "raw"
+    _write_raw_dir(raw_dir, _FIXTURE_DOCS)
+
+    fake_clock = itertools.count(1_000_000_000.0, 1_000_000.0)
+    monkeypatch.setattr("time.time", lambda: next(fake_clock))
+
+    out_dir_1 = tmp_path / "build1" / "out"
+    index_out_1 = tmp_path / "build1" / "index"
+    build_corpus.main(
+        ["--raw-dir", str(raw_dir), "--out", str(out_dir_1), "--index-out", str(index_out_1)]
+    )
+
+    out_dir_2 = tmp_path / "build2" / "out"
+    index_out_2 = tmp_path / "build2" / "index"
+    build_corpus.main(
+        ["--raw-dir", str(raw_dir), "--out", str(out_dir_2), "--index-out", str(index_out_2)]
+    )
+
+    bytes_1 = (out_dir_1 / "corpus.jsonl.gz").read_bytes()
+    bytes_2 = (out_dir_2 / "corpus.jsonl.gz").read_bytes()
+    assert bytes_1 == bytes_2, (
+        "identical raw input built at different wall-clock times must produce a "
+        "byte-identical corpus.jsonl.gz (gzip header mtime must be pinned, e.g. "
+        "mtime=0 -- a real time.time()-derived mtime breaks reproducibility)"
+    )
+
+    manifest_1 = build_corpus.read_manifest(out_dir_1)
+    manifest_2 = build_corpus.read_manifest(out_dir_2)
+    assert manifest_1["snapshot_sha256"] == manifest_2["snapshot_sha256"]
+
+
+# --------------------------------------------------------------------------
+# MINOR-3 — read_manifest must accept a bare str, not only a Path.
+# --------------------------------------------------------------------------
+
+
+def test_read_manifest_accepts_a_str_path_not_only_a_path_object(tmp_path):
+    # spec(T-018:AC-3) -- test-design review MINOR-3: "tolerant ... never
+    # raises" and named as public API for later tickets' consumers; a str
+    # argument must work exactly like a Path argument, not raise TypeError.
+    manifest_dir = tmp_path / "idx"
+    manifest_dir.mkdir()
+    payload = {"corpus_version": "v9"}
+    (manifest_dir / "manifest.json").write_text(json.dumps(payload))
+
+    assert build_corpus.read_manifest(str(manifest_dir)) == payload
+
+
+# --------------------------------------------------------------------------
+# MINOR-4 — harden the Makefile "other targets unchanged" guard with exact
+# recipe-block comparisons (new helper + new test; the original substring
+# guard, test_makefile_other_targets_unchanged above, is untouched).
+# --------------------------------------------------------------------------
+
+
+def _target_recipe_block(makefile_text: str, target_name: str) -> str:
+    """Like `_ingest_recipe_block` but for an arbitrary target name."""
+    lines = makefile_text.splitlines()
+    header = f"{target_name}:"
+    for i, line in enumerate(lines):
+        if line.startswith(header):
+            block_lines = []
+            for follow in lines[i + 1 :]:
+                if not follow.startswith("\t"):
+                    break
+                block_lines.append(follow)
+            return "\n".join(block_lines)
+    raise AssertionError(f"no {header!r} target found in Makefile:\n{makefile_text}")
+
+
+def test_makefile_untouched_targets_have_byte_exact_recipe_blocks():
+    # spec(T-018:AC-5) -- test-design review MINOR-4: hardens Guard B
+    # (test_makefile_other_targets_unchanged) against appends/prefixes a
+    # substring check misses (e.g. a copy-paste slip appending --version
+    # $(V) onto the eval recipe, or a `rm -rf` prefixed onto demo's).
+    text = _read_makefile_text()
+    assert _target_recipe_block(text, "setup") == "\tuv sync"
+    assert _target_recipe_block(text, "test") == "\tuv run pytest -q"
+    assert _target_recipe_block(text, "eval") == "\tuv run python -m onrecord.eval.run"
+    assert _target_recipe_block(text, "demo") == "\tuv run python -m onrecord.cli demo"
+
+
+# --------------------------------------------------------------------------
+# MINOR-7 — `--version` is ticket-mandated as `int`; a non-integer value
+# must fail via argparse's own type-conversion error, not merely because
+# the flag is unrecognized (today's failure reason, pre-implementation).
+# --------------------------------------------------------------------------
+
+
+def test_version_flag_rejects_non_integer_value(capsys):
+    # spec(T-018:AC-1) -- test-design review MINOR-7
+    with pytest.raises(SystemExit):
+        build_corpus.main(["--version", "abc", "--raw-dir", "irrelevant"])
+
+    stderr = capsys.readouterr().err
+    assert "--version" in stderr
+    assert "abc" in stderr
+    assert "unrecognized arguments" not in stderr, (
+        f"expected an int-conversion error for a non-integer --version, not "
+        f"'unrecognized arguments' (that means --version isn't wired as type=int "
+        f"yet, or isn't wired at all):\n{stderr}"
+    )
+
+
+# --------------------------------------------------------------------------
+# MINOR-8 — the literal AC-1 scenario (--version 2, derived --out) must
+# also get a manifest.json in both dirs, not just corpus.jsonl.gz.
+# --------------------------------------------------------------------------
+
+
+def test_version_flag_derived_out_dir_also_gets_manifest_in_both_dirs(tmp_path, monkeypatch):
+    # spec(T-018:AC-1) -- test-design review MINOR-8
+    monkeypatch.chdir(tmp_path)
+    raw_dir = tmp_path / "raw"
+    _write_raw_dir(raw_dir, _FIXTURE_DOCS)
+
+    build_corpus.main(["--version", "2", "--raw-dir", str(raw_dir)])
+
+    out_manifest = build_corpus.read_manifest(Path.cwd() / "corpus" / "v2")
+    index_manifest = build_corpus.read_manifest(Path.cwd() / "artifacts" / "index")
+    assert out_manifest is not None
+    assert index_manifest is not None
+    assert out_manifest["corpus_version"] == "v2"
+    assert index_manifest["corpus_version"] == "v2"
