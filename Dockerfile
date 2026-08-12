@@ -38,4 +38,4 @@ ENV ONRECORD_CORPUS=corpus/v1/corpus.jsonl.gz
 
 # Bind 0.0.0.0 (never 127.0.0.1 — Railway's proxy connects externally) on
 # $PORT, per tickets/T-015.md's Deploy contract (see also README.md).
-CMD ["sh", "-c", "uv run uvicorn onrecord.api:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn onrecord.api:app --host 0.0.0.0 --port ${PORT:-8000}"]
