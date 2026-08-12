@@ -204,6 +204,41 @@ above this line are untouched/frozen as originally handed off (commit
   is fine; exact wording unpinned) when it's skipped, rather than
   vanishing with zero trace — a $0.00 close is itself a data anomaly worth
   surfacing, not a routine "no significant move" case.
+
+======================================================================
+AMENDMENT-2 (owner-approved contract extension, T-014R). SUPERSEDES the
+4-key receipt-dict shape pinned in the `nearby_receipts` section above;
+everything else above stays untouched/frozen. New field-semantics tests
+are added below the AMENDMENT-2 marker near the end of this file; the
+pre-existing exact-equality receipt-dict assertion (the single such
+assertion in this file, in the AC-3 window-join test
+`test_nearby_receipts_window_join_two_days_attaches_nine_days_and_wrong_ticker_dont`)
+is re-pinned IN PLACE — the same adjudicated-re-pin precedent as commit
+897aa8b, "test(T-013R): re-pin op=AND semantics under BM25 per
+adjudication".
+======================================================================
+
+- **Receipt dict shape (re-pinned)**: exactly
+  `{"id": doc.id, "date": doc.date, "source_type": doc.source_type,
+  "deep_link": doc.deep_link, "venue_type": doc.venue_type,
+  "snippet": doc.text[:160]}` — six keys, no extras, none missing.
+- **`venue_type`** is a VERBATIM passthrough of
+  `onrecord.types.Doc.venue_type` — no mapping, renaming, or
+  normalization. Motivation: the T-016 hover card renders its designed
+  venue badge straight from this value; ui/WIRING.md section 4 item 5
+  explicitly recommends extending the receipt dict with it.
+- **`snippet`** is the first 160 characters of `doc.text` — the pinned
+  OBSERVABLE semantics are exactly `doc.text[:160]` (text shorter than
+  160 characters therefore passes through whole; Python slicing never
+  pads or raises). 160 matches the repo's existing query-independent
+  snippet convention (`onrecord/search/boolean.py` has `SNIPPET_LEN =
+  160` and takes `text[:SNIPPET_LEN]`), but HOW the implementation
+  spells the constant is its own choice — importing from the search
+  layer is NOT required; only the observable `doc.text[:160]` behavior
+  is pinned here. Motivation: the hover card's quoted passage. Full
+  `doc.text` was considered and REJECTED — filing-section docs would
+  make the /api/prices payload unbounded, so the snippet keeps it
+  bounded.
 """
 
 from __future__ import annotations
@@ -571,11 +606,13 @@ def test_nearby_receipts_window_join_two_days_attaches_nine_days_and_wrong_ticke
         f"7-day window, the wrong-ticker doc doesn't match, and a doc dated AFTER the move "
         f"is never 'before' it. Got: {receipts}"
     )
-    assert receipts[0] == {
+    assert receipts[0] == {  # re-pinned per AMENDMENT-2 (T-014R)
         "id": "edgar:VST:0001:body",
         "date": "2024-01-01",
         "source_type": "filing",
         "deep_link": "https://example.com/2days",
+        "venue_type": "coached",
+        "snippet": "a filing discussing operations",  # doc.text is < 160 chars -> whole text
     }, receipts[0]
 
 
@@ -961,4 +998,143 @@ def test_significant_moves_zero_prior_close_is_skipped_with_a_log_line(caplog):
     assert len(own_records) >= 1, (
         "a $0.00 prior-close day is a data anomaly and should leave at least one log line, "
         "not vanish with zero trace"
+    )
+
+
+# ==========================================================================
+# AMENDMENT-2 — owner-approved contract extension (T-014R): every receipt
+# dict grows "venue_type" (verbatim Doc passthrough, for the T-016 hover
+# card's venue badge) and "snippet" (doc.text[:160], the hover card's
+# bounded quoted passage) per ui/WIRING.md section 4 item 5. The 4-key
+# exact-equality receipt assertion in the AC-3 section above is re-pinned
+# in place (T-013R precedent); new field-semantics tests only below this
+# marker. See the AMENDMENT-2 section of the module docstring for the full
+# re-pinned shape.
+# ==========================================================================
+
+RECEIPT_KEYS = {"id", "date", "source_type", "deep_link", "venue_type", "snippet"}
+
+SNIPPET_MAX_LEN = 160  # pinned observable semantics: snippet == doc.text[:160]
+
+# Deterministic 400-character text (40-char sentence * 10) for the
+# truncation test -- comfortably longer than the 160-char snippet bound.
+LONG_DOC_TEXT = "The section discusses grid reliability. " * 10
+assert len(LONG_DOC_TEXT) == 400  # guard the fixture itself
+
+
+def _single_receipt_for(doc: Doc) -> dict:
+    """Join one in-window move against `doc` as the only corpus row and
+    return the single receipt dict that must attach (the move date and doc
+    date mirror the frozen AC-3 tests: 2 days prior, inside window_days=7)."""
+    nearby_receipts = _callable_or_fail("nearby_receipts")
+    moves = [{"date": "2024-01-03", "return_pct": -8.2}]
+
+    result = _call_or_fail(nearby_receipts, moves, [doc], "VST", window_days=7)
+
+    receipts = result[0]["nearby_receipts"]
+    assert len(receipts) == 1, (
+        f"the single in-window same-ticker doc must attach exactly once, got: {receipts}"
+    )
+    return receipts[0]
+
+
+def test_nearby_receipts_receipt_venue_type_is_verbatim_doc_passthrough():
+    # spec(T-014:AC-3)
+    doc = Doc(
+        id="edgar:VST:0010:body",
+        text="testimony under oath",
+        source_type="filing",
+        venue_type="sworn",
+        date="2024-01-01",
+        deep_link="https://example.com/sworn",
+        ticker="VST",
+    )
+
+    receipt = _single_receipt_for(doc)
+
+    assert "venue_type" in receipt, (
+        f"receipt dict must carry a 'venue_type' key (AMENDMENT-2, T-014R -- the T-016 hover "
+        f"card's venue badge renders from it), got keys: {sorted(receipt)}"
+    )
+    assert receipt["venue_type"] == "sworn", (
+        f"venue_type must be a VERBATIM passthrough of doc.venue_type ('sworn'), got "
+        f"{receipt['venue_type']!r}"
+    )
+
+
+def test_nearby_receipts_receipt_snippet_truncates_long_text_to_160_chars():
+    # spec(T-014:AC-3)
+    doc = Doc(
+        id="edgar:VST:0011:body",
+        text=LONG_DOC_TEXT,
+        source_type="filing",
+        venue_type="coached",
+        date="2024-01-01",
+        deep_link="https://example.com/long-text",
+        ticker="VST",
+    )
+
+    receipt = _single_receipt_for(doc)
+
+    assert "snippet" in receipt, (
+        f"receipt dict must carry a 'snippet' key (AMENDMENT-2, T-014R -- the T-016 hover "
+        f"card's quoted passage; full doc.text was rejected as unbounded), got keys: "
+        f"{sorted(receipt)}"
+    )
+    assert len(receipt["snippet"]) == SNIPPET_MAX_LEN, (
+        f"a {len(doc.text)}-char doc.text must be truncated to exactly {SNIPPET_MAX_LEN} "
+        f"snippet chars, got {len(receipt['snippet'])}"
+    )
+    assert receipt["snippet"] == doc.text[:SNIPPET_MAX_LEN], (
+        f"snippet must be exactly doc.text[:{SNIPPET_MAX_LEN}] (the same query-independent "
+        f"prefix convention as onrecord/search/boolean.py), got {receipt['snippet']!r}"
+    )
+
+
+def test_nearby_receipts_receipt_snippet_passes_short_text_through_whole():
+    # spec(T-014:AC-3)
+    short_text = "a filing shorter than the snippet bound"
+    assert len(short_text) < SNIPPET_MAX_LEN  # guard the fixture itself
+    doc = Doc(
+        id="edgar:VST:0012:body",
+        text=short_text,
+        source_type="filing",
+        venue_type="coached",
+        date="2024-01-01",
+        deep_link="https://example.com/short-text",
+        ticker="VST",
+    )
+
+    receipt = _single_receipt_for(doc)
+
+    assert "snippet" in receipt, (
+        f"receipt dict must carry a 'snippet' key (AMENDMENT-2, T-014R), got keys: "
+        f"{sorted(receipt)}"
+    )
+    assert receipt["snippet"] == short_text, (
+        f"text shorter than {SNIPPET_MAX_LEN} chars must pass through whole (doc.text[:160] "
+        f"of a short string IS the full string -- no padding, no truncation), got "
+        f"{receipt['snippet']!r}"
+    )
+
+
+def test_nearby_receipts_receipt_has_exactly_the_six_amended_keys():
+    # spec(T-014:AC-3)
+    doc = Doc(
+        id="edgar:VST:0013:body",
+        text="a filing discussing operations",
+        source_type="filing",
+        venue_type="coached",
+        date="2024-01-01",
+        deep_link="https://example.com/six-keys",
+        ticker="VST",
+    )
+
+    receipt = _single_receipt_for(doc)
+
+    assert set(receipt.keys()) == RECEIPT_KEYS, (
+        f"AMENDMENT-2 (T-014R) pins the receipt dict to EXACTLY these six keys -- "
+        f"{sorted(RECEIPT_KEYS)} -- no extras, none missing; got {sorted(receipt.keys())} "
+        f"(missing: {sorted(RECEIPT_KEYS - set(receipt))}, "
+        f"extra: {sorted(set(receipt) - RECEIPT_KEYS)})"
     )

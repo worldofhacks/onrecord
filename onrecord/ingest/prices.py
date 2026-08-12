@@ -5,8 +5,8 @@ Stock price history + significant-move timeline joined to receipts, for the
 UI's receipts-vs-price correlation view. See `tickets/T-014.md` and the
 module docstring of `tests/unit/ingest/test_prices.py` (authoritative,
 pinned contract — cache shape, source-selection rule, window-join
-semantics, receipt-dict shape, `/api/prices` payload shape) for the full
-spec this module implements.
+semantics, receipt-dict shape as re-pinned by AMENDMENT-2/T-014R,
+`/api/prices` payload shape) for the full spec this module implements.
 
 Out of scope (per the ticket): intraday data, jurisdiction->ticker
 inference, causal claims, and the actual `/api/prices` HTTP route wiring
@@ -43,6 +43,13 @@ _FMP_URL_TEMPLATE = "https://financialmodelingprep.com/api/v3/historical-price-f
 # finding: latent cache-path-escape/nesting risk once an untrusted route
 # wires `ticker` from user input; see .tdd-swarm/reports/T-014-review.md).
 _SAFE_TICKER_RE = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
+
+# Receipt snippets are the first _SNIPPET_LEN characters of `doc.text` — the
+# repo's query-independent snippet convention (same 160 as
+# `onrecord/search/boolean.py`'s SNIPPET_LEN, deliberately NOT imported from
+# the search layer; AMENDMENT-2 pins only the observable `doc.text[:160]`
+# behavior).
+_SNIPPET_LEN = 160
 
 
 def _is_safe_ticker(ticker: str) -> bool:
@@ -361,9 +368,12 @@ def nearby_receipts(
     """Return a NEW list — one entry per input move, each the original
     move's keys plus a `"nearby_receipts"` list of receipt dicts for every
     `corpus_rows` doc matching `ticker` and dated within `window_days`
-    before (inclusive) the move date. Never mutates `moves`. Pure — no
-    I/O. See module docstring / test contract for the exact receipt-dict
-    shape and window-join semantics."""
+    before (inclusive) the move date. Each receipt carries exactly the six
+    AMENDMENT-2 (T-014R) keys: `id`, `date`, `source_type`, `deep_link`,
+    `venue_type` (verbatim `doc.venue_type` passthrough) and `snippet`
+    (`doc.text[:_SNIPPET_LEN]`). Never mutates `moves`. Pure — no I/O. See
+    module docstring / test contract for the exact receipt-dict shape and
+    window-join semantics."""
     matching_docs = [doc for doc in corpus_rows if doc.ticker == ticker]
 
     result: list[dict] = []
@@ -383,6 +393,8 @@ def nearby_receipts(
                             "date": doc.date,
                             "source_type": doc.source_type,
                             "deep_link": doc.deep_link,
+                            "venue_type": doc.venue_type,
+                            "snippet": doc.text[:_SNIPPET_LEN],
                         }
                     )
         result.append({**move, "nearby_receipts": receipts})
