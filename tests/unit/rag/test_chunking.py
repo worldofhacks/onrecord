@@ -1729,3 +1729,218 @@ def test_cli_without_plot_flag_never_imports_matplotlib(tmp_path):
         [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(tmp_path)
     )
     assert proc.returncode == 0, proc.stderr
+
+
+# ==========================================================================
+# CLI refuses to publish an empty curve (pin round 2, code review CLI-1)
+#
+# `load_corpus_snapshot` returns `[]` for a missing path and DOCUMENTS that
+# it "explicitly delegates the decision to the caller"
+# (onrecord/ingest/build_corpus.py:114-123). The CLI was publishing: a
+# typo'd --corpus produced a complete, well-formed, 7-cell, JSON-round-
+# tripping curve with a non-null `best` and every recall at 0.0, at exit 0,
+# with nothing on stderr. Nothing in that file distinguishes "the operator
+# mistyped the path" from "chunking genuinely achieves zero recall" — it is
+# undetectable downstream, which is the worst property a graded deliverable
+# can have, and strictly worse than the CQ-5 empty curve it echoes (that one
+# at least had `cells: []` and `best: null`).
+#
+# The precedent is in the very module the CLI imports from: `build_corpus()`
+# (build_corpus.py:126-133) warns and returns exit code 1 when zero docs are
+# found, before writing anything.
+#
+# NOT pinned (would over-constrain): whether the corpus check runs before or
+# after the judgments load, and the exact message wording. Pinned instead:
+# nonzero exit, no artifact on disk, and the offending path named on stderr.
+# ==========================================================================
+
+
+def _empty_corpus_snapshot(tmp_path: Path) -> Path:
+    """An existing, readable, well-formed gzip snapshot with zero rows."""
+    path = tmp_path / "corpus" / "empty.jsonl.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8"):
+        pass
+    return path
+
+
+def test_cli_exits_nonzero_when_the_corpus_path_does_not_exist(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review CLI-1
+    _, judgments = _cli_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    exit_code = _sweep_main()(
+        ["--corpus", str(tmp_path / "corpus" / "typo.jsonl.gz"), "--judgments", str(judgments)]
+    )
+    assert exit_code == 1
+
+
+def test_cli_writes_no_artifact_when_the_corpus_path_does_not_exist(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review CLI-1. The refusal must precede the write:
+    # publishing an all-zeros curve and *then* reporting failure would still
+    # leave the corrupt artifact on disk for a downstream reader.
+    _, judgments = _cli_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(
+        ["--corpus", str(tmp_path / "corpus" / "typo.jsonl.gz"), "--judgments", str(judgments)]
+    )
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_cli_exits_nonzero_for_an_existing_but_empty_corpus_snapshot(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review CLI-1. "Zero docs" is the condition, not
+    # "path missing": a readable, well-formed, empty snapshot is just as
+    # unpublishable and is what a half-finished ingest leaves behind.
+    _, judgments = _cli_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    exit_code = _sweep_main()(
+        ["--corpus", str(_empty_corpus_snapshot(tmp_path)), "--judgments", str(judgments)]
+    )
+    assert exit_code == 1
+
+
+def test_cli_writes_no_artifact_for_an_existing_but_empty_corpus_snapshot(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review CLI-1; explicit --out, so this also pins
+    # that the refusal is not merely "the default artifacts/ tree is absent".
+    _, judgments = _cli_case(tmp_path)
+    out = tmp_path / "curve.json"
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(
+        [
+            "--corpus",
+            str(_empty_corpus_snapshot(tmp_path)),
+            "--judgments",
+            str(judgments),
+            "--out",
+            str(out),
+        ]
+    )
+    assert not out.exists()
+
+
+def test_cli_names_the_unusable_corpus_path_on_stderr(tmp_path):
+    # spec(T-020:AC-6) -- review CLI-1. Ground-truth process stderr, so the
+    # pin is satisfied by either `print(..., file=sys.stderr)` (the
+    # onrecord.eval.judgments refusal idiom) or `logger.warning` (the
+    # build_corpus idiom, which reaches stderr through logging's lastResort
+    # handler) -- capsys alone could not see the latter. Only the path is
+    # required in the text; the wording is the implementer's.
+    _, judgments = _cli_case(tmp_path)
+    missing = tmp_path / "corpus" / "typo.jsonl.gz"
+    argv = [
+        "--corpus",
+        str(missing),
+        "--judgments",
+        str(judgments),
+        "--out",
+        str(tmp_path / "c.json"),
+    ]
+    probe = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(REPO_ROOT)!r})",
+            "import onrecord.rag.chunk_sweep as sweep_mod",
+            f"sys.exit(sweep_mod.main({argv!r}))",
+        ]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(tmp_path)
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert str(missing) in proc.stderr, proc.stderr
+
+
+# ==========================================================================
+# --plot must never be able to clobber the JSON deliverable
+# (pin round 2, code review CLI-2)
+# ==========================================================================
+
+
+def test_plot_png_path_never_collides_with_an_out_path_ending_in_png(tmp_path):
+    # spec(T-020:AC-6) -- review CLI-2. `Path("curve.png").with_suffix(".png")`
+    # is the identity, so `--out curve.png --plot` rendered the PNG straight
+    # over the JSON artifact (reviewer, with matplotlib stubbed in: the file
+    # afterwards starts b"\x89PNG"). Every other --plot shape is protected by
+    # the JSON-first ordering; this is the one input that still reaches the
+    # deliverable.
+    #
+    # Runs against a STUB matplotlib in a fresh interpreter: the real dep is
+    # absent here, so `_write_plot` would raise before savefig and the bug
+    # would be invisible. What is pinned is the INVARIANT both sanctioned
+    # remedies preserve -- the JSON at --out survives intact, and savefig is
+    # never handed the --out path itself. The exit code is deliberately NOT
+    # pinned: "derive a non-colliding png name" (exit 0) and "raise on the
+    # collision" (nonzero) are both acceptable fixes.
+    corpus, judgments = _cli_case(tmp_path)
+    expected = _chunk_sweep(MERGE_DOCS, judgments)
+    stub_dir = tmp_path / "stub"
+    (stub_dir / "matplotlib").mkdir(parents=True)
+    (stub_dir / "matplotlib" / "__init__.py").write_text(
+        "class _P:\n"
+        "    def __getattr__(self, name):\n"
+        "        return _P()\n"
+        "    def __call__(self, *a, **k):\n"
+        "        return _P()\n"
+        "\n"
+        "def use(*a, **k):\n"
+        "    return None\n"
+        "\n"
+        "def __getattr__(name):\n"
+        "    return _P()\n",
+        encoding="utf-8",
+    )
+    savefig_log = tmp_path / "savefig.log"
+    (stub_dir / "matplotlib" / "pyplot.py").write_text(
+        "class _Ax:\n"
+        "    def __getattr__(self, name):\n"
+        "        return lambda *a, **k: _Ax()\n"
+        "\n"
+        "class _Fig:\n"
+        f"    def savefig(self, path, *a, **k):\n"
+        f"        open({str(savefig_log)!r}, 'a').write(str(path) + '\\n')\n"
+        "        open(path, 'wb').write(b'\\x89PNG\\r\\n\\x1a\\n')\n"
+        "    def __getattr__(self, name):\n"
+        "        return lambda *a, **k: None\n"
+        "\n"
+        "def subplots(*a, **k):\n"
+        "    return _Fig(), _Ax()\n"
+        "\n"
+        "def figure(*a, **k):\n"
+        "    return _Fig()\n"
+        "\n"
+        "def __getattr__(name):\n"
+        "    return lambda *a, **k: None\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "curve.png"
+    argv = [
+        "--corpus",
+        str(corpus),
+        "--judgments",
+        str(judgments),
+        "--out",
+        str(out),
+        "--plot",
+    ]
+    probe = "\n".join(
+        [
+            "import json, pathlib, sys",
+            f"sys.path.insert(0, {str(stub_dir)!r})",
+            f"sys.path.insert(1, {str(REPO_ROOT)!r})",
+            "import onrecord.rag.chunk_sweep as sweep_mod",
+            "try:",
+            f"    sweep_mod.main({argv!r})",
+            "except Exception:",
+            "    pass",
+            f"out = pathlib.Path({str(out)!r})",
+            "assert out.is_file(), 'the --out artifact is gone'",
+            "written = json.loads(out.read_text(encoding='utf-8'))",
+            f"log = pathlib.Path({str(savefig_log)!r})",
+            "targets = log.read_text().split() if log.exists() else []",
+            "assert str(out) not in targets, f'savefig targeted --out itself: {targets}'",
+            f"assert written == json.loads({json.dumps(json.dumps(expected))}), 'artifact altered'",
+        ]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(tmp_path)
+    )
+    assert proc.returncode == 0, proc.stderr
