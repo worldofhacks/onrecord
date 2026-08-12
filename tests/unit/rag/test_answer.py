@@ -105,26 +105,69 @@ inventions this suite freezes)
    env var and the module constant — rather than caching at import. T-026
    wires this value in at eval time (plan-review I-8), possibly after
    `monkeypatch`/`os.environ` changes in the same process.
-8. `DEFAULT_GENERATOR_MODEL` is a non-empty `str` naming a Claude-family model
-   (the locked cross-family standing decision). The exact id is deliberately
-   NOT pinned: the ticket marks it research-required ("verify live, never from
-   memory"), so pinning a version here would either go stale or force the
-   implementer to contradict their own research.
+8. `DEFAULT_GENERATOR_MODEL` is a non-empty `str` whose family is `anthropic`
+   under the ORCHESTRATOR RULING's canonical map — see "CROSS-SUITE
+   ALIGNMENT" below. The exact id is deliberately NOT pinned: the ticket marks
+   it research-required ("verify live, never from memory"), so pinning a
+   version here would either go stale or force the implementer to contradict
+   their own research.
 9. Refusal `suggestions` are DERIVED FROM THE QUESTION (ticket Context:
    "2-3 reformulation hints derived from the question terms") — pinned as "at
    least one suggestion mentions a distinctive content word of the question",
    which kills a hard-coded boilerplate list without dictating wording. The
    COUNT is pinned at the AC-4 bar (>= 1), not the Context's "2-3".
+10. `default_generator(*, transport=...)` accepts an injected httpx transport,
+   mirroring the epic's established seam (`OpenAIEmbeddingProvider(...,
+   transport=...)` in T-021, `default_judge(transport=...)` in T-026). The
+   ticket's own Test Plan names MockTransport; without the seam the T-014 leak
+   vector AC-7 exists to guard is structurally unreachable (test-review I-3).
+   The REQUEST and RESPONSE schemas are deliberately not pinned — only that a
+   keyed request is issued and that the key never escapes into a log record,
+   an exception, or a repr.
+
+CROSS-SUITE ALIGNMENT — the generator id must classify for T-026's gate (I-1)
+-----------------------------------------------------------------------------
+T-026's `classify_family` / `assert_cross_family` is the single family
+authority, and it FAILS CLOSED: an id the map cannot classify is "unknown" and
+raises `CrossFamilyViolation`, which silently disables faithfulness scoring at
+eval time. A containment check (`"claude" in model.lower()`) is therefore not
+good enough here — the generator id this ticket ships must be one the map
+actually classifies as `anthropic`.
+
+**ORCHESTRATOR RULING (locked, 2026-08-12) — canonical family map.** T-026's
+own frozen text came back from ITS review with mislabelling findings, so
+neither suite aligns to the other's current wording: BOTH align to this table,
+transcribed here VERBATIM and applied by `_classify_family` below. T-026's
+Test Agent is applying the identical ruling in parallel.
+
+    anthropic <- claude* | anthropic.* | us.anthropic.* | eu.anthropic.*
+    openai    <- gpt* | chatgpt* | o1* | o3* | o4*
+    google    <- gemini* | models/gemini*
+    mistral   <- mistral* | open-mistral* | open-mixtral*
+    everything else -> unknown -> fail closed
+
+This suite pins no family rule of its own: `_classify_family` is a verbatim
+transcription of the table, and every family assertion here goes through it
+(`test_the_family_map_is_the_orchestrator_ruling_verbatim` pins the table row
+by row, so the transcription itself cannot silently drift). Consequence,
+reversing this file's pre-ruling reading: a Bedrock/gateway-shaped id
+(`us.anthropic.claude-opus-4-5-v1:0`, `eu.anthropic.claude-…`,
+`anthropic.claude-…`) IS `anthropic` and IS an acceptable
+`DEFAULT_GENERATOR_MODEL`. The ruling states its prefixes in lowercase and
+says nothing about case, so they are applied literally; that constrains only
+how THIS ticket's shipped id is spelled and neither requires nor forbids
+case-insensitivity in T-026's own classifier.
 
 DELIBERATELY NOT PINNED (documented gaps, not oversights)
 ----------------------------------------------------------
 * The exact whitespace left where a dangling marker was removed (see #4).
-* Whether the literal sentinel survives in `text` on the generation-side
-  refusal path (the ticket pins the refusal OBJECT, and `text` only as
-  something renderable); `total_claims` on that path is likewise left free,
-  since it follows from whatever decline text the implementer writes. What IS
-  pinned there: `supported_claims == 0` and `status == "ungrounded"`, both
-  forced by the frozen grounding formula once `citations == []`.
+* `total_claims` on the generation-side refusal path — it follows from
+  whatever decline text the implementer writes. What IS pinned there:
+  `supported_claims == 0` and `status == "ungrounded"` (both forced by the
+  frozen grounding formula once `citations == []`), plus — new in the fix
+  round, test-review I-2 — that `text` is non-empty and NEVER contains the
+  literal sentinel, because T-028's Ask view renders `text` verbatim and a
+  user-visible `INSUFFICIENT_CONTEXT` token is a defect, not a decline.
 * `min_confidence` set while `retrieval_scores is None` — the ticket's rule
   reads `max(retrieval_scores)`, which does not exist in that case.
 * `build_prompt` with zero chunks (`answer` refuses before assembling one).
@@ -132,12 +175,38 @@ DELIBERATELY NOT PINNED (documented gaps, not oversights)
 * A module constant for the `INSUFFICIENT_CONTEXT` literal — nothing outside
   this module consumes it, so naming one would be a gratuitous new id space
   (T-021 review I-4's lesson cuts the other way here).
+* The Anthropic request/response wire schema (see decision 10).
 
 SECRET HYGIENE (.tdd-swarm/LESSONS.md, T-014, 2026-08-11)
 ----------------------------------------------------------
-`ANTHROPIC_API_KEY` must never reach ANY log record. The AC-7 sentinel test
-captures at the ROOT logger with library loggers left free to propagate at
-INFO, and carries an explicit liveness canary so it cannot pass vacuously.
+`ANTHROPIC_API_KEY` must never reach ANY log record. The AC-7 sentinel tests
+capture at the ROOT logger with library loggers left free to propagate at
+INFO, and each carries an explicit liveness canary so it cannot pass
+vacuously. One of them drives a REAL keyed request through an injected
+`httpx.MockTransport` error path (test-review I-3), with the outgoing headers
+asserted to prove the sentinel was genuinely in flight during the captured
+window — the mocked-`generate_fn` test alone can only catch a key logged at
+construction time.
+
+FIX ROUND (post-freeze test-design review, verdict FREEZE with 3 Important
+follow-ups; coordinator ruling: Importants land pre-freeze)
+--------------------------------------------------------------------------
+Review: `.tdd-swarm/reports/T-023-test-review.md` against commit `3d7dfd5`.
+Additive/corrective only, within this file. Closed: I-1 (family containment
+-> the orchestrator ruling's canonical map, transcribed verbatim; see the
+coordinator ADDENDUM note in CROSS-SUITE ALIGNMENT — an interim alignment to
+T-026's then-frozen text was superseded mid-round, and Bedrock/gateway ids are
+now pinned as ACCEPTED, the opposite of the interim reading), I-2 (raw
+sentinel must never be user-facing
+`text`), I-3 (transport-live key-leak test), M-1 (prose-only vocabulary was
+over-specific — accepts "continuous paragraphs / no bullet points or
+enumerations" too), M-2 (the "context" half of the context-only assertion was
+near-vacuous against the sentinel's own substring), M-3 (the first three
+`answer()` parameters must stay callable BY KEYWORD, which T-024's frozen call
+form relies on), M-4 (`retrieved[].score` is coerced to `float`, matching
+/api/search), M-5 (`answer()` reads no environment), M-6 (the sentinel-path
+refusal reason gets its own vocabulary pin, distinct from AC-4's). M-7 is
+documented in `_owning_block` rather than changed.
 """
 
 from __future__ import annotations
@@ -148,7 +217,9 @@ import inspect
 import json
 import logging
 import re
+import time
 
+import httpx
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -168,6 +239,31 @@ QUESTION_TERMS = ("dominion", "energy", "regulators", "chesterfield", "gas", "pl
 
 SENTINEL = "INSUFFICIENT_CONTEXT"
 SENTINEL_KEY = "SUPERSECRET-sentinel-anthropickey-zzz9999"
+
+# ORCHESTRATOR RULING (locked, 2026-08-12): the canonical family map that
+# T-026's `classify_family` implements and that both suites align to,
+# transcribed VERBATIM. This suite invents no family rule of its own — where a
+# test needs a family, it goes through `_classify_family`, and
+# `test_the_family_map_is_the_orchestrator_ruling_verbatim` pins the table row
+# by row so the transcription cannot drift. Hardcoded rather than imported:
+# `onrecord.rag.judge` does not exist yet, and an independent pin is the point
+# (T-027 precedent). Unknown -> fail closed is T-026's behaviour, not a check
+# performed here.
+_FAMILY_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("anthropic", ("claude", "anthropic.", "us.anthropic.", "eu.anthropic.")),
+    ("openai", ("gpt", "chatgpt", "o1", "o3", "o4")),
+    ("google", ("gemini", "models/gemini")),
+    ("mistral", ("mistral", "open-mistral", "open-mixtral")),
+)
+
+
+def _classify_family(model: str) -> str:
+    for family, prefixes in _FAMILY_PREFIXES:
+        if any(model.startswith(prefix) for prefix in prefixes):
+            return family
+    return "unknown"
+
+
 CANARY = "LOGGING-CAPTURE-CANARY"
 
 PINNED_TOP_LEVEL_KEYS = {"answer_id", "text", "citations", "retrieved", "grounding", "refusal"}
@@ -513,6 +609,15 @@ def _owning_block(prompt: str, needle: str) -> int | None:
     instruction block's own wording (which talks about `[n]`, with a literal
     `n`, never a digit) and of whatever separators/metadata the implementer
     puts inside a block.
+
+    IMPLEMENTER HEADS-UP (test-review M-7): this association does imply a
+    MARKER-FIRST block layout — the `[i]` marker opens its block, with the
+    chunk's deep_link and text after it (`[1] 2026-04-28 | … | https://…\\n
+    <text>`). A layout that trails the marker after the text
+    (`<text>\\n[1] source: …`) would fail AC-6 even though the ticket only
+    says each block "carr[ies] its chunk's deep_link". Marker-first is the
+    shape the ticket's own "numbered context blocks `[1]..[m]`" describes and
+    the one the frozen tests pin.
     """
     at = prompt.find(needle)
     assert at != -1, f"expected {needle!r} to appear verbatim in the prompt"
@@ -610,6 +715,12 @@ def test_answer_signature_matches_the_frozen_contract():
     )
     assert parameters[3].default is None
     assert parameters[4].default is None
+    # test-review M-3: the first three must stay callable BY KEYWORD — a
+    # positional-only `/` after generate_fn passes every other assertion here
+    # and breaks T-024's frozen call form, which passes `generate_fn=`.
+    assert all(p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD for p in parameters[:3]), (
+        f"question/chunks/generate_fn must accept keyword form; got {signature}"
+    )
 
 
 # ==========================================================================
@@ -755,6 +866,42 @@ def test_scores_map_one_to_one_when_retrieval_scores_is_given():
     )
 
     assert [entry["score"] for entry in result["retrieved"]] == scores
+
+
+def test_integer_scores_are_coerced_to_float():
+    # spec(T-023:AC-1)
+    # test-review M-4: `retrieved[].score` is the same field /api/search pins
+    # as a float (tests/unit/test_api.py) and the UI's two panels share the
+    # renderer; an int riding through changes the JSON type for the same key.
+    result = _attr("answer")(
+        QUESTION, _chunks(), FakeGenerator(GEN_TWO_CITED), retrieval_scores=[3, 1, 0]
+    )
+
+    scores = [entry["score"] for entry in result["retrieved"]]
+    assert scores == [3.0, 1.0, 0.0]
+    assert all(isinstance(score, float) for score in scores), (
+        f"scores are coerced to float, matching /api/search's shape; got {scores!r}"
+    )
+
+
+def test_answer_reads_no_environment_variables(monkeypatch):
+    # spec(T-023:AC-1)
+    # test-review M-5: `answer()` is a pure library call — the threshold
+    # arrives as a PARAMETER. T-024 owns `ONRECORD_ANSWER_MIN_CONF` and passes
+    # what it reads; a library-side fallback read would make the same call
+    # behave differently in two processes and would silently refuse here.
+    monkeypatch.setenv("ONRECORD_ANSWER_MIN_CONF", "0.99")
+    monkeypatch.setenv("ONRECORD_GENERATOR_MODEL", "claude-sentinel-poison-9999")
+
+    result = _attr("answer")(
+        QUESTION, _chunks(), FakeGenerator(GEN_TWO_CITED), retrieval_scores=[0.01, 0.0, 0.0]
+    )
+
+    assert result["refusal"] is None, (
+        "answer() must ignore ONRECORD_ANSWER_MIN_CONF — the threshold is a "
+        "parameter, and an env fallback would refuse a call the caller never gated"
+    )
+    assert result["grounding"]["status"] == "grounded"
 
 
 @pytest.mark.parametrize(
@@ -1304,11 +1451,49 @@ def test_generation_side_refusal_is_ungrounded_with_zero_supported_claims():
     assert result["grounding"]["status"] == "ungrounded"
 
 
-def test_generation_side_refusal_still_renders_text():
+@pytest.mark.parametrize(
+    "generated",
+    [
+        pytest.param(SENTINEL, id="bare-sentinel"),
+        pytest.param(
+            f"{SENTINEL} - the retrieved passages do not answer this question.",
+            id="sentinel-in-prose",
+        ),
+        pytest.param(f"The records do not cover the plant. {SENTINEL}", id="sentinel-at-the-end"),
+    ],
+)
+def test_generation_side_refusal_never_renders_the_raw_sentinel(generated):
     # spec(T-023:AC-5)
-    result = _attr("answer")(QUESTION, _chunks(), FakeGenerator(SENTINEL))
+    # test-review I-2. `text` is a human-facing decline, never the protocol
+    # token: T-028's Ask view renders `text` VERBATIM, so passing the raw
+    # generation through publishes `INSUFFICIENT_CONTEXT` to the user. The
+    # ticket pins "one short decline sentence (the UI needs something
+    # renderable)" for the retrieval-confidence path and AC-5 asks for the
+    # "same refusal shape" here — the sentinel is the pipeline's internal
+    # signal, not copy. The WORDING stays free; only the token is forbidden.
+    result = _attr("answer")(QUESTION, _chunks(), FakeGenerator(generated))
 
     assert result["text"].strip(), "the Ask view always renders `text`"
+    assert SENTINEL not in result["text"], (
+        f"the literal sentinel must never reach the user — it is the model's "
+        f"protocol signal, and T-028 renders `text` verbatim; got {result['text']!r}"
+    )
+
+
+def test_generation_side_refusal_reason_names_the_context_judgement():
+    # spec(T-023:AC-5)
+    # test-review M-6: AC-4's reason gets a vocabulary pin, so this one should
+    # too — the ticket distinguishes the two paths ("names the confidence gap"
+    # vs "the model judged the context insufficient"), and an identical string
+    # on both paths makes the refusal panel useless for diagnosis. Vocabulary
+    # check, not a wording pin.
+    result = _attr("answer")(QUESTION, _chunks(), FakeGenerator(SENTINEL))
+
+    reason = result["refusal"]["reason"].lower()
+    assert any(token in reason for token in ("insufficient", "context", "model")), (
+        f"the generation-side reason must say the model judged the context "
+        f"insufficient; got {result['refusal']['reason']!r}"
+    )
 
 
 def test_the_sentinel_gate_runs_after_generation_not_instead_of_it():
@@ -1397,9 +1582,14 @@ def test_build_prompt_includes_the_insufficient_context_sentinel_instruction():
 def test_build_prompt_instructs_context_only_answering_with_bracket_markers():
     # spec(T-023:AC-6)
     lowered = _attr("build_prompt")(QUESTION, _chunks()).lower()
+    # test-review M-2: the sentinel itself contains the substring "context",
+    # so the naive check was near-vacuous — count occurrences with the
+    # sentinel removed.
+    without_sentinel = lowered.replace(SENTINEL.lower(), "")
 
-    assert "only" in lowered and "context" in lowered, (
-        "the instructions must confine the model to the provided context"
+    assert "only" in without_sentinel and "context" in without_sentinel, (
+        "the instructions must confine the model to the provided context, in "
+        "wording of their own — the sentinel's own 'context' does not count"
     )
     assert "[n]" in lowered or "marker" in lowered, (
         "the instructions must ask for inline bracket citation markers — the "
@@ -1416,15 +1606,20 @@ def test_build_prompt_instructs_prose_only_answers():
     # (pinned in test_enumerated_answer_grounds_pessimistically_documented_
     # shatter). The mitigation lives HERE, in the prompt: the instruction's
     # PRESENCE is the deliverable. Vocabulary check, not a wording pin.
+    # test-review M-1: the vocabulary was over-specific — a correct phrasing
+    # like "Write in continuous paragraphs; do not use bullet points or
+    # enumerations" carries the instruction without the literal token "prose"
+    # or "list". Both halves are now token FAMILIES: one word committing to
+    # continuous prose, one word prohibiting the enumerated form.
     lowered = _attr("build_prompt")(QUESTION, _chunks()).lower()
 
-    assert "prose" in lowered, (
+    assert any(token in lowered for token in ("prose", "paragraph", "continuous")), (
         "the prompt must instruct PROSE-ONLY answers (2026-08-12 amendment) — "
         "this is what keeps enumerator shatter out of the grounding numbers"
     )
-    assert "list" in lowered, "the prohibition names lists explicitly"
-    assert "bullet" in lowered or "numbered" in lowered, (
-        "the prohibition covers both bulleted and numbered lists"
+    assert any(token in lowered for token in ("list", "bullet", "numbered", "enumerat")), (
+        "the instruction must explicitly prohibit the enumerated form (bulleted "
+        "or numbered), not merely prefer prose"
     )
 
 
@@ -1513,9 +1708,36 @@ def test_generator_not_configured_is_a_typed_exception():
 
 def test_resolved_generator_model_returns_the_env_override(monkeypatch):
     # spec(T-023:AC-7)
+    # test-review I-1: whatever this function returns is what T-026's
+    # cross-family gate classifies, so the suite's own override fixtures are
+    # ids the ruling's map accepts. The FUNCTION is not pinned to validate its
+    # input — an operator setting a nonsense override gets T-026's fail-closed
+    # refusal, which is the design.
     monkeypatch.setenv("ONRECORD_GENERATOR_MODEL", "claude-sentinel-override-9999")
 
-    assert _attr("resolved_generator_model")() == "claude-sentinel-override-9999"
+    resolved = _attr("resolved_generator_model")()
+
+    assert resolved == "claude-sentinel-override-9999"
+    assert _classify_family(resolved) == "anthropic"
+
+
+def test_resolved_generator_model_passes_a_bedrock_shaped_override_through(monkeypatch):
+    # spec(T-023:AC-7)
+    # Coordinator ADDENDUM (2026-08-12): a gateway/Bedrock-shaped id is
+    # `anthropic` under the canonical map, so it is a legitimate override and
+    # must flow through UNCHANGED — no normalisation, no stripping of the
+    # region prefix. T-026 receives this exact string as its explicit
+    # `generator_model` parameter and classifies it there.
+    bedrock_id = "us.anthropic.claude-sentinel-override-v1:0"
+    monkeypatch.setenv("ONRECORD_GENERATOR_MODEL", bedrock_id)
+
+    resolved = _attr("resolved_generator_model")()
+
+    assert resolved == bedrock_id, (
+        f"the override is passed through verbatim — rewriting it would hand "
+        f"T-026 an id the operator never configured; got {resolved!r}"
+    )
+    assert _classify_family(resolved) == "anthropic"
 
 
 def test_resolved_generator_model_falls_back_to_the_module_constant(monkeypatch):
@@ -1555,19 +1777,74 @@ def test_resolved_generator_model_re_reads_the_environment_on_every_call(monkeyp
     )
 
 
-def test_default_generator_model_is_a_non_empty_claude_family_id(monkeypatch):
+def test_default_generator_model_classifies_as_anthropic(monkeypatch):
     # spec(T-023:AC-7)
-    # Test Agent decision 8: the FAMILY is a locked cross-family standing
-    # decision and is pinned; the exact id is research-required (verified live
-    # by the implementer, never from memory) and is deliberately NOT pinned.
+    # Test Agent decision 8, realigned in the fix round to the ORCHESTRATOR
+    # RULING (locked, 2026-08-12; test-review I-1): the FAMILY is pinned — the
+    # id this ticket ships must be one T-026's fail-closed `classify_family`
+    # calls `anthropic`, or faithfulness scoring dies silently at eval time —
+    # while the exact id stays research-required and unpinned. Both bare
+    # `claude-*` and gateway/Bedrock `*.anthropic.*` spellings qualify under
+    # the ruling's map.
     monkeypatch.delenv("ONRECORD_GENERATOR_MODEL", raising=False)
     model = _attr("DEFAULT_GENERATOR_MODEL")
 
     assert isinstance(model, str) and model.strip(), f"non-empty model id; got {model!r}"
-    assert "claude" in model.lower(), (
-        "the generator is Claude-family per the locked cross-family standing "
-        f"decision (tickets/T-023.md); got {model!r}"
+    assert _classify_family(model) == "anthropic", (
+        f"DEFAULT_GENERATOR_MODEL must classify as `anthropic` under the "
+        f"orchestrator ruling's canonical map (claude* | anthropic.* | "
+        f"us.anthropic.* | eu.anthropic.*); {model!r} classifies as "
+        f"{_classify_family(model)!r}, which T-026's cross-family gate refuses"
     )
+
+
+def test_the_family_map_is_the_orchestrator_ruling_verbatim():
+    # spec(T-023:AC-7)
+    # test-review I-1 + coordinator ADDENDUM (2026-08-12).
+    #
+    # THE ONE DELIBERATELY-GREEN TEST IN THIS FILE. It exercises no target-
+    # module symbol — it is a self-check on this suite's transcription of the
+    # ruling, so it passes before `onrecord/rag/answer.py` exists and is
+    # expected to (disclosed in .tdd-swarm/reports/T-023-test.md; the T-027
+    # green-control precedent). Its job: this suite pins NO family rule of its
+    # own, every family assertion here runs through `_classify_family`, and a
+    # transcription slip must fail HERE rather than silently widening what
+    # `DEFAULT_GENERATOR_MODEL` is allowed to be.
+    #
+    # T-026's `classify_family` is the runtime authority and is being aligned
+    # to the same ruling in parallel — nothing here constrains its internals.
+    # The last row applies the ruling's lowercase prefixes literally (the
+    # ruling says nothing about case), which only affects how THIS ticket's
+    # shipped id must be spelled.
+    table = (
+        ("claude-3-5-sonnet", "anthropic"),
+        ("claude-opus-4-1", "anthropic"),
+        ("anthropic.claude-3-5-sonnet-v1:0", "anthropic"),
+        ("us.anthropic.claude-opus-4-5-v1:0", "anthropic"),
+        ("eu.anthropic.claude-3-5-haiku-v1:0", "anthropic"),
+        ("gpt-4o", "openai"),
+        ("chatgpt-4o-latest", "openai"),
+        ("o1-preview", "openai"),
+        ("o3-mini", "openai"),
+        ("o4-mini", "openai"),
+        ("gemini-1.5-pro", "google"),
+        ("models/gemini-1.5-pro", "google"),
+        ("mistral-large-latest", "mistral"),
+        ("open-mistral-7b", "mistral"),
+        ("open-mixtral-8x7b", "mistral"),
+        ("llama-3-70b", "unknown"),
+        ("voyage-3", "unknown"),
+        ("", "unknown"),
+        ("   ", "unknown"),
+        ("Claude-3-5-Sonnet", "unknown"),
+    )
+
+    for model, family in table:
+        assert _classify_family(model) == family, (
+            f"family-map transcription drift: the orchestrator ruling classifies "
+            f"{model!r} as {family!r}, this file's table says "
+            f"{_classify_family(model)!r}"
+        )
 
 
 def test_api_key_never_reaches_any_log_record_during_a_mocked_generation(caplog, monkeypatch):
@@ -1594,6 +1871,60 @@ def test_api_key_never_reaches_any_log_record_during_a_mocked_generation(caplog,
     assert SENTINEL_KEY not in _attr("build_prompt")(QUESTION, chunks), (
         "the key must not ride in the prompt sent to the model"
     )
+
+
+def test_api_key_never_leaks_when_a_real_keyed_request_fails(caplog, monkeypatch):
+    # spec(T-023:AC-7)
+    # test-review I-3: the test above can only catch a key logged at
+    # CONSTRUCTION — with a FakeGenerator no HTTP is ever issued, so the leak
+    # vector AC-7 and the ticket's Test Plan actually name (a keyed request
+    # flowing through httpx's own INFO logging, LESSONS T-014) is structurally
+    # unreachable there. This one drives a real keyed request through an
+    # injected `httpx.MockTransport` (Test Agent decision 10; the same seam
+    # T-021's provider and T-026's `default_judge` already expose) and fails
+    # it, because error paths are where credentials leak — a naive
+    # `log.warning("generation failed: %s", request)` or an exception carrying
+    # the request headers ships the key straight to the log.
+    #
+    # The wire schema is NOT pinned: the response is a bare 5xx, the call is
+    # allowed to raise or return, and only the credential hygiene is asserted.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", SENTINEL_KEY)
+    monkeypatch.setenv("ONRECORD_GENERATOR_MODEL", "claude-sentinel-override-9999")
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)  # no real backoff waits
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500, json={"error": {"message": "upstream failure"}})
+
+    generate = _attr("default_generator")(transport=httpx.MockTransport(_handler))
+    raised: BaseException | None = None
+
+    with _library_loggers_unmuted(), caplog.at_level(logging.INFO):
+        try:
+            generate(_attr("build_prompt")(QUESTION, _chunks()))
+        except Exception as exc:  # noqa: BLE001 - any failure mode is acceptable here
+            raised = exc
+        _assert_capture_is_live(caplog)
+
+    assert requests, (
+        "precondition: the injected transport must actually have been used — "
+        "without a real request in flight this test proves nothing"
+    )
+    assert any(SENTINEL_KEY in value for value in requests[0].headers.values()), (
+        "precondition: the sentinel key really was in flight during the "
+        f"captured window; headers seen: {sorted(requests[0].headers)}"
+    )
+    assert _leaking_records(caplog, SENTINEL_KEY) == [], (
+        "the API key must never reach ANY log record on the error path — root + "
+        f"library loggers (LESSONS T-014): {_leaking_records(caplog, SENTINEL_KEY)}"
+    )
+    assert SENTINEL_KEY not in caplog.text
+    if raised is not None:
+        assert SENTINEL_KEY not in str(raised), (
+            f"the failure must not surface the credential in its message; got {raised!r}"
+        )
+        assert SENTINEL_KEY not in repr(raised)
 
 
 # ==========================================================================
