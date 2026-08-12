@@ -52,3 +52,17 @@ Posture: mvp (see posture.md). Deadline: MVP checkpoint tonight 23:59.
 - T-010: review APPROVED w/ 2 Important (non-dict row crash → fix loop; real snapshot commit → orchestrator at cutoff)
 - T-010: done (e535661 fix verified by orchestrator repro; merged into swarm). WAVE 3 COMPLETE.
 - WAVE 4 opened: T-011 bm25 / T-013 api / T-014 prices worktrees created; test agents dispatched (T-012 differential queued for wave 5)
+- T-014: tests-written (17 failing, 4397d52)
+- T-011: tests-written (21 failing, 6c392e4; achievability-verified after API-drop resume)
+- T-013: tests-written (21 failing, 6ef98d3; incl. /api/answer teaser + Thursday contract pinned)
+- T-014: impl DONE (ab0d9ed, 17/17; orchestrator gates re-run green)
+- T-011: impl DONE (7cee1fd, 21/21; orchestrator gates re-run green)
+- T-013: impl DONE (c58f0c5, 21/21; gates re-run green; cli_ranked_patch scope entry unused — fine, wave-merge wiring)
+- T-014: review REJECTED (Critical: httpx library-logger key leak — new vector vs T-008 lesson; Important: dead range_days; smoke: stooq bot-gated from this network → FMP is de-facto primary) — test extension + fix round
+- T-011: review APPROVED w/ 1 Important (k1=0 ZeroDivisionError — sweep grids from 0) — pin+fix round
+- T-013: review APPROVED w/ 1 Important (op whitelist missing → 500 on op=XOR) — pin+fix round
+- T-013: fix DONE (d53456e, 31/31; gates re-run green) — review-passed (orchestrator verified the exact repro fixes: op=XOR/k=0 → 422 native)
+- T-011: fix DONE (72a9468, 25/25; gates + orchestrator boundary repro green) — review-passed
+- T-014: fix DONE (8f85a60, 22/22; gates re-run green) — final re-review dispatched
+- WAVE 4 merged (T-011/T-013/T-014); 3 anticipated transitional-pin failures -> T-013R repair (AND+BM25 composition adjudicated)
+- WAVE 4 COMPLETE: T-011/T-013(+R)/T-014 merged, 261 tests green (orchestrator note: three directory-trap incidents — merges now ONLY from main checkout, verified via pwd-first)
