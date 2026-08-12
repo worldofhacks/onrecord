@@ -340,22 +340,36 @@ def _resolve_answer_fn() -> Callable[[str], dict]:
 _DEFAULT_INDEX_PATH = "artifacts/index"
 
 
-def _resolve_retrieve_fn() -> Callable[[str], list[str]]:
+def _resolve_retrieve_fn(k: int = 10) -> Callable[[str], list[str]]:
     """Real-pipeline wiring seam for `--kind answer_recall`, symmetric with
     `_resolve_answer_fn`. LAZILY imports the already-frozen BM25 ranked
     search pipeline (`onrecord.index.inverted.InvertedIndex` +
     `onrecord.search.ranked.ranked_search`, the same pair
     `onrecord.eval.run` / `onrecord.rag.chunk_sweep` wire against) inside
     this function body, for the same collection-safety reason as
-    `_resolve_answer_fn`. Deliberately NOT exercised by the frozen test
-    suite (module docstring: "orchestrator-eval territory") -- unlike
-    `_resolve_answer_fn`, this file's tests never monkeypatch it."""
+    `_resolve_answer_fn`.
+
+    `k` is the CALLING CONVENTION `main()` must thread through (review
+    finding C-1: a `_resolve_retrieve_fn()` called with no arguments left
+    the real retrieval depth hardcoded at 10 no matter what `--k` requested,
+    while the emitted artifact stamped whatever `--k` was passed regardless
+    -- a graded artifact lying about its own parameters). The returned
+    closure is built AT depth `k`, not merely truncated to it afterward, so
+    a retrieval backend that only ever fetches its first 10 candidates
+    cannot silently satisfy a `--k 50` request.
+
+    The seam's internal lazy imports / index load / closure body are
+    deliberately NOT exercised by the frozen test suite (module docstring:
+    "orchestrator-eval territory") -- unlike `_resolve_answer_fn`, this
+    file's tests monkeypatch the whole seam rather than calling into it, but
+    they DO pin the `k` calling convention (see
+    `test_cli_answer_recall_kind_threads_k_into_resolve_retrieve_fn_seam`)."""
     from onrecord.index.inverted import InvertedIndex  # pragma: no cover
     from onrecord.search.ranked import ranked_search  # pragma: no cover
 
     index = InvertedIndex.load(_DEFAULT_INDEX_PATH)  # pragma: no cover
 
-    def _retrieve_fn(question: str, k: int = 10) -> list[str]:  # pragma: no cover
+    def _retrieve_fn(question: str) -> list[str]:  # pragma: no cover
         return [result.doc_id for result in ranked_search(index, question, k=k)]
 
     return _retrieve_fn  # pragma: no cover
@@ -415,8 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         kind = "refusal"
     else:
         qa_rows = load_qa(args.qa)
-        retrieve_fn = _resolve_retrieve_fn()  # pragma: no cover
-        metrics = answer_recall(qa_rows, retrieve_fn, k=args.k)  # pragma: no cover
+        retrieve_fn = _resolve_retrieve_fn(args.k)
+        metrics = answer_recall(qa_rows, retrieve_fn, k=args.k)
         kind = "answer_recall"
 
     row = {
