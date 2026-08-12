@@ -129,8 +129,30 @@ def _bootstrap_index_from_corpus(index_dir: Path, corpus_path: Path) -> Inverted
     commonly). Returns `None` if the snapshot has no docs either (missing
     path, empty file, all-malformed rows) — the caller then keeps
     `app.state.index` as `None`, preserving the existing 503 behavior
-    (T-015 AC-3/AC-4)."""
-    docs = load_corpus_snapshot(corpus_path)
+    (T-015 AC-3/AC-4).
+
+    Post-review fix (Critical-1, `.tdd-swarm/reports/T-015-review.md`):
+    `load_corpus_snapshot` itself is NOT exception-safe — a corpus file
+    that exists but is corrupt/unreadable (truncated gzip, not gzip at
+    all, invalid UTF-8 inside a valid gzip stream) raises straight out of
+    it (`EOFError` / `gzip.BadGzipFile` / `UnicodeDecodeError`
+    respectively), which — uncaught — used to crash ASGI *startup* itself,
+    not just this one request (a Railway crash-loop, reproduced live by
+    the reviewer). Wrapped the same way `InvertedIndex.load` already is
+    one line up in `_lifespan`: degrade to `None` (same missing-index 503
+    path) with an ERROR-level log, never let it escape and take the
+    process down."""
+    try:
+        docs = load_corpus_snapshot(corpus_path)
+    except Exception:
+        logger.error(
+            "failed to load ONRECORD_CORPUS snapshot at %s for index bootstrap -- "
+            "degrading to the missing-index 503 path instead of crashing ASGI startup",
+            corpus_path,
+            exc_info=True,
+        )
+        return None
+
     if not docs:
         return None
 

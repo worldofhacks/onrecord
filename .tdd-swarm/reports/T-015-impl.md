@@ -1,9 +1,13 @@
 # T-015 Implementation Report — serve UI + `/api/prices` route + index bootstrap
 
-**Status:** DONE. All 12 `tests/unit/test_serve.py` tests pass; full local
-suite (`uv run pytest -q`) is 304 passed (baseline 292 + 12 new, zero
-regressions); `.tdd-swarm/run-local-gates.sh . tickets/T-015.md` is fully
-green (format, lint, unit, spec-lint).
+**Status:** DONE (fix round 1, post-review). All 15
+`tests/unit/test_serve.py` tests pass (12 original + 3 new parametrized
+bootstrap-resilience cases); full local suite (`uv run pytest -q`) is 307
+passed (292 baseline + 15, zero regressions); `.tdd-swarm/run-local-gates.sh
+. tickets/T-015.md` is fully green (format, lint, unit, spec-lint). See
+"Fix round 1" section below for the review-rejection response; the
+original (pre-review) implementation section directly below is otherwise
+unchanged from the first hand-off.
 
 **Worktree:** `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-015` (branch
 `ticket/T-015-serve`).
@@ -105,6 +109,89 @@ uv run ruff check onrecord/api.py                  # all checks passed
 TODO/debug-print gate checks (`git diff | grep -nE '^\+.*(TODO|FIXME|HACK)'`
 and `...(print\(|breakpoint\()'`) both clean on the full diff, including
 the two new files.
+
+## Fix round 1 — response to REJECTED review (`.tdd-swarm/reports/T-015-review.md`)
+
+Reviewer verdict: 1 Critical, 3 Important, 4 Minor. Test Agent pinned the
+Critical as 3 new frozen parametrized tests at commit `0502fe0`
+(`test_bootstrap_survives_corrupt_corpus_snapshot_never_crashes_startup`,
+one per corruption flavor: `truncated_gzip`, `non_gzip_file`,
+`malformed_utf8_gzip`). Addressed all 3 requested changes:
+
+1. **Critical-1 fixed — bootstrap resilience.** `_bootstrap_index_from_corpus`
+   (`onrecord/api.py`) now wraps its `load_corpus_snapshot(corpus_path)`
+   call in `try/except Exception`, mirroring the sibling
+   `InvertedIndex.load` pattern one line up in `_lifespan`: on any
+   exception (the reviewer's live repro showed `EOFError` for truncated
+   gzip, `gzip.BadGzipFile` for a non-gzip file at the expected path,
+   `UnicodeDecodeError` for invalid UTF-8 inside an otherwise-valid gzip
+   stream — none caught by `_parse_jsonl_lines`'s existing per-line
+   `json.JSONDecodeError` guard, since these break file
+   iteration/decoding itself, not per-line JSON parsing), logs at
+   `logger.error(...)` (satisfies the new tests' `caplog.at_level(logging
+   .ERROR)` assertion) and returns `None` — degrading cleanly to the same
+   already-tested missing-index-and-corpus 503 path (AC-4) instead of
+   letting the exception escape `_lifespan` and crash ASGI startup
+   (previously: `TestClient(app).__enter__()` itself raised, and on a
+   live `uvicorn` process the whole service exited — a Railway
+   crash-loop). `/health` and `/` now verifiably keep serving in this
+   scenario too, per the new tests.
+
+2. **Important-2/3 fixed — added `.dockerignore`.** New file at repo root
+   (granted file-scope addition). Excludes `.venv/` (the specific
+   clobber risk called out — a host macOS/ARM `.venv/` silently
+   overwriting the container's freshly `uv sync`'d Linux one via `COPY .
+   .`), `.git/`, `.tdd-swarm/`, `tickets/`, `docs/`, `TICKETS.md`, `*.pdf`
+   (the stray `Assignment_02_RelevanceEngine (1).pdf`), Python/tooling
+   caches, `artifacts/` (runtime-built, never baked in), `corpus/raw/`
+   (pre-merge adapter output, if ever present), `tests/` (not needed by
+   the running production image — dropped per "your call"), and
+   `.env*` (never bake real or example env files into an image; Railway
+   supplies real config via its own env vars at runtime). Kept
+   `corpus/v1/` and `ui/` unexcluded, as instructed (both genuinely
+   needed at runtime: `/api/prices` + index bootstrap read the corpus
+   snapshot; the static-UI routes read `ui/`).
+
+3. **Important-1 (deploy-trap) resolved — container-scoped
+   `ONRECORD_CORPUS` default.** Added `ENV
+   ONRECORD_CORPUS=corpus/v1/corpus.jsonl.gz` to the `Dockerfile` only
+   (after `EXPOSE 8000`), NOT to `onrecord/api.py`'s own Python-level
+   default. This means: every deploy built from this image now
+   bootstraps its index automatically on a cold start, with zero Railway
+   env var configuration required (resolving the reviewer's "obvious
+   `railway up` gets a silent 503" trap) — while `onrecord/api.py`'s own
+   bootstrap-trigger logic is completely unchanged (still reads
+   `os.environ.get("ONRECORD_CORPUS")` with no in-code default), so
+   local runs, `uv run pytest`, and every frozen test in both
+   `test_serve.py` and `test_api.py` (including the two T-013 AC-5 tests
+   the original explicit-only design was built to protect) see zero
+   behavior change — confirmed by the full-suite re-run below. Documented
+   prominently in README's Deploy section (a new paragraph right after
+   the `railway up` steps, not buried in the env-var table, per the
+   reviewer's own suggestion) plus an inline `Dockerfile` comment
+   explaining the image-local-only scoping.
+
+Not addressed (reviewer explicitly marked these as non-blocking / no code
+change required): Minor-4 (SPA-fallback extension-check cosmetic gap for
+dotfile-shaped paths — reviewer confirmed zero content-disclosure risk),
+Minor-5 (no rate limiting on `/api/prices` — inherited scope from T-014,
+out of this ticket), Minor-6 (unpinned base-image tags — standard practice
+per the reviewer's own note).
+
+### Fix-round verification
+
+```
+uv run pytest tests/unit/test_serve.py -v         # 15 passed (12 original + 3 new)
+uv run pytest tests/unit/test_api.py -q            # 31 passed (frozen T-013 suite, still unchanged)
+uv run pytest -q                                   # 307 passed (292 baseline + 15; zero regressions)
+uv run ruff format --check onrecord/api.py         # already formatted
+uv run ruff check onrecord/api.py                  # all checks passed
+.tdd-swarm/run-local-gates.sh . tickets/T-015.md   # ALL LOCAL GATES GREEN (incl. spec-lint)
+python3 -m json.tool railway.json                  # still valid JSON (unchanged)
+```
+
+TODO/debug-print gate checks re-run clean on the fix-round diff too
+(`onrecord/api.py`, `Dockerfile`, `README.md`, `.dockerignore`).
 
 ## Out of scope / heads-up (not touched, not this ticket's job)
 

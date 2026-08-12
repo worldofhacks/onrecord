@@ -106,19 +106,35 @@ railway up            # build the Dockerfile and deploy
 `railway.json` pins `"builder": "DOCKERFILE"` and the start command
 (`uv run uvicorn onrecord.api:app --host 0.0.0.0 --port $PORT`) — Railway
 injects `$PORT` automatically, no manual configuration needed for that
-one. Set these in the Railway project's environment variables (`railway
-variables set NAME=value`, or the dashboard):
+one.
+
+**Cold start "just works" out of the box — no extra env vars required.**
+The `Dockerfile` bakes `ENV ONRECORD_CORPUS=corpus/v1/corpus.jsonl.gz`
+(the committed corpus snapshot lands in the image via `COPY . .`, at
+exactly that path), so a fresh `railway up` with zero configured env vars
+already bootstraps an in-memory index from it on first startup — no
+"deployer trap" where the obvious deploy path silently 503s (post-review
+fix; see `.tdd-swarm/reports/T-015-review.md` Important-1). This default
+is **image-local only** — `onrecord/api.py` itself still has no built-in
+default for `ONRECORD_CORPUS` (only `/api/prices`' corpus path defaults;
+index bootstrap requires the env var explicitly present), so local runs
+and the test suite are unaffected; it only takes effect inside the
+container, where the `Dockerfile`'s `ENV` sets it for you.
+
+Optionally override any of these in the Railway project's environment
+variables (`railway variables set NAME=value`, or the dashboard) — e.g. to
+point at a different/updated corpus snapshot without rebuilding the image:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `ONRECORD_INDEX` | `artifacts/index` | Saved `InvertedIndex` directory. `artifacts/` isn't committed, so on a fresh deploy this won't exist yet — set `ONRECORD_CORPUS` (below) so startup bootstraps an in-memory index from the committed corpus snapshot instead of 503ing, then saves it back to this path for a warm restart. |
-| `ONRECORD_CORPUS` | *(unset)* | Corpus snapshot path (`corpus/v1/corpus.jsonl.gz`, gzip newline-JSON). Powers `/api/prices`' receipt join (falls back to the same default path there even if unset) **and**, when explicitly set, cold-start index bootstrap when `ONRECORD_INDEX` is missing/unbuilt — set it explicitly in Railway to get automatic bootstrap on first deploy. |
+| `ONRECORD_INDEX` | `artifacts/index` | Saved `InvertedIndex` directory. `artifacts/` isn't committed, so on a fresh deploy this won't exist yet — startup bootstraps an in-memory index from `ONRECORD_CORPUS` instead of 503ing (the `Dockerfile` already sets this for you — see above), then saves it back to this path for a warm restart. A corrupt/unreadable corpus snapshot degrades to the same 503 rather than crashing startup (never a Railway crash-loop). |
+| `ONRECORD_CORPUS` | *(unset in code; `corpus/v1/corpus.jsonl.gz` in the `Dockerfile`)* | Corpus snapshot path (gzip newline-JSON). Powers `/api/prices`' receipt join (defaults to `corpus/v1/corpus.jsonl.gz` there even if unset) **and**, when present in the environment, cold-start index bootstrap when `ONRECORD_INDEX` is missing/unbuilt. |
 | `ONRECORD_UI_DIR` | `ui/` | Static UI asset directory (`index.html`, `support.js`, ...). |
 | `ONRECORD_PRICES_CACHE` | `artifacts/prices` | On-disk cache dir for fetched EOD price series (`onrecord.ingest.prices`). |
 | `FMP_API_KEY` | *(unset)* | Optional Financial Modeling Prep API key, used as a fallback price source when the primary (stooq) source fails. |
 | `PORT` | *(Railway-injected)* | Bind port; never set this manually in Railway — the platform provides it. |
 
-Both the index-missing and corpus-missing cases degrade gracefully rather
-than crashing the deploy: with neither available, `/api/search` and
-`/api/tickers` return a `503` with an actionable message while `/` (the
-UI) and `/health` keep serving normally.
+Both the index-missing and corpus-missing/corrupt cases degrade gracefully
+rather than crashing the deploy: with neither a usable index nor a usable
+corpus snapshot, `/api/search` and `/api/tickers` return a `503` with an
+actionable message while `/` (the UI) and `/health` keep serving normally.

@@ -24,6 +24,18 @@ RUN uv sync --no-dev --frozen
 ENV PORT=8000
 EXPOSE 8000
 
+# Container-scoped default: the merged corpus snapshot is baked into the
+# image at exactly this path (corpus/v1/corpus.jsonl.gz is git-tracked,
+# not .dockerignore'd) -- so every deploy from THIS image bootstraps its
+# index automatically on a cold start (ONRECORD_INDEX missing/unbuilt),
+# with no extra Railway env var configuration required. This is
+# image-local only: onrecord/api.py's own default for ONRECORD_CORPUS
+# stays unset (post-review fix, .tdd-swarm/reports/T-015-review.md
+# Important-1 "deploy-trap" — see README.md's Deploy section), so local
+# runs / the frozen test suite are unaffected; override this at deploy
+# time (Railway env var) to point at a different snapshot if ever needed.
+ENV ONRECORD_CORPUS=corpus/v1/corpus.jsonl.gz
+
 # Bind 0.0.0.0 (never 127.0.0.1 — Railway's proxy connects externally) on
 # $PORT, per tickets/T-015.md's Deploy contract (see also README.md).
 CMD ["sh", "-c", "uv run uvicorn onrecord.api:app --host 0.0.0.0 --port ${PORT}"]
