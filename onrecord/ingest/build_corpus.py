@@ -170,13 +170,16 @@ def _git_sha() -> str:
 def read_manifest(dir_path: str | Path) -> dict | None:
     """Read `MANIFEST_FILENAME` out of `dir_path`. Tolerant contract: never
     raises -- returns `None` for a missing directory, a missing manifest
-    file, corrupt JSON, or JSON that decodes to something other than a
-    (schema-unvalidated) object."""
+    file, corrupt JSON, non-UTF-8 bytes (e.g. a truncated/corrupted
+    download), or JSON that decodes to something other than a
+    (schema-unvalidated) object. `ValueError` covers both
+    `json.JSONDecodeError` and `UnicodeDecodeError` (review IMP-1: the
+    latter is a `ValueError` subclass and was previously escaping)."""
     manifest_path = Path(dir_path) / MANIFEST_FILENAME
     try:
         with manifest_path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
         return None
@@ -187,6 +190,16 @@ def _write_manifest(dir_path: Path, manifest: dict) -> None:
     dir_path.mkdir(parents=True, exist_ok=True)
     manifest_path = dir_path / MANIFEST_FILENAME
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _sha256_of_file(path: Path) -> str:
+    """Stream-hash `path` in fixed-size chunks (review MIN-5: hash the
+    written file's bytes off disk, not an in-memory buffer)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_corpus(
@@ -204,13 +217,25 @@ def build_corpus(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     corpus_path = out_dir / "corpus.jsonl.gz"
-    payload = "".join(json.dumps(asdict(doc)) + "\n" for doc in docs).encode("utf-8")
-    # mtime=0 pins the gzip header so byte-identical raw input produces a
-    # byte-identical corpus.jsonl.gz (and equal snapshot_sha256) regardless
-    # of wall-clock build time (ORCHESTRATOR RULING, locked; see module
-    # docstring).
-    compressed = gzip.compress(payload, mtime=0)
-    corpus_path.write_bytes(compressed)
+    # Streaming write (review MIN-1): a single buffered `gzip.compress()`
+    # over the whole corpus keeps ~3.2x the payload alive in memory at once
+    # (~2.2GB transient at the 256K-doc rebuild scale). Writing doc-by-doc
+    # to a binary `GzipFile(fileobj=..., filename="", mtime=0)` is verified
+    # byte-for-byte identical to `gzip.compress(payload, mtime=0)` (same
+    # FLG=0x00/mtime=0/OS=255 header, same compressed body) while never
+    # holding more than one doc's encoded bytes at a time. `filename=""` is
+    # required -- omitting it makes GzipFile pick up `fileobj.name` and set
+    # the FNAME flag instead, changing the bytes. Text must NOT be routed
+    # through `io.TextIOWrapper` here: its `flush()` calls
+    # `GzipFile.flush()` with the default `Z_SYNC_FLUSH`, which injects
+    # sync-flush markers into the compressed stream and breaks exact
+    # byte-reproducibility (mtime=0 still pins the header either way, but
+    # the compressed body differs) -- writing pre-encoded bytes chunks
+    # directly avoids that call path entirely.
+    with corpus_path.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0) as gz:
+            for doc in docs:
+                gz.write((json.dumps(asdict(doc)) + "\n").encode("utf-8"))
 
     index = InvertedIndex.build(docs)
     index.save(index_out)
@@ -222,7 +247,7 @@ def build_corpus(
         "doc_count": len(docs),
         "source_counts": source_counts,
         "git_sha": _git_sha(),
-        "snapshot_sha256": hashlib.sha256(compressed).hexdigest(),
+        "snapshot_sha256": _sha256_of_file(corpus_path),
     }
     _write_manifest(out_dir, manifest)
     _write_manifest(index_out, manifest)
