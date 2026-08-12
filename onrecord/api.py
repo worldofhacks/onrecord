@@ -27,6 +27,16 @@ before touching this file. Summary of the seams it pins:
   `Query(ge=1)`); `k <= 0` 422s — mirrors `onrecord/cli.py`'s `--k`
   convention. Post-review contract extension, see
   `.tdd-swarm/reports/T-013-test.md`.
+- `op=AND` under the BM25 path (wave-4 adjudication, see
+  `.tdd-swarm/reports/T-013-test.md`'s "op=AND under BM25" section +
+  `.tdd-swarm/LESSONS.md`): `ranked_search` is always OR-union semantics
+  internally, so `op="AND"` post-filters its full ranked candidate list
+  down to the conjunctive doc-id set (`boolean_search(index, q, "AND")`'s
+  matches) before metadata filtering/truncation — preserving BM25's
+  descending score order (op=OR is unmodified: it's exactly
+  `ranked_search`'s own union). Result scores are always real positive
+  BM25 floats once `ranked_search` is the active (feature-detected) path,
+  never the boolean-fallback era's flat `0.0`.
 - `/api/tickers` is registry-driven (`onrecord.registry.load()`), not
   corpus-driven, imported as `from onrecord import registry` and called
   fresh per-request (never cached) so tests can monkeypatch
@@ -189,7 +199,26 @@ async def search(
 
     ranked_search = _resolve_search_fn()
     if ranked_search is not None:
-        hits = ranked_search(index, q, k=k)
+        # BM25 path (T-011 active). `ranked_search` itself always computes
+        # OR-union semantics; per the wave-4 adjudication (see module
+        # docstring + tests/unit/test_api.py's "Extension -- op=AND under
+        # BM25"), op=AND narrows that union down to the conjunctive
+        # candidate set (docs containing ALL analyzed query terms -- the
+        # same doc-id set boolean_search(index, q, "AND") matches) BEFORE
+        # truncation, keeping the same BM25 scores/ordering. Request every
+        # ranked candidate (k=index.doc_count(), an upper bound) rather than
+        # just the caller's k: ranked_search already scores its full union
+        # candidate set internally regardless of `k` (only its own top-k
+        # *selection* step is k-bounded), so this costs no extra scoring
+        # work, and it keeps AND-narrowing + metadata filtering happening
+        # before the final k-truncation below, per the pinned
+        # filter-then-truncate order. Post-filtering a score-sorted sequence
+        # preserves its descending order, so op=AND's results stay
+        # correctly BM25-ranked.
+        hits = ranked_search(index, q, k=index.doc_count())
+        if op == "AND":
+            and_ids = {r.doc_id for r in boolean_search(index, q, "AND")}
+            hits = [hit for hit in hits if hit.doc_id in and_ids]
     else:
         hits = boolean_search(index, q, op)
 

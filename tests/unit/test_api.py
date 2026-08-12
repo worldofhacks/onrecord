@@ -50,18 +50,18 @@ when more than one is given (never OR'd together).
   - `mode` (default `"lexical"`): the only mode this ticket implements for
     real.
     - `mode=lexical`: retrieval order is: (a) run the query — feature-
-      detect `onrecord.search.ranked.ranked_search` via import (T-011);
-      if importable, use it (`ranked_search(index, q, k=k)` — real scores,
-      untestable in THIS worktree since T-011 hasn't merged here yet, left
-      to the implementer per the pinned contract, to be re-verified at
-      wave-5 integration once T-011 lands); else fall back to
-      `boolean_search(index, q, op)` with `SearchResult.score` always
-      `0.0` (the only path this worktree can exercise, and what every
-      concrete test below exercises) — (b) apply metadata filters
-      (source/venue/ticker/jurisdiction) against each hit's `Doc` — (c)
-      truncate to `k`. 200 body: exactly `{"query": q, "mode": "lexical",
-      "results": [...]}, each result dict with EXACTLY the 9 keys
-      `{doc_id, score, snippet, date, source_type, venue_type,
+      detect `onrecord.search.ranked.ranked_search` via import (T-011).
+      **Wave-4 merge landed T-011 into this repair worktree
+      (`wt-T-013R`), so `ranked_search` IS importable and IS the active
+      path here** — see "Extension — op=AND under BM25 (wave-4
+      adjudication)" below for the orchestrator-adjudicated `op`/score
+      contract this activates. Only in a worktree where T-011 genuinely
+      isn't merged does this fall back to `boolean_search(index, q, op)`
+      with `SearchResult.score` pinned to `0.0` — (b) apply metadata
+      filters (source/venue/ticker/jurisdiction) against each hit's `Doc`
+      — (c) truncate to `k`. 200 body: exactly `{"query": q, "mode":
+      "lexical", "results": [...]}, each result dict with EXACTLY the 9
+      keys `{doc_id, score, snippet, date, source_type, venue_type,
       jurisdiction, ticker, deep_link}` (SearchResult's 3 fields + 6 of
       Doc's metadata fields per the ticket's AC-1 list; `speaker` is
       deliberately excluded — not in the ticket's field list).
@@ -78,8 +78,10 @@ when more than one is given (never OR'd together).
     SENSITIVE, uppercase only; `"and"`/`"or"`/`"Or"`/any other value all
     422 (see "Extension — op whitelist + k lower bound" below; this was
     unpinned at first freeze, closed in a post-review fix round). Once
-    validated, threaded straight into the boolean-fallback path's
-    `boolean_search(index, q, op)` call.
+    validated: in the boolean-fallback path, threaded straight into
+    `boolean_search(index, q, op)`; in the (now-active, this worktree)
+    BM25 path, see "Extension — op=AND under BM25 (wave-4 adjudication)"
+    below for what `op` means once real ranking is involved.
   - `k` (default `20`, per the ticket's own example): must be a positive
     integer (`>= 1`) — `k <= 0` is 422 (see "Extension" below; also
     unpinned at first freeze). Truncation happens AFTER metadata filtering
@@ -241,6 +243,87 @@ the exception straight into the test process, which would otherwise turn
 "op=XOR should 422, not 500" into an uncaught-exception test ERROR instead
 of a clean, readable `assert resp.status_code == 422` failure against an
 actual `500` response.
+
+Extension — `op=AND` under BM25 (wave-4 adjudication)
+--------------------------------------------------------
+Trigger: wave-4 merge landed T-011's `ranked_search` into the swarm state
+this repair worktree (`wt-T-013R`, branch `ticket/T-013R-and-ranking`) is
+branched from — `onrecord.search.ranked.ranked_search` is genuinely
+importable here, so `onrecord/api.py`'s T-011 feature-detect now takes the
+real-scoring path for every `mode=lexical` request, not the boolean
+fallback. Three of the original AC-1 pins baked in boolean-fallback-era
+assumptions (`SearchResult.score` always `0.0`; `op=AND` implemented as a
+`boolean_search` intersection) that are no longer the active code path in
+this worktree and, per the current `onrecord/api.py`, `op` is not threaded
+into the ranked call at all (`ranked_search(index, q, k=k)` — `op` is
+accepted and validated but silently ignored once ranking is real), so
+`op=AND` currently returns the same OR-semantics union as `op=OR`. This is
+a known, anticipated gap — not a new regression to chase — pending an
+implementation-side fix in a later round; this repair worktree's job is
+only to re-pin the *tests* to the adjudicated target contract so that fix
+has a frozen target to build against.
+
+**Orchestrator adjudication** (relayed by the coordinator; recorded in
+`.tdd-swarm/LESSONS.md`):
+- `op=AND` = a conjunctive candidate set — docs containing ALL analyzed
+  query terms (the same doc-id set `boolean_search(index, q, "AND")` would
+  have matched) — THEN BM25-ranked (summed per-term `bm25_score` over that
+  narrowed candidate set, top-k via the same heap/tie-break machinery
+  `ranked_search` already uses for `op=OR`'s union).
+- `op=OR` = BM25 over the union candidate set — this is exactly what
+  `ranked_search` already computes unmodified; `op=OR`'s behavior doesn't
+  change.
+- Result scores are ALWAYS real BM25 floats once `ranked_search` is the
+  active path (`>0` for any matched doc — T-011's own AC-4 guarantees BM25
+  never returns a non-positive score for a real term match) — never the
+  boolean-fallback era's flat `0.0`, for either `op` value.
+
+**Three pins updated to the adjudicated target** (all still
+`spec(T-013:AC-1)` — this is `/api/search`'s existing request-handling
+correctness AC, not a new one; the underlying doc-id-set expectations for
+AND/OR are UNCHANGED from the pre-BM25 pins, since the adjudicated
+candidate-set logic is identical to `boolean_search`'s — only the score
+shape/ordering assertions are new):
+- `test_search_returns_full_field_set_with_correct_values`: `d1["score"]`
+  was pinned `== 0.0`; now pinned `isinstance(..., float) and > 0.0`.
+- `test_search_op_and_narrows_to_docs_containing_all_terms`: doc-id-set
+  assertion (`{"d2", "d5"}`) is UNCHANGED; added assertions that every
+  returned score is a positive float and the score sequence is
+  non-increasing (BM25-ranked, not insertion/arbitrary order).
+- `test_search_valid_uppercase_op_still_works` (both `AND`/`OR`
+  parametrizations, for symmetry — the score contract applies to both, not
+  just `AND`): doc-id-set assertions per `op` are UNCHANGED; added the same
+  positive-float + non-increasing-score assertions.
+
+**Confirmed against this worktree's current `onrecord/api.py`** (which
+resolves `ranked_search` but never threads `op` into it — see api.py:190-
+194, `ranked_search(index, q, k=k)` ignores the `op` parameter entirely):
+2 of the 3 re-pinned tests are genuinely RED, 1 flips to GREEN:
+- `test_search_op_and_narrows_to_docs_containing_all_terms` and
+  `test_search_valid_uppercase_op_still_works[AND]` **FAIL** — both on the
+  doc-id-SET assertion specifically (`{"d1","d2","d3","d5"}` returned
+  instead of `{"d2","d5"}`), proving `op=AND` is currently a no-op once
+  the ranked path is active — exactly the implementation gap this
+  extension exists to pin as a frozen target for a later fix round. The
+  new score assertions in both tests are NOT what fails — `ranked_search`
+  already returns real, positive, descending-sorted BM25 scores
+  unconditionally (independently confirmed via a direct
+  `onrecord.rank.bm25`/`ranked_search` call: `d2=1.132 > d5=1.000` for the
+  `AND` candidate pair, both positive — the pin is mathematically
+  achievable once `op` is actually threaded through).
+- `test_search_returns_full_field_set_with_correct_values` **PASSES**
+  as re-pinned — this one was purely a stale assertion (the old test
+  hard-coded the boolean-fallback era's `score == 0.0`, which no longer
+  holds now that `ranked_search` is the active path), not an
+  implementation bug: `mode=lexical`'s default `op="OR"` path was already
+  correctly BM25-scoring every result, so realigning the assertion to
+  `> 0.0` makes it pass immediately, with no implementation change
+  needed. This is the expected, correct outcome for a pin that was stale
+  rather than exposing a real gap.
+
+Net: **2 new RED failures** (`op=AND`'s narrowing gap) out of these 3
+re-pinned tests; the full-repo/file-level failure count reported by the
+Test Agent reflects this.
 
 Fixture corpora
 ----------------
@@ -514,7 +597,11 @@ def test_search_returns_full_field_set_with_correct_values(tmp_path, monkeypatch
     assert d1["ticker"] is None
     assert d1["deep_link"] == "https://youtube.com/watch?v=d1"
     assert isinstance(d1["score"], float)
-    assert d1["score"] == 0.0
+    assert d1["score"] > 0.0, (
+        "wave-4 adjudication: mode=lexical is now BM25-ranked in this "
+        "worktree (T-011's ranked_search is active) -- score is a real, "
+        "positive BM25 float, never the boolean-fallback era's flat 0.0"
+    )
     assert isinstance(d1["snippet"], str) and d1["snippet"] != ""
 
     d2 = by_id["d2"]
@@ -572,7 +659,11 @@ def test_search_multiple_filters_combine_with_and_not_or(tmp_path, monkeypatch):
 
 
 def test_search_op_and_narrows_to_docs_containing_all_terms(tmp_path, monkeypatch):
-    # spec(T-013:AC-1)
+    # spec(T-013:AC-1) -- wave-4 adjudication (see module docstring's
+    # "Extension -- op=AND under BM25"): AND = the same conjunctive
+    # candidate set boolean_search(index, q, "AND") would match, THEN
+    # BM25-ranked. Doc-id-set expectation is unchanged from the
+    # pre-BM25 pin; score assertions are new.
     api_module = _api_module()
     index_dir = _build_index(tmp_path, AC1_DOCS)
     with _client(api_module, monkeypatch, index_dir) as client:
@@ -582,7 +673,19 @@ def test_search_op_and_narrows_to_docs_containing_all_terms(tmp_path, monkeypatc
         )
 
     assert resp.status_code == 200
-    assert {r["doc_id"] for r in resp.json()["results"]} == {"d2", "d5"}
+    results = resp.json()["results"]
+    assert {r["doc_id"] for r in results} == {"d2", "d5"}, (
+        "op=AND must narrow to docs containing ALL query terms -- the "
+        "conjunctive candidate set, not the OR union"
+    )
+
+    scores = [r["score"] for r in results]
+    assert all(isinstance(s, float) and s > 0.0 for s in scores), (
+        "every op=AND result must carry a real, positive BM25 score"
+    )
+    assert scores == sorted(scores, reverse=True), (
+        "op=AND results must come back BM25-ranked (descending score), not in some other order"
+    )
 
 
 def test_search_default_op_is_or(tmp_path, monkeypatch):
@@ -644,7 +747,11 @@ def test_search_invalid_op_returns_422_never_500(tmp_path, monkeypatch, op):
 @pytest.mark.parametrize("op", ["AND", "OR"])
 def test_search_valid_uppercase_op_still_works(tmp_path, monkeypatch, op):
     # spec(T-013:AC-1) -- guards against an over-eager fix that rejects the
-    # legitimate values while closing the XOR/lowercase hole
+    # legitimate values while closing the XOR/lowercase hole. Re-pinned
+    # under wave-4 adjudication (module docstring's "Extension -- op=AND
+    # under BM25"): doc-id-set expectations per op are unchanged; score
+    # assertions are new and apply to both AND and OR (BM25 is now always
+    # the active path in this worktree).
     api_module = _api_module()
     index_dir = _build_index(tmp_path, AC1_DOCS)
     with _client(api_module, monkeypatch, index_dir) as client:
@@ -653,8 +760,17 @@ def test_search_valid_uppercase_op_still_works(tmp_path, monkeypatch, op):
         )
 
     assert resp.status_code == 200
+    results = resp.json()["results"]
     expected = {"d2", "d5"} if op == "AND" else {"d1", "d2", "d3", "d5"}
-    assert {r["doc_id"] for r in resp.json()["results"]} == expected
+    assert {r["doc_id"] for r in results} == expected
+
+    scores = [r["score"] for r in results]
+    assert all(isinstance(s, float) and s > 0.0 for s in scores), (
+        f"op={op!r} results must carry real, positive BM25 scores"
+    )
+    assert scores == sorted(scores, reverse=True), (
+        f"op={op!r} results must come back BM25-ranked (descending score)"
+    )
 
 
 @pytest.mark.parametrize("k", [0, -1, -5])

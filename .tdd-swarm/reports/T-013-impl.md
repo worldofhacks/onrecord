@@ -1,9 +1,91 @@
 # T-013 Implementation Agent Report — FastAPI layer (/api/search, /api/tickers, /api/metrics, /api/answer, /health)
 
-**Status:** DONE — all 31 tests in `tests/unit/test_api.py` pass (21
-original + 10 added by the post-review contract extension at `5d32cd3`);
-full repo suite green at 214 passing (183 baseline + 31); all Tier-1 local
-gates green.
+**Status:** DONE — all 31 tests in `tests/unit/test_api.py` pass; full repo
+suite green at 261 passing; all Tier-1 local gates green. See "Update —
+repair round: op=AND under BM25" below for the current state (worktree
+`wt-T-013R`, branch `ticket/T-013R-and-ranking`); earlier updates preserved
+beneath it.
+
+## Update — repair round: op=AND under BM25 (wave-4 adjudication)
+
+**Trigger:** wave-4 merge landed T-011's `ranked_search` into the swarm
+state this repair worktree is branched from, activating `onrecord/api.py`'s
+T-011 feature-detect for real (previous rounds ran in
+`/Users/quietguy/Documents/Dev/Gauntlet/wt-T-013`, where T-011 hadn't merged
+yet and every test exercised the `boolean_search` fallback). The
+now-active `ranked_search` is unconditionally OR-union semantics
+internally and the prior `hits = ranked_search(index, q, k=k)` call never
+threaded `op` into it at all, so `op=AND` silently returned the same
+results as `op=OR` — a no-op. Test Agent re-pinned 3 AC-1 tests to the
+orchestrator-adjudicated target contract (relayed by the coordinator,
+recorded in `.tdd-swarm/LESSONS.md` and this test file's own "Extension —
+`op=AND` under BM25" section) at `897aa8b`: `op=AND` = the conjunctive
+candidate set (docs containing ALL analyzed query terms, identical to
+`boolean_search(index, q, "AND")`'s matches) THEN BM25-ranked; `op=OR`
+unchanged (exactly `ranked_search`'s own union); scores always real
+positive BM25 floats once `ranked_search` is active, never `0.0`. 2 of the
+3 re-pinned tests were genuinely RED against the unfixed `api.py`
+(`test_search_op_and_narrows_to_docs_containing_all_terms`,
+`test_search_valid_uppercase_op_still_works[AND]`), both failing on the
+doc-id-set assertion specifically — the new score assertions were never
+the failure (`ranked_search` already returned real, positive,
+descending-sorted BM25 scores unconditionally).
+
+**Fix (`onrecord/api.py` only, same file-scope rule as prior rounds):** in
+the BM25 branch of `/api/search`, request `ranked_search(index, q,
+k=index.doc_count())` — an upper bound on the full ranked candidate list,
+not just the caller's `k` — then, when `op == "AND"`, post-filter that
+list down to `{r.doc_id for r in boolean_search(index, q, "AND")}`.
+Filtering a score-sorted sequence preserves its descending order, so
+`op=AND`'s narrowed results stay correctly BM25-ranked with no
+recomputation. `op == "OR"` is unmodified (the full ranked list already
+matches OR semantics). Metadata filtering (`_apply_filters`) and the final
+`hits[:k]` truncation both still happen after this narrowing, preserving
+the pinned filter-then-truncate order for both `op` values — this also
+incidentally fixes a latent (untested-until-now) ordering gap in the prior
+round's ranked-path code, which passed the caller's `k` straight into
+`ranked_search` and truncated *before* metadata filters ran, risking fewer
+than `k` final results whenever a search combined the BM25 path with an
+active `source`/`venue`/`ticker`/`jurisdiction` filter (no existing test
+combined the two, so this never surfaced before). Requesting
+`index.doc_count()` costs no extra scoring work: `ranked_search` already
+scores every union candidate internally regardless of the `k` argument
+(only its own top-k `heapq.nsmallest` *selection* step is `k`-bounded) —
+confirmed by reading `onrecord/search/ranked.py`'s implementation directly
+rather than assuming.
+
+I considered the Test Agent's alternate suggestion (open-coding the
+BM25-summing loop directly over a pre-narrowed candidate set in
+`onrecord/search/ranked.py` via a new `allowed_ids` parameter, per the
+coordinator's "or `onrecord/search/ranked.py` if cleaner" latitude) but
+chose the post-filter approach in `api.py` instead: `ranked_search`'s own
+module docstring states it is deliberately self-contained ("`boolean.py`
+is not touched or imported from here... per the ticket's file scope"), and
+post-filtering needs zero changes to that already-frozen, already-tested
+T-011 module — strictly less surface area, same asymptotic cost (scoring
+is already unconditional on `k`), and identical resulting scores (both
+paths compute the exact same BM25 formula over full-corpus `N`/`df`/
+`avg_doc_length` stats; narrowing only which candidates get returned, not
+how they're scored).
+
+**Verification (this round):**
+- `uv run pytest tests/unit/test_api.py -v` → **31/31 passed** (both
+  previously-RED tests now green, `op=OR`'s pre-existing behavior
+  unaffected).
+- `.tdd-swarm/run-local-gates.sh . tickets/T-013.md` → format clean, lint
+  clean, **261 passed**, spec-lint OK, **ALL LOCAL GATES GREEN**.
+- Live sanity check (in-process `TestClient`, `AC1_DOCS`-equivalent style
+  query): confirmed `op=AND` on a 2-term query returns exactly the
+  conjunctive doc-id subset with positive, non-increasing BM25 scores,
+  matching the adjudicated contract.
+- No `BLOCKED(TEST_DISPUTE)` — the adjudicated contract was unambiguous
+  and directly implementable; no test edits were needed or made.
+
+Commit: `fix(T-013R): thread op=AND through BM25 ranking (conjunctive
+filter + rank)` (staged exactly `onrecord/api.py`, on branch
+`ticket/T-013R-and-ranking`).
+
+---
 
 ## Update — review follow-up (op whitelist + k lower bound)
 
