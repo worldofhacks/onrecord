@@ -22,31 +22,51 @@ so both "not found" cases are normalized into one clean `pytest.fail(...)`,
 never an uncaught ImportError / pytest collection error for the file as a
 whole.
 
+FIX ROUND (post-freeze test-design review, see
+.tdd-swarm/reports/T-027-test-review.md at commit f7a0590; verdict FIX-FIRST)
+-----------------------------------------------------------------------
+This round is purely additive/corrective within the original test scopes.
+Closed: C-1 (end-of-string marker orphaning), I-1 (multi-marker orphaning),
+I-2 (unenforceable abbreviation-list contract), I-3 (orchestrator ruling on
+spaceless CJK), M-1 (empty-claim check should use `.strip()`), M-2 (closed
+automatically by C-1's count invariant), M-3 (decimal test's mis-scoped
+spec tag), M-4 (terminated + trailing unterminated fragment), M-5 (widen the
+AC-4 alphabet so it also bites on I-2-style heuristics). See each test's
+comment for the finding it closes.
+
 Test Agent design decisions (pinning what the ticket leaves to the frozen
 tests, per T-027's own "the EXACT rule is whatever the frozen tests pin")
 -----------------------------------------------------------------------
-1. Fixed abbreviation list: the ticket's Context gives the list via an
-   "(e.g. ...)" parenthetical -- "Inc.", "No.", "U.S.", "Corp.", "Co." --
-   which this suite treats as the required minimum (AC-2's "every entry in
-   the fixed abbreviation list" is exercised against exactly these five).
-   Additions beyond this set are a contract change per the ticket, not
-   tested here.
-2. Uniform whitespace-or-end-of-string rule across BOTH terminator families:
-   the ticket states ONE combined rule -- "split on `.` `!` `?` and their
-   CJK/full-width counterparts `。` `！` `？` ... followed by whitespace or
-   end-of-string" -- read literally as one regex-shaped condition applying
-   identically to all six characters (simplest reading, matches the
-   ticket's "keep it simple"). CJK fixtures below therefore include a space
-   after each CJK terminator to actually trigger a split, exactly as ASCII
-   fixtures do -- this is a deliberate, documented choice, not an
-   accident of the fixture text.
-3. Citation-marker attachment (AC-1): a marker immediately following a
-   terminator (across the intervening whitespace) is absorbed into the
-   PRECEDING claim rather than starting a new one -- pinned via substring
-   containment (marker text is `in` exactly one of the resulting claims),
-   not via exact-string equality, so this suite does not over-constrain
-   incidental internal spacing between sentence text and its marker (a
-   detail the ticket's Contract section does not pin).
+1. Fixed abbreviation list is a named module constant `ABBREVIATIONS`
+   (`onrecord.rag.claims.ABBREVIATIONS`) -- a non-empty iterable of strings.
+   The ticket's Context names the list only via an "(e.g. ...)" parenthetical
+   -- "Inc.", "No.", "U.S.", "Corp.", "Co." -- which this suite pins as the
+   required minimum content (both as literal pinned sentences AND, per the
+   review's I-2, exercised generically by iterating the real constant so
+   later additions stay covered). The constant's EXISTENCE and non-emptiness
+   is asserted directly: a heuristic-only implementation with no such
+   constant fails loudly rather than silently passing (review I-2).
+2. CJK terminator splitting is UNCONDITIONAL -- does not require a following
+   whitespace or end-of-string, unlike ASCII `.`/`!`/`?` (ORCHESTRATOR RULING,
+   locked, closing review I-3): real Japanese/Chinese prose does not space
+   after `。`/`！`/`？`, and full-width terminators never occur inside
+   decimals or the fixed abbreviation list the way ASCII `.` does, so they
+   carry none of the ambiguity that motivates the whitespace guard on ASCII
+   -- consistent with the T-002 CJK-aware analyzer precedent. ASCII
+   terminators keep the whitespace-or-end-of-string requirement (protects
+   abbreviations/decimals). Both the original spaced CJK fixtures and the
+   new spaceless ones below are pinned -- spacing must not change the
+   outcome for CJK terminators either way.
+3. Citation-marker attachment (AC-1): one or more markers immediately
+   following a terminator (across intervening whitespace, with or without
+   whitespace between the markers themselves) are absorbed into the
+   PRECEDING claim rather than starting a new one or leaking into the next
+   -- this includes a marker (or chain of markers) sitting at the very end
+   of the input (review C-1) and multiple markers on one sentence (review
+   I-1). Pinned via substring containment (marker text is `in` exactly one
+   of the resulting claims) for the base 3-sentence case, and via exact
+   equality for the dedicated end-of-string / multi-marker cases below,
+   where the whole point is that no extra marker-only claim exists.
 """
 
 from __future__ import annotations
@@ -83,7 +103,8 @@ def _claims_module():
 
 # --------------------------------------------------------------------------
 # AC-1 -- pinned cases: 3-sentence + markers, `!`/`?` terminators,
-# no-terminator text, empty/whitespace-only input, per-claim trimming.
+# no-terminator text, empty/whitespace-only input, per-claim trimming,
+# end-of-string / multi-marker attachment, terminated+fragment mixes.
 # --------------------------------------------------------------------------
 
 
@@ -167,10 +188,72 @@ def test_claims_have_no_leading_or_trailing_whitespace():
         assert claim != ""
 
 
+def test_marker_at_end_of_string_stays_attached_to_its_sentence():
+    # spec(T-027:AC-1) -- closes review finding C-1 (Critical).
+    # A trailing `[n]` marker at the very end of the input must NOT become
+    # its own standalone claim (a fully-cited single-sentence answer must
+    # segment as ONE claim, not two, or T-023's grounding math reports
+    # "partial" for what should be "grounded").
+    claims_mod = _claims_module()
+    text = "The board voted to approve. [1]"
+
+    assert claims_mod.split_claims(text) == ["The board voted to approve. [1]"]
+
+
+def test_end_of_string_marker_in_a_two_sentence_paragraph():
+    # spec(T-027:AC-1) -- closes review finding C-1 (Critical); second
+    # sentence's marker sits at end-of-string, same failure class as above
+    # but with a preceding claim present too.
+    claims_mod = _claims_module()
+    text = "Dominion filed for a rate increase. [1] The hearing concluded. [2]"
+
+    assert claims_mod.split_claims(text) == [
+        "Dominion filed for a rate increase. [1]",
+        "The hearing concluded. [2]",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Load grew 12 percent. [1] [2] Regulators agreed. [3]",
+            ["Load grew 12 percent. [1] [2]", "Regulators agreed. [3]"],
+        ),
+        (
+            "Load grew 12 percent. [1][2] Regulators agreed. [3]",
+            ["Load grew 12 percent. [1][2]", "Regulators agreed. [3]"],
+        ),
+    ],
+)
+def test_multiple_markers_on_one_sentence_stay_attached(text, expected):
+    # spec(T-027:AC-1) -- closes review finding I-1 (Important). A sentence
+    # cited by more than one chunk (T-023's citations[] is built from "each
+    # DISTINCT valid n") must keep ALL of its markers attached, spaced or
+    # not, never orphaning the second+ marker into the following claim.
+    claims_mod = _claims_module()
+
+    assert claims_mod.split_claims(text) == expected
+
+
+def test_terminated_sentence_followed_by_unterminated_fragment_yields_two_claims():
+    # spec(T-027:AC-1) -- closes review finding M-4 (Minor). Mirrors a
+    # max_tokens-cutoff shape (plan-review M-6 in tickets/T-023.md): a
+    # complete sentence followed by a trailing fragment with no terminator
+    # at all must still yield the completed claim plus one final claim for
+    # the fragment -- not merge them, not drop the fragment.
+    claims_mod = _claims_module()
+    text = "The filing was approved. A second fragment with no period"
+
+    assert claims_mod.split_claims(text) == [
+        "The filing was approved.",
+        "A second fragment with no period",
+    ]
+
+
 # --------------------------------------------------------------------------
-# AC-2 -- abbreviation non-splits (fixed list) + decimal-number adversarial
-# coverage (a plain instance of the same "period not followed by whitespace/
-# EOS" base rule, exercised here alongside abbreviations).
+# AC-2 -- abbreviation non-splits (fixed list, enforced as a module
+# constant) + decimal-number adversarial coverage.
 # --------------------------------------------------------------------------
 
 
@@ -202,8 +285,51 @@ def test_each_fixed_abbreviation_does_not_split_before_the_next_sentence(first_s
     assert claims == [first_sentence, "The commission scheduled a hearing next month."]
 
 
+def test_abbreviations_module_constant_drives_every_entry():
+    # spec(T-027:AC-2) -- closes review finding I-2 (Important). The
+    # ticket makes the list a first-class contract term ("The list is a
+    # module constant -- additions are contract changes"); this test drives
+    # the check off the REAL constant (not a Test-Agent guess at its
+    # contents) so every entry -- including any added later -- is covered,
+    # and a heuristic-only implementation that ships no such constant fails
+    # loudly instead of silently passing.
+    claims_mod = _claims_module()
+    abbreviations = getattr(claims_mod, "ABBREVIATIONS", None)
+    if not abbreviations:
+        pytest.fail(
+            "onrecord.rag.claims.ABBREVIATIONS module constant is missing or "
+            "empty -- AC-2 requires a fixed abbreviation list (a module "
+            "constant), not a heuristic"
+        )
+
+    for abbr in abbreviations:
+        text = f"Prefix {abbr} tail. Next sentence follows."
+        claims = claims_mod.split_claims(text)
+        assert claims == [f"Prefix {abbr} tail.", "Next sentence follows."], (
+            f"abbreviation {abbr!r} from ABBREVIATIONS did not protect its "
+            f"period from splitting; got {claims!r}"
+        )
+
+
+def test_capitalized_non_abbreviation_word_does_not_prevent_split():
+    # spec(T-027:AC-2) -- closes review finding I-2's companion negative
+    # case (Important). A short Titlecase word that merely LOOKS like an
+    # abbreviation (and is not in the fixed list) must not suppress the
+    # split -- kills a "protect any capitalized short token" heuristic in
+    # place of the real fixed list, which would mis-segment ordinary corpus
+    # prose ("Acme Bank", "Dominion Energy", ...) constantly.
+    claims_mod = _claims_module()
+    text = "She works at Acme Bank. Then she left."
+
+    assert claims_mod.split_claims(text) == ["She works at Acme Bank.", "Then she left."]
+
+
 def test_decimal_number_period_does_not_split():
-    # spec(T-027:AC-2)
+    # spec(T-027:AC-1) -- Contract-derived (tickets/T-027.md's base "period
+    # not followed by whitespace/end-of-string" rule), not the fixed
+    # abbreviation list AC-2 describes; retagged per review finding M-3
+    # (Minor). Kept here, adjacent to the abbreviation cases, since it is
+    # thematically another "a period that must not split" adversarial case.
     claims_mod = _claims_module()
     text = "The plant requested 240.5 MW of new capacity. The filing was approved."
 
@@ -216,7 +342,10 @@ def test_decimal_number_period_does_not_split():
 
 
 # --------------------------------------------------------------------------
-# AC-3 -- CJK / full-width terminators (plan-review M-7).
+# AC-3 -- CJK / full-width terminators (plan-review M-7). Splitting is
+# UNCONDITIONAL for CJK terminators (orchestrator ruling, locked -- see
+# module docstring design decision #2, closing review I-3): both spaced and
+# spaceless forms are pinned below and must produce the same claims.
 # --------------------------------------------------------------------------
 
 
@@ -248,6 +377,36 @@ def test_cjk_exclamation_and_question_terminators_split(text, expected):
     assert claims_mod.split_claims(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "今日は晴れです。明日は雨です。",
+            ["今日は晴れです。", "明日は雨です。"],
+        ),
+        (
+            "すごい発表でした！次は質問の時間です。",
+            ["すごい発表でした！", "次は質問の時間です。"],
+        ),
+        (
+            "会議はいつですか？来週の月曜日です。",
+            ["会議はいつですか？", "来週の月曜日です。"],
+        ),
+    ],
+)
+def test_cjk_terminators_split_without_a_following_whitespace(text, expected):
+    # spec(T-027:AC-3) -- closes review finding I-3 (Important,
+    # ORCHESTRATOR RULING, locked). Real Japanese/Chinese prose does not
+    # space after `。`/`！`/`？`; this is the dominant real-world CJK shape
+    # tickets/T-027.md's plan-review M-7 was written to fix ("the ASCII-only
+    # rule yields one giant claim and zero grounded citations" -- the same
+    # failure mode reappears here if CJK terminators are given the ASCII
+    # whitespace-or-EOS requirement).
+    claims_mod = _claims_module()
+
+    assert claims_mod.split_claims(text) == expected
+
+
 def test_mixed_ascii_and_cjk_paragraph_segments_at_both_terminator_families():
     # spec(T-027:AC-3)
     claims_mod = _claims_module()
@@ -264,12 +423,20 @@ def test_mixed_ascii_and_cjk_paragraph_segments_at_both_terminator_families():
 
 # --------------------------------------------------------------------------
 # AC-4 -- property test (hypothesis): rejoining claims preserves all
-# non-whitespace input characters, no claim is empty, and every `[n]`
-# substring in the input appears in exactly one claim.
+# non-whitespace input characters, no claim is empty, every `[n]`
+# substring in the input appears in exactly one claim, AND (closing review
+# findings C-1/M-2) the claim count matches the number of sentences the
+# strategy actually generated -- the invariant that gives the property real
+# splitting force and catches marker-orphaning bugs the first three
+# invariants cannot see on their own.
 # --------------------------------------------------------------------------
 
 _TERMINATORS = [".", "!", "?", "。", "！", "？"]
-_BODY_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+# Widened per review finding M-5 (Minor): uppercase + space, so the
+# property also exercises multi-word, mixed-case sentence bodies (not just
+# single lowercase/digit tokens) -- the shape that would let an I-2-style
+# capitalization heuristic slip past a purely lowercase alphabet.
+_BODY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 
 _body_strategy = st.text(alphabet=_BODY_ALPHABET, min_size=1, max_size=12)
 
@@ -292,7 +459,7 @@ def _texts_with_expected_markers(draw):
         pieces.append(piece)
 
     text = " ".join(pieces)
-    return text, expected_markers
+    return text, expected_markers, n
 
 
 @given(data=_texts_with_expected_markers())
@@ -300,12 +467,14 @@ def _texts_with_expected_markers(draw):
 def test_property_rejoin_preserves_nonwhitespace_and_isolates_markers(data):
     # spec(T-027:AC-4)
     claims_mod = _claims_module()
-    text, expected_markers = data
+    text, expected_markers, n = data
 
     claims = claims_mod.split_claims(text)
 
-    # No claim is empty.
-    assert all(claim != "" for claim in claims)
+    # No claim is empty or whitespace-only (review finding M-1: use
+    # `.strip()`, matching tickets/T-027.md's "Never returns
+    # empty/whitespace-only strings").
+    assert all(claim.strip() != "" for claim in claims)
 
     # Rejoining the claims preserves all non-whitespace characters of the
     # input, in order (whitespace consumed at split boundaries is the only
@@ -319,3 +488,11 @@ def test_property_rejoin_preserves_nonwhitespace_and_isolates_markers(data):
         containing = [claim for claim in claims if marker in claim]
         msg = f"{marker!r} expected in exactly one claim, found in {containing!r}"
         assert len(containing) == 1, msg
+
+    # The claim count matches the number of sentences generated -- closes
+    # review findings C-1 (Critical) and M-2 (Minor). Without this, a claim
+    # made entirely of an orphaned marker (e.g. `('0. [1]', ['0.', '[1]'])`)
+    # still satisfies all three invariants above: it is non-empty, it
+    # preserves every non-whitespace character on rejoin, and its marker
+    # still appears in exactly one claim. Only a count check catches it.
+    assert len(claims) == n, (text, claims, n)
