@@ -129,6 +129,32 @@ rather than incidental.
     or index-errors on ranked lists shorter than k breaks here; and because
     every cell ties exactly, `best` must be the lexicographically smallest
     (k1, b) = (0.0, 0.0).
+
+(D) MULTI-QUERY fixture — the per-cell MEAN (test-design review C-1). A
+    4-doc index (A's docs ++ C's docs) judged by THREE query_ids whose
+    per-query NDCG@10 all differ at the same cell (k1=1.5, b=0.75):
+      q1 "quantum"   -> 1 / log2(3)  (b=0.75 demotes the long relevant doc)
+      q2 "tungsten"  -> 1.0
+      q3 "zirconium" -> 0.0 — the term is absent from the corpus, so
+                        `ranked_search` returns an EMPTY list while the
+                        judgment set still grades a doc for it
+    mean = (1/log2(3) + 1.0 + 0.0) / 3 = 0.5436432511904858, a value NO
+    single query produces. This is what makes `mean(scores)`
+    distinguishable from `scores[0]`, from `max(scores)`, and — critically —
+    from a denominator that silently drops the zero-result query
+    (0.8154648768, which would inflate the sweep past the 0.5 NDCG gate in
+    onrecord/eval/run.py and corrupt the "Defended k1/b" number this ticket
+    exists to produce). Zero-result queries COUNT: they contribute 0.0 to
+    the numerator and 1 to the denominator, never nothing to both.
+
+RECORDED DECISION (test-design review M-3): AC-2's and AC-3's directional
+claims are decided by `ranked_search`'s ascending-doc-id tie-break, not by a
+strict BM25 score difference — at b=0 (fixture A) and at k1=0 (fixture B)
+the two docs' scores are bit-identical. That is unavoidable (with equal tf,
+length normalization can never make the LONGER relevant doc strictly win)
+and legitimate: the tie-break is itself frozen contract
+(onrecord/search/ranked.py's module docstring + its `heapq.nsmallest` key).
+Flagged here so it is a recorded dependency rather than an accident.
 """
 
 from __future__ import annotations
@@ -136,6 +162,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import subprocess
 import sys
 from pathlib import Path
 
@@ -143,6 +170,11 @@ import pytest
 
 from onrecord.index.inverted import InvertedIndex
 from onrecord.types import Doc
+
+# Worktree root (tests/unit/test_sweep.py -> ../..), so the hermetic
+# subprocess probe below imports the module under test from THIS source tree
+# rather than whatever snapshot happens to sit in the venv.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # --------------------------------------------------------------------------
 # Guard helper — see module docstring.
@@ -247,6 +279,18 @@ FLAT_DOCS = [
 ]
 FLAT_GRADES = {"m_only_match": 2, "n_unrelated": 0}
 
+# (D) MULTI-QUERY fixture — "zirconium" appears in NO doc, so this query
+# retrieves nothing while still grading a relevant doc: NDCG@10 = 0.0, and it
+# must still occupy a slot in the per-cell mean's denominator.
+UNMATCHED_GRADES = {"a_relevant_long": 2}
+
+# Per-query NDCG@10 at (k1=1.5, b=0.75) on the 4-doc multi-query index, and
+# their mean — a value no single query produces.
+MULTI_QUERY_NDCGS = (RELEVANT_AT_RANK_2, RELEVANT_AT_RANK_1, 0.0)
+MULTI_QUERY_MEAN = 0.5436432511904858
+# What a denominator that drops the zero-result query would report instead.
+MULTI_QUERY_INFLATED_MEAN = (RELEVANT_AT_RANK_2 + RELEVANT_AT_RANK_1) / 2
+
 
 @pytest.fixture
 def length_case(tmp_path):
@@ -267,6 +311,22 @@ def flat_case(tmp_path):
     """(index, judgments_path) for the AC-4 exact-tie / short-list fixture."""
     rows = _judgment_rows("q1", "tungsten", FLAT_GRADES)
     return InvertedIndex.build(FLAT_DOCS), _write_judgments(tmp_path, rows)
+
+
+@pytest.fixture
+def multi_query_case(tmp_path):
+    """(index, judgments_path) for the per-cell-mean fixture (D).
+
+    Three query_ids with three DIFFERENT per-query NDCG@10 values at the same
+    cell, one of which retrieves nothing at all.
+    """
+    index = InvertedIndex.build(LENGTH_DOCS + FLAT_DOCS)
+    rows = (
+        _judgment_rows("q1", "quantum", LENGTH_GRADES)
+        + _judgment_rows("q2", "tungsten", FLAT_GRADES)
+        + _judgment_rows("q3", "zirconium", UNMATCHED_GRADES)
+    )
+    return index, _write_judgments(tmp_path, rows, name="multi.jsonl")
 
 
 @pytest.fixture
@@ -368,6 +428,75 @@ def test_grid_cells_expose_exactly_k1_b_and_ndcg10_keys(length_case):
 
     for cell in result["grid"]:
         assert set(cell) == CELL_KEYS
+
+
+def test_grid_cell_axis_values_are_floats_not_ints(length_case):
+    # spec(T-019:AC-1) — the frozen shape types k1/b as float; emitting the
+    # integral axis values as `0` / `1` / `2` instead of `0.0` / `1.0` / `2.0`
+    # would slip past `_cell`'s math.isclose lookup unnoticed.
+    sweep_mod = _sweep_module()
+    index, judgments_path = length_case
+
+    result = sweep_mod.sweep(index, judgments_path)
+
+    for cell in result["grid"]:
+        assert isinstance(cell["k1"], float), f"k1 must be a float, got {type(cell['k1'])!r}"
+        assert isinstance(cell["b"], float), f"b must be a float, got {type(cell['b'])!r}"
+    assert isinstance(result["best"]["k1"], float)
+    assert isinstance(result["best"]["b"], float)
+
+
+def test_cell_value_is_the_mean_ndcg_over_every_judgment_query(multi_query_case):
+    # spec(T-019:AC-1) — the sweep's whole job (ticket Context: "Per cell:
+    # mean NDCG@10 across the judgment queries"). The three queries score
+    # 1/log2(3), 1.0 and 0.0 in this cell, so the mean is a number NO single
+    # query produces: `scores[0]`, `max(scores)` and `min(scores)` all differ
+    # from it.
+    sweep_mod = _sweep_module()
+    index, judgments_path = multi_query_case
+
+    result = sweep_mod.sweep(index, judgments_path, k1_values=[1.5], b_values=[0.75])
+
+    assert result["n_queries"] == 3
+    value = _cell(result, 1.5, 0.75)["ndcg10"]
+    assert value == pytest.approx(sum(MULTI_QUERY_NDCGS) / len(MULTI_QUERY_NDCGS))
+    assert value == pytest.approx(MULTI_QUERY_MEAN)
+    for single_query_value in MULTI_QUERY_NDCGS:
+        assert value != pytest.approx(single_query_value)
+
+
+def test_a_query_that_retrieves_nothing_still_counts_in_the_mean_denominator(multi_query_case):
+    # spec(T-019:AC-1) — adversarial: `if not hits: continue` is the natural
+    # way to write this loop and it INFLATES every cell (0.8154648768 instead
+    # of 0.5436432512 here). Against the 0.5 NDCG gate in eval/run.py that is
+    # the difference between an honest red and a fabricated green, and the
+    # inflated number is what would land in the README defense section.
+    sweep_mod = _sweep_module()
+    index, judgments_path = multi_query_case
+
+    result = sweep_mod.sweep(index, judgments_path, k1_values=[1.5], b_values=[0.75])
+
+    value = _cell(result, 1.5, 0.75)["ndcg10"]
+    assert value == pytest.approx(MULTI_QUERY_MEAN)
+    assert value != pytest.approx(MULTI_QUERY_INFLATED_MEAN)
+    assert value < MULTI_QUERY_INFLATED_MEAN
+
+
+def test_k_sets_the_ndcg_cutoff_and_is_echoed_in_the_result(length_case):
+    # spec(T-019:AC-1) — `k` is a frozen signature parameter AND a frozen
+    # top-level key; an implementation that hardcodes NDCG@10 and a literal
+    # `"k": 10` must not pass. At k=1 the b=1.0 cell's only counted position
+    # holds the grade-0 doc (DCG@1 = 0, IDCG@1 = 2.0), so it collapses to 0.0
+    # while the b=0.0 cell stays 1.0. (The cell key stays `ndcg10` regardless
+    # of `k` — the ticket pins that literal name.)
+    sweep_mod = _sweep_module()
+    index, judgments_path = length_case
+
+    result = sweep_mod.sweep(index, judgments_path, k1_values=[1.5], b_values=[0.0, 1.0], k=1)
+
+    assert result["k"] == 1
+    assert _cell(result, 1.5, 0.0)["ndcg10"] == pytest.approx(1.0)
+    assert _cell(result, 1.5, 1.0)["ndcg10"] == pytest.approx(0.0)
 
 
 def test_ndcg_is_computed_over_ranked_lists_shorter_than_k(flat_case):
@@ -568,17 +697,25 @@ def test_cli_artifact_n_queries_counts_distinct_query_ids(cli_case):
     assert artifact["n_queries"] == 2
 
 
-def test_cli_artifact_index_dir_echoes_the_index_argument(cli_case):
-    # spec(T-019:AC-5)
+def test_cli_artifact_index_dir_echoes_the_index_argument_verbatim(cli_case):
+    # spec(T-019:AC-5) — AC-5 says index_dir "echoes the CLI arg", so the arg
+    # here is deliberately NOT in resolved form: a `.resolve()`d echo would
+    # normalize the `/./` away and fail. (tmp_path is already fully resolved
+    # on this platform, so a plain str(index_dir) could not tell the two
+    # apart — test-design review M-2.)
     sweep_mod = _sweep_module()
     index_dir, judgments_path, out_path = cli_case
+    unresolved_arg = f"{index_dir.parent}/./{index_dir.name}"
+    assert unresolved_arg != str(Path(unresolved_arg).resolve()), (
+        "fixture precondition: the CLI arg must differ from its resolved form"
+    )
 
     sweep_mod.main(
-        ["--index", str(index_dir), "--judgments", str(judgments_path), "--out", str(out_path)]
+        ["--index", unresolved_arg, "--judgments", str(judgments_path), "--out", str(out_path)]
     )
     artifact = json.loads(out_path.read_text(encoding="utf-8"))
 
-    assert artifact["index_dir"] == str(index_dir)
+    assert artifact["index_dir"] == unresolved_arg
 
 
 def test_cli_artifact_corpus_version_comes_from_the_index_dir_manifest(cli_case):
@@ -609,6 +746,24 @@ def test_cli_artifact_corpus_version_is_unversioned_without_a_manifest(cli_case)
     artifact = json.loads(out_path.read_text(encoding="utf-8"))
 
     assert "corpus_version" in artifact
+    assert artifact["corpus_version"] == "unversioned"
+
+
+def test_cli_artifact_corpus_version_is_unversioned_for_a_manifest_without_the_key(cli_case):
+    # spec(T-019:AC-5) — a manifest that parses but carries no
+    # "corpus_version" key is the fourth degenerate case (alongside None,
+    # missing and corrupt). A bare `payload.get("corpus_version")` emits JSON
+    # null for a key the contract types as str — test-design review M-1.
+    sweep_mod = _sweep_module()
+    index_dir, judgments_path, out_path = cli_case
+    _write_manifest(index_dir, json.dumps({"created_at": "2026-08-12T00:00:00+00:00"}))
+
+    exit_code = sweep_mod.main(
+        ["--index", str(index_dir), "--judgments", str(judgments_path), "--out", str(out_path)]
+    )
+    artifact = json.loads(out_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
     assert artifact["corpus_version"] == "unversioned"
 
 
@@ -645,11 +800,35 @@ def test_cli_without_plot_flag_never_imports_matplotlib(cli_case):
     # spec(T-019:AC-5) — Definition of Done: matplotlib is a DEV-only dep,
     # imported only inside the --plot branch. A module-level import would
     # make the frozen artifact path depend on a plotting library.
-    sweep_mod = _sweep_module()
+    #
+    # The check runs in a FRESH interpreter (test-design review I-1): asserting
+    # on this process's `sys.modules` would be a global, order-dependent claim
+    # that any sibling suite could redden — T-020 ships the same --plot
+    # convention under tests/unit/rag/, which pytest collects BEFORE this file,
+    # and this ticket is what installs matplotlib into the dev env in the first
+    # place. A subprocess makes the assertion about the module under test only.
+    _sweep_module()
     index_dir, judgments_path, out_path = cli_case
-
-    sweep_mod.main(
-        ["--index", str(index_dir), "--judgments", str(judgments_path), "--out", str(out_path)]
+    argv = [
+        "--index",
+        str(index_dir),
+        "--judgments",
+        str(judgments_path),
+        "--out",
+        str(out_path),
+    ]
+    probe = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(REPO_ROOT)!r})",
+            "import onrecord.eval.sweep as sweep_mod",
+            f"exit_code = sweep_mod.main({argv!r})",
+            "assert exit_code == 0, exit_code",
+            "leaked = sorted(m for m in sys.modules if m.split('.')[0] == 'matplotlib')",
+            "assert not leaked, leaked",
+        ]
     )
 
-    assert "matplotlib" not in sys.modules
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+
+    assert proc.returncode == 0, proc.stderr
