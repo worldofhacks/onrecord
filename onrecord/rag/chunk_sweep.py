@@ -92,13 +92,34 @@ curve artifact (ticket body, `T-020.md:25`):
                                  this is why the parameter exists at all
     --min-grade     (optional)  int, default 1
     --plot          (optional)  flag; renders a PNG curve. matplotlib is a
-                                 dev-only dependency, imported lazily inside
-                                 the --plot branch only, AFTER the JSON
-                                 artifact is already written -- a missing or
-                                 broken matplotlib can never cost the graded
-                                 deliverable. The PNG itself is not
+                                 dev-only dependency (lands via T-019's
+                                 branch at wave merge -- not installed on
+                                 this branch), imported lazily inside the
+                                 --plot branch only, AFTER the JSON artifact
+                                 is already written -- a missing or broken
+                                 matplotlib can never cost the graded
+                                 deliverable; an `ImportError` there is
+                                 caught, reported on stderr, and `main`
+                                 still returns 0. The PNG itself is not
                                  frozen-tested (font/renderer nondeterminism,
                                  same convention as T-019).
+
+**No docs, no artifact (pin round 2, review CLI-1).** `load_corpus_snapshot`
+returns `[]` for a missing path OR a readable-but-empty snapshot -- it
+explicitly delegates that decision to the caller. The CLI refuses both: zero
+docs means the corpus was unusable (a typo'd path or a half-finished
+ingest), and publishing a fully-formed, all-zero-recall curve at exit 0 with
+nothing on stderr would be indistinguishable downstream from "chunking
+genuinely achieves zero recall" -- worse than an error. `main` writes the
+corpus path to stderr and returns 1 BEFORE `chunk_sweep` runs or anything is
+written.
+
+**`--plot` can never clobber the JSON deliverable (pin round 2, review
+CLI-2).** A naive `out_path.with_suffix(".png")` is the IDENTITY when `--out`
+already ends in `.png`, so `--out curve.png --plot` would render the PNG
+straight over the JSON artifact. The PNG path is always distinct from
+`out_path` -- when the plain suffix swap would collide, a `.plot.png` name is
+used instead.
 
 The grid axes (`windows`/`overlaps`/`k_values`) get no CLI flags: the ticket
 names none, so the CLI runs `chunk_sweep`'s defaults.
@@ -108,6 +129,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -316,12 +338,25 @@ def chunk_sweep(
     }
 
 
+def _plot_path_for(out_path: Path) -> Path:
+    """A PNG path that can never collide with `out_path` (review CLI-2).
+    `out_path.with_suffix(".png")` is the IDENTITY when `out_path` already
+    ends in `.png`, which would make `savefig` clobber the JSON deliverable
+    at `--out curve.png --plot`; fall back to a `.plot.png` name whenever the
+    plain suffix swap would land on `out_path` itself."""
+    candidate = out_path.with_suffix(".png")
+    if candidate == out_path:
+        candidate = out_path.with_name(out_path.stem + ".plot.png")
+    return candidate
+
+
 def _write_plot(result: dict, out_path: Path) -> None:
-    """Render a recall@10-vs-window PNG next to `out_path`. Matplotlib is a
-    dev-only dependency, imported lazily here (never at module level, never
-    unless `--plot` is passed) so a missing/broken install can never cost
-    the JSON artifact, which is always written before this is called. Not
-    frozen-tested (font/renderer nondeterminism, same convention as T-019)."""
+    """Render a recall@10-vs-window PNG alongside `out_path` (never AT
+    `out_path`, see `_plot_path_for`). Matplotlib is a dev-only dependency,
+    imported lazily here (never at module level, never unless `--plot` is
+    passed) so a missing/broken install can never cost the JSON artifact,
+    which is always written before this is called. Not frozen-tested
+    (font/renderer nondeterminism, same convention as T-019)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -345,7 +380,7 @@ def _write_plot(result: dict, out_path: Path) -> None:
     ax.set_ylabel(f"recall@{_BEST_TIE_BREAK_K}")
     ax.set_title("Chunking recall sweep")
     ax.legend()
-    fig.savefig(out_path.with_suffix(".png"))
+    fig.savefig(_plot_path_for(out_path))
     plt.close(fig)
 
 
@@ -383,6 +418,18 @@ def main(argv: list[str] | None = None) -> int:
     from onrecord.ingest.build_corpus import load_corpus_snapshot
 
     docs = load_corpus_snapshot(args.corpus)
+    if not docs:
+        # review CLI-1: `load_corpus_snapshot` returns [] for both a missing
+        # path and a readable-but-empty snapshot -- either way there is
+        # nothing to sweep, and publishing a fully-formed all-zero-recall
+        # curve at exit 0 would be indistinguishable downstream from a real
+        # result. Refuse loudly, before chunk_sweep runs or anything is
+        # written.
+        sys.stderr.write(
+            f"onrecord.rag.chunk_sweep: no docs found in corpus snapshot: {args.corpus}\n"
+        )
+        return 1
+
     result = chunk_sweep(
         docs,
         args.judgments,
@@ -395,12 +442,20 @@ def main(argv: list[str] | None = None) -> int:
     out_path.write_text(json.dumps(result), encoding="utf-8")
 
     if args.plot:
-        _write_plot(result, out_path)
+        try:
+            _write_plot(result, out_path)
+        except ImportError:
+            # Orchestrator ruling on review CLI-3: matplotlib is not
+            # declared on this branch (it lands via T-019's branch at wave
+            # merge) -- no scope widening here. The JSON artifact is already
+            # safely on disk, so this degrades rather than fails the run.
+            sys.stderr.write(
+                "onrecord.rag.chunk_sweep: --plot requested but matplotlib is not "
+                "installed; the JSON artifact was written, skipping the PNG.\n"
+            )
 
     return 0
 
 
 if __name__ == "__main__":
-    import sys
-
     sys.exit(main())
