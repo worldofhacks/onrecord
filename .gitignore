@@ -27,3 +27,6 @@ artifacts/
 
 # assignment brief (local reference only)
 *.pdf
+
+# swarm process state (local audit trail)
+.tdd-swarm/
