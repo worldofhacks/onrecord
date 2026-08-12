@@ -205,6 +205,10 @@ import importlib.util
 import json
 import logging
 import os
+import shutil
+import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -222,6 +226,7 @@ CANARY = "LOGGING-CAPTURE-CANARY"
 _REAL_NP_SAVE = np.save
 _REAL_NP_STACK = np.stack
 _REAL_NP_VSTACK = np.vstack
+_REAL_NP_LOAD = np.load
 _REAL_OS_REPLACE = os.replace
 
 
@@ -2329,3 +2334,400 @@ def test_load_raises_corrupt_store_when_dim_is_not_an_integer(tmp_path):
     assert "dim" in str(excinfo.value).lower(), (
         f"the error must name the mistyped identity field; got {excinfo.value!r}"
     )
+
+
+# ==========================================================================
+# ==========================================================================
+# REGRESSION-PIN ROUND — added after the implementation was APPROVED
+# (.tdd-swarm/reports/T-021-review.md, "Final re-review (660a084)",
+# 0 Critical / 0 Important, deviation verdict (ii)).
+#
+# READ THIS BEFORE ASSUMING THESE ARE WEAK TESTS: unlike every test above,
+# the seven tests in this section are GREEN against the current
+# implementation BY DESIGN. They are regression guards in the T-018 sense
+# (see .tdd-swarm/reports/T-018-test.md, "2 pre-existing-green tests (by
+# design, not a gap)").
+#
+# The implementation went beyond its mandate and added a recovery snapshot
+# (`matrix.npy.prev` / `entries.json.prev`) that makes a SIGKILL between
+# `save`'s two renames recoverable — a failure the original I-1 recorded as
+# "the store is now unloadable". The reviewer mutation-tested that code
+# against the 85-test frozen suite and found it almost entirely unpinned:
+# seven of eight mutants passed the whole suite. `_recover_snapshot_matrix`
+# can make `load()` return a DIFFERENT matrix than the bytes at
+# `matrix.npy`, so it changes observable behavior on a path consumers
+# reach — it must be pinned, or it could be deleted tomorrow with a green
+# suite.
+#
+# Per the T-018 regression-guard standard, every test below names the
+# mutant it kills, and each kill was verified by actually applying that
+# mutant to a scratch copy of the implementation (never the worktree) and
+# watching this test fail. The mutant->test table is in
+# .tdd-swarm/reports/T-021-test.md.
+# ==========================================================================
+# ==========================================================================
+
+
+# The child process this script runs is killed by the KERNEL, mid-save,
+# between publishing matrix.npy and publishing entries.json — no `finally`,
+# no rollback, no temp cleanup. That is the state the recovery snapshot
+# exists for, and the one an in-process `monkeypatch(os.replace, raise)`
+# cannot produce (raising still runs the rollback).
+_HARD_KILL_CHILD = """
+import os
+import signal
+import sys
+
+import numpy as np
+
+from onrecord.rag.embeddings import EmbeddingStore
+
+directory, expected_matrix_path = sys.argv[1], sys.argv[2]
+
+
+class KillWindowProvider:
+    model = "kill-window-model"
+    dim = 4
+
+    def embed(self, texts):
+        return np.array(
+            [[float(int(t.rsplit("-", 1)[1]) + 1), 1.0, 0.0, 0.0] for t in texts],
+            dtype=np.float32,
+        )
+
+
+def pairs(count):
+    return [("c%d" % i, "text-%d" % i) for i in range(count)]
+
+
+generation_0 = EmbeddingStore()
+generation_0.embed_corpus(pairs(3), KillWindowProvider())
+generation_0.save(directory)
+np.save(expected_matrix_path, generation_0.matrix)
+
+generation_1 = EmbeddingStore()
+generation_1.embed_corpus(pairs(5), KillWindowProvider())
+
+real_replace = os.replace
+state = {"renames": 0}
+
+
+def killing_replace(src, dst):
+    state["renames"] += 1
+    if state["renames"] == 2:
+        os.kill(os.getpid(), signal.SIGKILL)
+    return real_replace(src, dst)
+
+
+os.replace = killing_replace
+generation_1.save(directory)
+sys.exit("unreachable: the child should have been killed mid-save")
+"""
+
+
+requires_sigkill = pytest.mark.skipif(
+    not hasattr(signal, "SIGKILL"), reason="hard-kill windows need SIGKILL (POSIX)"
+)
+
+
+def _hard_killed_save(tmp_path: Path) -> tuple[Path, np.ndarray]:
+    """Leave a store directory in the kill-between-renames state.
+
+    Returns the store directory and generation 0's matrix (written out by
+    the child before it was killed, so the parent compares real bytes
+    rather than re-deriving them).
+    """
+    store_dir = tmp_path / "store"
+    expected_matrix_path = tmp_path / "expected_generation_0.npy"
+    repo_root = Path(__file__).resolve().parents[3]
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _HARD_KILL_CHILD, str(store_dir), str(expected_matrix_path)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert completed.returncode == -signal.SIGKILL, (
+        f"the child was supposed to be hard-killed mid-save; it exited "
+        f"{completed.returncode}.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    published_matrix = _REAL_NP_LOAD(store_dir / "matrix.npy")
+    published_entries = json.loads((store_dir / "entries.json").read_text(encoding="utf-8"))
+    assert published_matrix.shape[0] == 5 and len(published_entries["entries"]) == 3, (
+        f"precondition: the kill must land BETWEEN the two renames, leaving generation 1's "
+        f"matrix beside generation 0's entries; found {published_matrix.shape[0]} rows and "
+        f"{len(published_entries['entries'])} entries"
+    )
+    return store_dir, _REAL_NP_LOAD(expected_matrix_path)
+
+
+def _publish_pair(source: Path, destination: Path) -> None:
+    """Copy a published pair over another store's, leaving anything else
+    (notably a `.prev` snapshot) in place."""
+    shutil.copy(source / "matrix.npy", destination / "matrix.npy")
+    shutil.copy(source / "entries.json", destination / "entries.json")
+
+
+def _saved_store(directory: Path, pairs: list[tuple[str, str]], model: str = FAKE_MODEL):
+    store = _new_store()
+    store.embed_corpus(pairs, FakeProvider(model=model))
+    store.save(directory)
+    return store
+
+
+# --------------------------------------------------------------------------
+# 1 — SIGKILL-window recovery. THE behavior the snapshot exists for, and the
+# reviewer's mutant M2 ("load() never consults the .prev snapshot") passed
+# all 85 frozen tests, meaning the entire hard-kill recovery could have been
+# deleted with a green suite.
+# --------------------------------------------------------------------------
+
+
+@requires_sigkill
+def test_a_hard_killed_save_between_renames_leaves_the_previous_generation_whole(tmp_path):
+    # spec(T-021:AC-3)
+    # Kills mutant M2 (`load()` never consults the recovery snapshot).
+    store_dir, expected_matrix = _hard_killed_save(tmp_path)
+
+    recovered = _load_store(store_dir)
+
+    assert recovered.matrix.shape[0] == 3, (
+        f"a kernel kill between the two renames must read back as the PREVIOUS "
+        f"generation, whole — the original I-1 recorded this exact state as "
+        f"'the store is now unloadable'; got {recovered.matrix.shape[0]} rows"
+    )
+    assert recovered.rows_for(["c0", "c1", "c2"]) == [0, 1, 2]
+    assert recovered.rows_for(["c3", "c4"]) == [None, None], (
+        "generation 1 was never published, so none of its chunks may resolve"
+    )
+    assert np.array_equal(recovered.matrix, expected_matrix), (
+        "and the recovered matrix must be generation 0's actual bytes, not a reconstruction"
+    )
+
+
+# --------------------------------------------------------------------------
+# 2 — The no-stale-preference invariant, both halves. The snapshot must
+# never win against a generation that is complete, and must never paper
+# over genuine corruption.
+# --------------------------------------------------------------------------
+
+
+def test_a_complete_generation_is_never_overridden_by_the_recovery_snapshot(tmp_path):
+    # spec(T-021:AC-3)
+    # Kills mutant M-UNCOND (snapshot consulted before the row-count check,
+    # rather than only on a tear).
+    #
+    # The snapshot here is deliberately one the freshness gate judges
+    # CURRENT — its entries.json half matches the published entries.json
+    # byte-for-byte — while its matrix half is a different generation of the
+    # SAME row count, so `_recover_snapshot_matrix`'s own shape check would
+    # also wave it through. The only thing standing between the published
+    # bytes and the snapshot's is the row-count gate: a complete generation
+    # never disagrees with itself, so the snapshot is never consulted at
+    # all. Building it this way is what makes the test bite; a merely STALE
+    # snapshot beside a complete generation is the weaker case and is
+    # subsumed, since it does not even pass the freshness gate.
+    store_dir = tmp_path / "store"
+    published = _saved_store(store_dir, _pairs(3))
+    expected_matrix = np.array(published.matrix, copy=True)
+    decoy = tmp_path / "decoy"
+    _saved_store(decoy, [(f"c{i}", f"decoy text {i}") for i in range(3)])
+    shutil.copy(store_dir / "entries.json", store_dir / "entries.json.prev")
+    shutil.copy(decoy / "matrix.npy", store_dir / "matrix.npy.prev")
+    assert not np.array_equal(_REAL_NP_LOAD(decoy / "matrix.npy"), expected_matrix), (
+        "precondition: the decoy snapshot must hold different bytes, or substituting "
+        "it would be undetectable"
+    )
+
+    loaded = _load_store(store_dir)
+
+    assert np.array_equal(loaded.matrix, expected_matrix), (
+        "a complete generation must be returned from its own published matrix.npy — "
+        "the recovery snapshot is reachable ONLY on a row-count tear, never as a "
+        "general preference"
+    )
+    assert loaded.rows_for(_ids(_pairs(3))) == [0, 1, 2]
+
+
+def test_a_stale_snapshot_does_not_mask_genuine_corruption(tmp_path):
+    # spec(T-021:AC-7)
+    # Kills mutant M3 (freshness check disabled, so a stale .prev is always
+    # accepted). Constructed so the stale snapshot's row count MATCHES the
+    # corrupt store's entry count — otherwise `_recover_snapshot_matrix`'s
+    # own shape check would reject it and the mutant would survive for the
+    # wrong reason.
+    store_dir = tmp_path / "store"
+    _saved_store(store_dir, _pairs(3))  # generation 0: c0..c2
+    shutil.copy(store_dir / "matrix.npy", store_dir / "matrix.npy.prev")
+    shutil.copy(store_dir / "entries.json", store_dir / "entries.json.prev")
+    newer = tmp_path / "newer"
+    # Distinct chunk ids so that dropping one entry below cannot accidentally
+    # reproduce generation 0's entries.json byte-for-byte (which would make
+    # the snapshot look FRESH and defeat the test).
+    _saved_store(newer, [(f"d{i}", f"other text {i}") for i in range(4)])
+    _publish_pair(newer, store_dir)
+    entries_path = store_dir / "entries.json"
+    payload = json.loads(entries_path.read_text(encoding="utf-8"))
+    payload["entries"].pop("d3")  # 3 entries vs a 4-row matrix: genuine corruption
+    entries_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(_attr("CorruptStore")) as excinfo:
+        _load_store(store_dir)
+
+    assert "entries" in str(excinfo.value) and "matrix" in str(excinfo.value), (
+        f"a stale snapshot must not be substituted for a corrupt store's matrix — "
+        f"the row-count mismatch must still be reported; got {excinfo.value!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# 3 — Top-k tie ordering where the k-cut lands INSIDE a tie group. The
+# argpartition rewrite (re-review I-C) made this reachable; the existing tie
+# test uses k=4 on a 4-row store, so its cut never lands inside a group.
+# --------------------------------------------------------------------------
+
+
+def test_top_k_tie_ordering_at_the_k_boundary_matches_a_full_sort():
+    # spec(T-021:AC-4)
+    # Kills mutant M8 (top-k tie order reversed at the k-boundary).
+    store = _build_cosine_store([[1, 0, 0, 0]] * 5 + [[0, 1, 0, 0]] * 3)
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+    cosine_top_k = _attr("cosine_top_k")
+    scores = [1.0] * 5 + [0.0] * 3
+
+    for k in range(1, 9):
+        rows = [row for row, _score in cosine_top_k(store, query, k)]
+
+        expected = sorted(range(8), key=lambda row: (-scores[row], row))[:k]
+        assert rows == expected, (
+            f"k={k} straddles a tie group: ties must break by ASCENDING row index "
+            f"and the truncated head must equal a full sort's head. Expected "
+            f"{expected}, got {rows}"
+        )
+
+
+# --------------------------------------------------------------------------
+# 4 — The post-kill snapshot is the only copy of the previous generation's
+# matrix, so the next save must NOT refresh it (refreshing would snapshot
+# the torn published pair instead). Observable when that next save itself
+# fails and has to roll back.
+# --------------------------------------------------------------------------
+
+
+@requires_sigkill
+def test_a_failing_save_after_a_hard_kill_still_rolls_back_to_the_previous_generation(
+    tmp_path, monkeypatch
+):
+    # spec(T-021:AC-3)
+    # Kills mutant M4 (snapshot always refreshed, clobbering the post-kill
+    # snapshot). Under M4 the rollback restores the TORN matrix instead of
+    # generation 0's, and the store reads back corrupt.
+    store_dir, expected_matrix = _hard_killed_save(tmp_path)
+    healing = _new_store()
+    healing.embed_corpus(_pairs(7), FakeProvider(model="kill-window-model"))
+    renames = {"n": 0}
+
+    def failing_second_replace(src, dst):
+        renames["n"] += 1
+        if renames["n"] == 2:
+            raise OSError("simulated crash publishing entries.json")
+        return _REAL_OS_REPLACE(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_second_replace)
+    try:
+        with pytest.raises(OSError):
+            healing.save(store_dir)
+    finally:
+        monkeypatch.undo()
+
+    reloaded = _load_store(store_dir)
+    assert reloaded.matrix.shape[0] == 3, (
+        f"the rollback must restore the previous generation's matrix, which after a "
+        f"hard kill lives ONLY in the snapshot — refreshing that snapshot at the top "
+        f"of this save would have replaced it with the torn half; got "
+        f"{reloaded.matrix.shape[0]} rows"
+    )
+    assert np.array_equal(reloaded.matrix, expected_matrix)
+
+
+# --------------------------------------------------------------------------
+# 5 — Reclamation: a successful publish leaves the directory clean, both of
+# the snapshot it consumed and of the temp files a killed predecessor
+# abandoned (0.83 GB each at production scale).
+# --------------------------------------------------------------------------
+
+
+@requires_sigkill
+def test_a_successful_save_after_a_hard_kill_leaves_exactly_the_two_published_files(tmp_path):
+    # spec(T-021:AC-3)
+    # Kills mutants M7 (snapshot never reclaimed after a successful publish)
+    # and M6 (stale-temp sweep removed) — the hard-killed predecessor leaves
+    # both an abandoned *.tmp.<uuid> and a .prev pair behind.
+    store_dir, _expected_matrix = _hard_killed_save(tmp_path)
+    leftovers_before = sorted(p.name for p in store_dir.iterdir())
+    assert any(".tmp." in name for name in leftovers_before), (
+        f"precondition: a hard-killed save abandons a temp file; found {leftovers_before}"
+    )
+
+    healing = _new_store()
+    healing.embed_corpus(_pairs(7), FakeProvider(model="kill-window-model"))
+    healing.save(store_dir)
+
+    assert sorted(p.name for p in store_dir.iterdir()) == ["entries.json", "matrix.npy"], (
+        f"after a successful publish the store directory holds exactly the two "
+        f"published files — the consumed snapshot is reclaimed and the killed "
+        f"predecessor's temp files are swept; found "
+        f"{sorted(p.name for p in store_dir.iterdir())}"
+    )
+    assert _load_store(store_dir).matrix.shape[0] == 7
+
+
+# --------------------------------------------------------------------------
+# 6 — A reader that lands mid-publish re-reads instead of declaring the
+# store corrupt (re-review I-D: 9.2% of concurrent loads used to raise).
+# Deterministic stand-in for the reviewer's 4-thread / 60-swap race: the
+# publisher's second rename is completed exactly once, between the reader's
+# two reads.
+# --------------------------------------------------------------------------
+
+
+def test_a_reader_that_lands_mid_publish_re_reads_instead_of_raising(tmp_path, monkeypatch):
+    # spec(T-021:AC-7)
+    # Kills mutant M5 (`_LOAD_TEAR_REREADS = 0`).
+    store_dir = tmp_path / "store"
+    _saved_store(store_dir, _pairs(3))
+    newer = tmp_path / "newer"
+    _saved_store(newer, _pairs(5))
+    # The torn pair a reader sees between the two renames, with no snapshot
+    # on disk (the publisher that produced it finished and swept it).
+    shutil.copy(newer / "matrix.npy", store_dir / "matrix.npy")
+    assert not (store_dir / "matrix.npy.prev").exists()
+    reads = {"n": 0}
+
+    def publishing_load(*args, **kwargs):
+        array = _REAL_NP_LOAD(*args, **kwargs)
+        reads["n"] += 1
+        if reads["n"] == 1:
+            # The publisher's second rename lands right after the reader's
+            # first read — the next read sees a consistent pair.
+            shutil.copy(newer / "entries.json", store_dir / "entries.json")
+        return array
+
+    monkeypatch.setattr(np, "load", publishing_load)
+    try:
+        loaded = _load_store(store_dir)
+    finally:
+        monkeypatch.undo()
+
+    assert reads["n"] == 2, (
+        f"precondition: the reader must have re-read the pair once (a single read "
+        f"would have seen only the torn state); it read {reads['n']} time(s)"
+    )
+    assert loaded.matrix.shape[0] == 5, (
+        "a two-syscall publication window must not be reported as corruption — "
+        "load re-reads the pair once and returns the completed generation"
+    )
+    assert loaded.rows_for(_ids(_pairs(5))) == [0, 1, 2, 3, 4]
