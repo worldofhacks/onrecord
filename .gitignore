@@ -30,3 +30,8 @@ artifacts/
 
 # swarm process state (local audit trail)
 .tdd-swarm/
+
+# corpus-v2 snapshot data pending OQ-7 (101MB gz > GitHub limit; Release-asset path recommended).
+# The manifest (committed) carries snapshot_sha256 for verification.
+corpus/v2/corpus.jsonl.gz
+corpus/v2/corpus.jsonl
