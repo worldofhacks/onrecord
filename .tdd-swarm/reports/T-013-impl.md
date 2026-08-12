@@ -1,9 +1,63 @@
 # T-013 Implementation Agent Report — FastAPI layer (/api/search, /api/tickers, /api/metrics, /api/answer, /health)
 
-**Status:** DONE — all 21 tests in `tests/unit/test_api.py` pass; full repo
-suite green at 204 passing (183 baseline + 21 new, the file no longer skips
-now that fastapi/uvicorn are real pyproject deps); all Tier-1 local gates
-green.
+**Status:** DONE — all 31 tests in `tests/unit/test_api.py` pass (21
+original + 10 added by the post-review contract extension at `5d32cd3`);
+full repo suite green at 214 passing (183 baseline + 31); all Tier-1 local
+gates green.
+
+## Update — review follow-up (op whitelist + k lower bound)
+
+Review (`.tdd-swarm/reports/T-013-review.md`, verdict APPROVED) flagged one
+Important finding, live-confirmed against the real ~24k-doc corpus:
+`GET /api/search?op=XOR` crashed with an unhandled `ValueError` (from
+`onrecord.search.boolean.boolean_search`'s own
+`raise ValueError(f"unknown boolean op: {op!r}")`) → a raw 500, not a clean
+422. A related Minor finding: `k<=0` (e.g. `k=-5`) silently returned a
+confusing-but-not-crashing result set via Python's negative-slice semantics
+on `hits[:k]`, instead of erroring. Neither was a violation of the
+originally-frozen contract (both were explicitly out of scope at first
+freeze), but the Test Agent closed both by extending AC-1's pinned contract
+(`5d32cd3`, +10 new test cases: `test_search_invalid_op_returns_422_never_500`
+×4, `test_search_valid_uppercase_op_still_works` ×2,
+`test_search_non_positive_k_returns_422` ×3,
+`test_search_k_equal_to_one_still_works` ×1) rather than deferring to a
+follow-up ticket.
+
+**Fix (`onrecord/api.py` only, same file-scope rule as before):**
+- `op: str = "OR"` → `op: Literal["AND", "OR"] = "OR"` — matches `mode`'s
+  existing `Literal`-whitelist pattern, gets 422-on-mismatch for free from
+  FastAPI/pydantic query validation, and is case-sensitive/uppercase-only
+  per the Test Agent's pinned design decision (mirrors
+  `boolean_search`'s own uppercase-only contract; `"and"`/`"or"`/`"Or"` all
+  422, never silently case-folded).
+- `k: int = 20` → `k: int = Query(default=20, ge=1)` — FastAPI's `Query`
+  constraint produces a native 422 for `k <= 0` before the handler body
+  ever runs (no manual bounds-check code needed), mirroring
+  `onrecord/cli.py`'s `--k >= 1` convention.
+- Module docstring updated with a short note on both constraints, pointing
+  at `.tdd-swarm/reports/T-013-test.md`'s "op whitelist + k bounds"
+  extension for the full pinned rationale.
+
+**Verification (this update):**
+- `uv run pytest tests/unit/test_api.py -v` → **31/31 passed** (the 10 new
+  cases all green, including the two "still works" guard tests confirming
+  the fix didn't over-reject `op=AND`/`OR` uppercase or `k=1`).
+- Live smoke test (in-process `TestClient(app, raise_server_exceptions=False)`,
+  reproducing the reviewer's exact repro cases): `op=XOR` → 422 (was 500),
+  `op=and` (lowercase) → 422, `k=-5` → 422 (was 200 with a wrong-but-quiet
+  result set), `k=0` → 422 — all four now match the pinned contract.
+- `.tdd-swarm/run-local-gates.sh . tickets/T-013.md` → format clean, lint
+  clean, **214 passed**, spec-lint OK, **ALL LOCAL GATES GREEN**.
+- No `BLOCKED(TEST_DISPUTE)` — the extension's pinned contract was
+  unambiguous and directly implementable; no test edits were needed or
+  made.
+
+Commit: `fix(T-013): op whitelist + k lower bound → 422` (staged exactly
+`onrecord/api.py`, on top of the review's test-extension commit `5d32cd3`).
+
+---
+
+## Original report (initial handoff)
 
 **Files touched (file scope, as instructed):**
 - `onrecord/api.py` (new)

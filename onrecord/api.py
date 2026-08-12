@@ -20,6 +20,13 @@ before touching this file. Summary of the seams it pins:
   else falls back to `boolean_search(index, q, op)` with `score` pinned to
   `0.0` — the only path this worktree can exercise (T-011 hasn't merged
   here yet).
+- `op` is whitelisted to exactly `"AND"` / `"OR"` (case-sensitive,
+  uppercase only — mirrors `boolean_search`'s own contract); any other
+  value 422s via FastAPI/pydantic query validation, never a raw 500 from
+  `boolean_search`'s `ValueError`. `k` must be a positive integer (`>= 1`,
+  `Query(ge=1)`); `k <= 0` 422s — mirrors `onrecord/cli.py`'s `--k`
+  convention. Post-review contract extension, see
+  `.tdd-swarm/reports/T-013-test.md`.
 - `/api/tickers` is registry-driven (`onrecord.registry.load()`), not
   corpus-driven, imported as `from onrecord import registry` and called
   fresh per-request (never cached) so tests can monkeypatch
@@ -42,7 +49,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -166,8 +173,8 @@ def _apply_filters(
 async def search(
     q: str = "",
     mode: Literal["lexical", "semantic", "hybrid"] = "lexical",
-    op: str = "OR",
-    k: int = 20,
+    op: Literal["AND", "OR"] = "OR",
+    k: int = Query(default=20, ge=1),
     source: str | None = None,
     venue: str | None = None,
     ticker: str | None = None,
