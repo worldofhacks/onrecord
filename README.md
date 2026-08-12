@@ -54,3 +54,28 @@ TYPE` (filter to a `Doc.source_type`, e.g. `county_meeting`,
 `artifacts/index`). An empty query, a query whose terms are all absent
 from the index, or unicode/punctuation-only junk all resolve to a graceful
 "No results" message and exit 0 — never a crash.
+
+## API
+
+The commissioned UI (design studio, in flight) is built against a FastAPI
+layer (`onrecord/api.py`). Run it locally with:
+
+```sh
+uv run uvicorn onrecord.api:app --reload
+```
+
+The index directory it loads is configurable via `ONRECORD_INDEX` (default
+`artifacts/index`); a missing/unbuilt index is not fatal — `/health` still
+returns 200, only the data endpoints degrade to a 503 with an actionable
+message. CORS is open to `http://localhost:5173` (the UI's dev origin).
+
+| Endpoint | What it does |
+|---|---|
+| `GET /health` | Liveness check, always `200 {"status": "ok"}`. |
+| `GET /api/search?q=&mode=lexical&op=OR&k=20&source=&venue=&ticker=&jurisdiction=` | Lexical search (boolean OR/AND today; upgrades transparently to BM25 once T-011's `ranked_search` lands) with metadata filters, AND-combined when more than one is given. `mode=semantic`/`hybrid` return a `{"error": "available_wednesday"}` teaser; an unknown `mode` is `422`. |
+| `POST /api/answer` | Grounded Q&A ("Ask") stub — body `{"question", "mode", "k"}`; currently `200 {"error": "available_thursday"}`, `422` when `question` is missing. |
+| `GET /api/tickers` | Registered tickers (`corpus/registry.yaml`) grouped by sector, each with a live `receipt_count` and `last_receipt` date computed off the loaded index. |
+| `GET /api/metrics` | Parsed `artifacts/scoreboard.jsonl` eval history as a JSON array (`[]` when it doesn't exist yet). |
+
+See `tests/unit/test_api.py`'s module docstring for the exact frozen JSON
+contracts (the UI parses these directly).
