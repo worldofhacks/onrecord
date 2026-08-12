@@ -782,3 +782,51 @@ def test_version_flag_derived_out_dir_also_gets_manifest_in_both_dirs(tmp_path, 
     assert index_manifest is not None
     assert out_manifest["corpus_version"] == "v2"
     assert index_manifest["corpus_version"] == "v2"
+
+
+# ==========================================================================
+# FIX ROUND 2 (per .tdd-swarm/reports/T-018-review.md, verdict REJECTED,
+# IMP-1) — read_manifest raises UnicodeDecodeError on non-UTF-8 manifest
+# bytes, falsifying the "never raises" AC-3 contract. `UnicodeDecodeError`
+# is a `ValueError` subclass, not an `OSError`/`json.JSONDecodeError`, so
+# `except (OSError, json.JSONDecodeError)` lets it escape -- and it then
+# propagates straight through `run()` too (after the scoreboard prints,
+# before the history row is appended), losing an eval run entirely instead
+# of degrading to "unversioned".
+# ==========================================================================
+
+
+def test_read_manifest_returns_none_for_non_utf8_bytes_without_raising(tmp_path):
+    # spec(T-018:AC-3) -- code-review IMP-1: a truncated/corrupted download
+    # (the exact OQ-7 "fetch a Release asset" scenario this API exists for)
+    # can easily be non-UTF-8; "never raises" must hold for it too, not just
+    # for invalid-JSON-but-valid-UTF-8 text.
+    manifest_dir = tmp_path / "idx"
+    manifest_dir.mkdir()
+    (manifest_dir / "manifest.json").write_bytes(b"\xff\xfe{}")
+
+    result = build_corpus.read_manifest(manifest_dir)
+    assert result is None
+
+
+def test_run_history_row_falls_back_to_unversioned_when_manifest_is_non_utf8(tmp_path, monkeypatch):
+    # spec(T-018:AC-3) -- code-review IMP-1 companion: the same non-UTF-8
+    # manifest must not crash run() either -- the review reproduced the
+    # exception propagating through run._corpus_version() (run.py:174,
+    # after the scoreboard has already printed), which loses the eval run
+    # instead of degrading it to "unversioned" the way every other manifest
+    # failure mode does.
+    index_dir = tmp_path / "index"
+    index_dir.mkdir(parents=True)
+    (index_dir / "manifest.json").write_bytes(b"\xff\xfe{}")
+    monkeypatch.setenv("ONRECORD_INDEX", str(index_dir))
+
+    judgments_path = tmp_path / "judgments.jsonl"
+    _write_judgments(judgments_path, _AC4_JUDGMENT_ROWS)
+    history_path = tmp_path / "scoreboard.jsonl"
+
+    # Must not raise UnicodeDecodeError.
+    evalrun.run(judgments_path, retrieve_fn=_fake_retrieve, history_path=history_path)
+
+    rows = [json.loads(line) for line in history_path.read_text().splitlines() if line.strip()]
+    assert rows[-1]["corpus_version"] == "unversioned"
