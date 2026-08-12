@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "onrecord",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "ONRECORD_INDEX=artifacts/index uv run uvicorn onrecord.api:app --host 127.0.0.1 --port 8000"],
+      "port": 8000
+    }
+  ]
+}

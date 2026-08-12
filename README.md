@@ -138,3 +138,14 @@ Both the index-missing and corpus-missing/corrupt cases degrade gracefully
 rather than crashing the deploy: with neither a usable index nor a usable
 corpus snapshot, `/api/search` and `/api/tickers` return a `503` with an
 actionable message while `/` (the UI) and `/health` keep serving normally.
+
+## Metrics report (reproducible)
+
+Hand-built judgment set: 5 queries, 65 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
+
+| Retrieval | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
+|---|---|---|---|---|---|---|
+| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.003 | 0.000 |
+| BM25 (k1=1.5, b=0.75) | 0.520 | 0.540 | 0.612 | 0.949 | 1.000 | 0.622 |
+
+MRR = 1.000: the top-ranked result was human-judged relevant on every query. The identical labels produce both rows — the delta is the ranking function, measured, not vibed. History: `evalsets/scoreboard.jsonl`.
