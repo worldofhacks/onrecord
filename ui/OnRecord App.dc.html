@@ -808,13 +808,15 @@ class Component extends DCLogic {
         detMoves: moveLines, detMovesList: movesList,
         hasMoves: movesList.length > 0, detNoRec: n > 1 && marks.length === 0,
         mkOpenB: !!mk,
-        // nearby_receipts is the minimal linked-citation shape {id, date,
-        // source_type, deep_link} — it carries no venue_type and no snippet, so
-        // the chip shows the source in a neutral treatment and the body states
-        // what is known rather than inventing a passage.
-        mkVenue: mk ? srcLabel(mk.source_type).toUpperCase() : '', mkVenueStyle: mk ? NEUTRAL_CHIP : {},
+        // nearby_receipts carries six keys per AMENDMENT-2 (tests/unit/ingest/
+        // test_prices.py): {id, date, source_type, deep_link, venue_type,
+        // snippet}. The chip shows the real venue badge and the body quotes the
+        // receipt's 160-char snippet; the neutral source chip and the
+        // stated-fact line survive solely as pre-amendment-payload fallbacks.
+        mkVenue: mk ? (mk.venue_type ? venueOf(mk.venue_type).label : srcLabel(mk.source_type).toUpperCase()) : '',
+        mkVenueStyle: mk ? (mk.venue_type ? venueOf(mk.venue_type).style : NEUTRAL_CHIP) : {},
         mkRef: mk ? s.detSym : '', mkDate: mk ? mk.date : '',
-        mkSnip: mk ? 'Receipt on the record inside this move’s window — open the source to read the passage in context.' : '',
+        mkSnip: mk ? (mk.snippet || 'Receipt on the record inside this move’s window — open the source to read the passage in context.') : '',
         mkLink: mk ? (mk.deep_link || '#') : '#',
         mkCta: mk ? ctaFor(mk.source_type, mkTs) : '',
       };

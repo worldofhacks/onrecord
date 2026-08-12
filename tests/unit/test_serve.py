@@ -477,12 +477,16 @@ def test_prices_happy_path_matches_significant_move_and_nearby_receipt(tmp_path,
     assert set(move.keys()) == {"date", "return_pct", "nearby_receipts"}
     assert move["date"] == "2024-01-03"
     assert move["return_pct"] == pytest.approx(8.0, abs=1e-9)
+    # re-pinned per AMENDMENT-2 (T-014R) -- 6-key receipt shape; authoritative
+    # contract: tests/unit/ingest/test_prices.py module docstring, AMENDMENT-2
     assert move["nearby_receipts"] == [
         {
             "id": "vst-filing-1",
             "date": "2024-01-01",
             "source_type": "filing",
             "deep_link": "https://sec.gov/edgar/vst-filing-1",
+            "venue_type": "coached",
+            "snippet": "a filing discussing VST operations",  # doc.text < 160 chars -> whole text
         }
     ]
 
