@@ -66,3 +66,6 @@ Posture: mvp (see posture.md). Deadline: MVP checkpoint tonight 23:59.
 - T-014: fix DONE (8f85a60, 22/22; gates re-run green) — final re-review dispatched
 - WAVE 4 merged (T-011/T-013/T-014); 3 anticipated transitional-pin failures -> T-013R repair (AND+BM25 composition adjudicated)
 - WAVE 4 COMPLETE: T-011/T-013(+R)/T-014 merged, 261 tests green (orchestrator note: three directory-trap incidents — merges now ONLY from main checkout, verified via pwd-first)
+- T-012: tests-written (28 red, daddbdd; IDF variants reconciled via proven scalar-multiple domain + divergence fixture)
+- T-012: impl DONE (f6acc8a, 31/31; orchestrator gates + live differential runner green)
+- T-012: done. WAVE 5 COMPLETE — Early-checkpoint core (BM25 + differential + API + prices) fully merged, 292 tests green
