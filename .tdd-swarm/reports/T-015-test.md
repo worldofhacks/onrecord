@@ -1,5 +1,89 @@
 # T-015 Test Agent Report — serve UI + /api/prices route + index bootstrap
 
+**Status:** DONE (see "Update — bootstrap resilience against a corrupt
+corpus (post-review)" below for the current state; earlier sections
+preserved beneath it).
+
+## Update — bootstrap resilience against a corrupt corpus (post-review)
+
+**Trigger:** Review REJECTED the T-015 implementation
+(`.tdd-swarm/reports/T-015-review.md`, Critical-1): a corrupt/truncated
+`ONRECORD_CORPUS` gzip snapshot raises uncaught out of `_lifespan`
+(`onrecord/api.py`'s `_bootstrap_index_from_corpus` calls
+`load_corpus_snapshot` with no `try/except`, unlike the sibling
+`InvertedIndex.load` call one line above it, which is wrapped). Reproduced
+live by the reviewer against a real `uvicorn` process: the process exits,
+`/health` becomes unreachable — on Railway (`restartPolicyMaxRetries: 3`)
+this is a full crash-loop outage, contradicting AC-4's own promise that
+`/health`/the UI stay up when data is unavailable.
+
+**Extended `tests/unit/test_serve.py` only** (no other files touched) with
+one new parametrized test, `test_bootstrap_survives_corrupt_corpus_snapshot_never_crashes_startup`,
+tagged `spec(T-015:AC-3) spec(T-015:AC-4)`, over 3 corruption fixtures:
+
+- `truncated_gzip` — a valid gzip header, cut off mid-stream (partial
+  upload/disk corruption) → `EOFError`.
+- `non_gzip_file` — plain text at the expected `.jsonl.gz` path (wrong
+  build artifact) → `gzip.BadGzipFile`.
+- `malformed_utf8_gzip` — a validly gzip-compressed file whose
+  decompressed content isn't valid UTF-8 (a garbled/corrupted download) →
+  `UnicodeDecodeError`, raised during `load_corpus_snapshot`'s line-
+  iteration itself, NOT caught by `_parse_jsonl_lines`'s existing per-line
+  `json.JSONDecodeError` guard. **Design note, confirmed empirically**:
+  plain non-JSON-but-valid-UTF8 lines do NOT reproduce this bug —
+  `_parse_jsonl_lines` already catches `json.JSONDecodeError` per line,
+  logs + skips, and `load_corpus_snapshot` gracefully returns `[]` (no
+  crash). Only content that breaks OUTSIDE that per-line try/except (i.e.,
+  breaks decoding/iteration itself) reproduces Critical-1, so this fixture
+  is deliberately invalid-UTF-8 bytes rather than merely non-JSON text.
+
+Each parametrization asserts: `TestClient.__enter__()` completes without
+raising, `GET /health` → 200, `GET /` → 200 with the UI stub's exact
+content, `GET /api/search` → 503 with the same flat
+`{"error": "<message mentioning the index>"}` shape the already-pinned
+both-missing AC-4 case uses, and at least one `ERROR`-level log record
+exists (any logger — not pinned to a specific name/wording, since the fix
+could reasonably live in `_bootstrap_index_from_corpus` or in `_lifespan`
+around the call).
+
+**Empirically confirmed `raise_server_exceptions=False` does NOT help
+here** — that TestClient flag only suppresses request-handling exceptions
+caught by Starlette's `ServerErrorMiddleware`; a lifespan-startup exception
+propagates from `TestClient.__enter__()` unconditionally regardless of it
+(verified via a throwaway repro script before writing the pinned test). So
+the new test wraps `TestClient(...).__enter__()` in its own try/except
+(`_client_expect_clean_startup`, a new helper alongside the existing
+`_client`), converting any escaped exception into a clean, diagnostic
+`pytest.fail(...)` naming the exception type/message — never an uncaught
+traceback out of the test itself.
+
+**Verification:**
+
+```
+uv run pytest tests/unit/test_serve.py -v
+```
+→ **15 collected, 3 failed, 12 passed.** The 3 new parametrizations fail
+exactly as expected — cleanly, via `pytest.fail`, each naming the escaped
+exception (`EOFError`, `gzip.BadGzipFile`, `UnicodeDecodeError`
+respectively) — reproducing the reviewer's Critical-1 finding as a frozen,
+automated regression. All 12 originally-frozen tests stay green,
+unaffected (commit `cc1cf15`'s file is otherwise untouched above the new
+"AMENDMENT" section).
+
+`uv run pytest -q` (full repo) → **3 failed, 304 passed** — no regression
+anywhere else (`tests/unit/test_api.py`'s 31 tests unaffected).
+
+`uv run ruff format --check tests/unit/test_serve.py` /
+`uv run ruff check tests/unit/test_serve.py` → clean.
+
+No implementation files touched (`onrecord/api.py` untouched — verified
+`git status --porcelain` shows only `tests/unit/test_serve.py` and this
+report as changed/new).
+
+---
+
+## Original report (pre-review)
+
 **Status:** DONE (failing tests written, achievability verified via a
 throwaway patch then fully reverted, zero diff outside `tests/`).
 

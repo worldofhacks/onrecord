@@ -128,6 +128,94 @@ section already pins (`{"error": "<message mentioning the index>"}`, never
 an `HTTPException`-wrapped `{"detail": ...}`) — while `GET /` still serves
 the UI successfully, proving the static path and the data path are
 independent failure domains.
+
+======================================================================
+AMENDMENT (post-review, REJECTED — see .tdd-swarm/reports/T-015-review.md,
+Critical-1). Extends the contract above; the tests above this line are
+untouched/frozen as originally handed off (commit cc1cf15). New tests only,
+added below.
+======================================================================
+
+**Critical-1 (fixed here) — a corrupt/unreadable `ONRECORD_CORPUS`
+snapshot must never crash ASGI startup.** The shipped implementation's
+index-bootstrap path (`_bootstrap_index_from_corpus`, `onrecord/api.py`)
+calls `load_corpus_snapshot(corpus_path)` — which unconditionally
+`gzip.open(path, "rt", encoding="utf-8")`s the file, per
+`onrecord/ingest/build_corpus.py` — with no `try/except` around it, unlike
+the sibling `InvertedIndex.load(index_dir)` call one line above it (which
+IS wrapped). A corpus file that exists but is corrupt in any of several
+realistic cold-start ways (partial upload, disk corruption, wrong artifact
+written) raises an exception straight out of `_lifespan`, uncaught. The
+reviewer reproduced this live against a real `uvicorn` process (not just
+`TestClient`): the process exits, `/health` becomes unreachable, and on
+Railway (`restartPolicyMaxRetries: 3`) this is a full crash-loop outage —
+directly contradicting AC-4's own promise that `/health` and the UI stay
+up when data is unavailable.
+
+**Empirically confirmed (this Test Agent, throwaway repro script) —
+`load_corpus_snapshot` raises a DIFFERENT uncaught exception type per
+corruption flavor, all equally uncaught today:**
+- A gzip file truncated mid-stream (valid header, cut off — e.g. a partial
+  upload) → `EOFError` from the `gzip` module's own decompression.
+- A file that isn't gzip-formatted at all (e.g. a build step wrote the
+  wrong artifact to the expected `.jsonl.gz` path) → `gzip.BadGzipFile`.
+- A validly gzip-COMPRESSED file whose decompressed content isn't valid
+  UTF-8 (a garbled/corrupted download, distinct from "not gzip at all") →
+  `UnicodeDecodeError`, raised during `load_corpus_snapshot`'s `for line in
+  fh` iteration itself — NOT caught by `_parse_jsonl_lines`'s existing
+  per-line `except json.JSONDecodeError` guard, which only wraps
+  `json.loads(line)`, not the file-iteration/decoding step that produces
+  each `line` in the first place.
+  - **Design note on why this flavor is UTF-8-invalid bytes, not merely
+    "each line fails json.loads"**: a gzip file whose decompressed content
+    IS valid UTF-8 text but isn't valid JSON per line (e.g. plain prose)
+    does NOT reproduce this bug — `_parse_jsonl_lines` already catches
+    `json.JSONDecodeError` per line, logs + skips it, and
+    `load_corpus_snapshot` returns `[]` gracefully (no crash;
+    `_bootstrap_index_from_corpus` already handles an empty-docs result by
+    returning `None`). Only content that breaks OUTSIDE that per-line try/
+    except — i.e., breaks decoding/iteration itself — reproduces Critical-1.
+    Invalid-UTF-8 bytes inside a valid gzip stream is the realistic,
+    minimal way to do that (a genuinely garbled/corrupted download, not a
+    contrived one), and this Test Agent confirmed it raises
+    `UnicodeDecodeError` uncaught via the same throwaway repro used for the
+    other two flavors.
+- All three raise from inside `TestClient(api_module.app).__enter__()`
+  itself (ASGI lifespan startup), confirmed empirically — **and
+  `raise_server_exceptions=False` does NOT suppress this** (that flag only
+  affects request-handling exceptions caught by Starlette's
+  `ServerErrorMiddleware`, never a lifespan-startup exception, which
+  propagates from `__enter__` unconditionally). The new test below
+  therefore can't use that existing suppression seam; instead it wraps
+  `TestClient(...).__enter__()` in its own `try/except`, converting any
+  exception escaping startup into a clean, diagnostic `pytest.fail(...)` —
+  never an uncaught traceback out of the test itself — so a currently-RED
+  run reads as an ordinary assertion failure, not a pytest ERROR.
+
+**New pinned contract** (both `spec(T-015:AC-3)` and `spec(T-015:AC-4)` —
+this is the SAME index-bootstrap-vs-missing-index machinery both ACs
+already cover, just exercising a third, previously-untested corpus state:
+"present but corrupt/unreadable," alongside the already-pinned "valid" and
+"absent" states): with `ONRECORD_INDEX` missing and `ONRECORD_CORPUS`
+pointing at a corrupt/unreadable file (any of the three flavors above),
+ASGI startup must complete successfully (no exception from
+`TestClient.__enter__()`), `GET /health` must still 200, `GET /` must
+still serve the UI, `GET /api/search` must 503 with the SAME flat
+`{"error": "<message mentioning the index>"}` shape the already-missing-
+corpus AC-4 case uses (a corrupt corpus degrades to the exact same "no
+usable index" state as a missing one — not a new, differently-shaped
+error), and at least one `ERROR`-level log record must exist somewhere in
+the process (any logger — not pinned to a specific logger name/wording,
+since the fix could reasonably live inside `_bootstrap_index_from_corpus`
+itself or in `_lifespan` around the call) describing the failure, so a
+real deploy's logs aren't silent about why the index came back empty.
+
+**Confirmed RED against the current implementation** (all three
+parametrizations): `TestClient(api_module.app).__enter__()` raises
+(`EOFError` / `gzip.BadGzipFile` / `UnicodeDecodeError` respectively) —
+converted by this file's own try/except into a clean `pytest.fail(...)`
+naming the escaped exception, exactly reproducing the reviewer's Critical-1
+finding as a frozen, automated regression test.
 """
 
 from __future__ import annotations
@@ -135,6 +223,7 @@ from __future__ import annotations
 import contextlib
 import gzip
 import json
+import logging
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -552,3 +641,138 @@ def test_search_503_when_index_and_corpus_both_missing_but_ui_still_serves(tmp_p
 
     assert ui_resp.status_code == 200, "the UI must still serve even when all data is missing"
     assert ui_resp.text == index_content
+
+
+# ==========================================================================
+# AMENDMENT — added post review REJECTED (.tdd-swarm/reports/T-015-review.md,
+# Critical-1: corrupt/unreadable ONRECORD_CORPUS crashes ASGI startup
+# instead of degrading to the documented 503). New tests only; the tests
+# above this line are untouched/frozen as originally handed off (commit
+# cc1cf15). See the module docstring's "AMENDMENT" section for full
+# rationale on each corruption fixture and the try/except-around-__enter__
+# design.
+# ==========================================================================
+
+
+def _write_truncated_gzip_corpus(path: Path) -> None:
+    """A gzip file with a valid header, truncated mid-stream (e.g. a
+    partial upload or disk corruption) -- raises EOFError from gzip's own
+    decompression, uncaught anywhere in onrecord.ingest.build_corpus."""
+    doc = Doc(
+        id="trunc-1",
+        text="a filing discussing operations " * 10,
+        source_type="filing",
+        venue_type="coached",
+        date="2024-01-01",
+        deep_link="https://sec.gov/edgar/trunc-1",
+    )
+    _write_gz_corpus(path, [doc] * 50)
+    full_bytes = path.read_bytes()
+    path.write_bytes(full_bytes[: len(full_bytes) // 2])
+
+
+def _write_non_gzip_file(path: Path) -> None:
+    """A plain-text file sitting at the expected `.jsonl.gz` path -- not
+    gzip-formatted at all (e.g. a build step wrote the wrong artifact) --
+    raises gzip.BadGzipFile."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("this is not a gzip file at all\n" * 5, encoding="utf-8")
+
+
+def _write_malformed_utf8_gzip_corpus(path: Path) -> None:
+    """A validly gzip-COMPRESSED file whose decompressed content is not
+    valid UTF-8 (a garbled/corrupted download) -- raises UnicodeDecodeError
+    during load_corpus_snapshot's line-iteration itself, NOT caught by
+    _parse_jsonl_lines's per-line json.JSONDecodeError guard (see module
+    docstring's "Design note" for why plain non-JSON-but-valid-UTF8 lines
+    would NOT reproduce this bug)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wb") as fh:
+        fh.write(b"\xff\xfe\x00\x01 not valid utf-8 content at all \x80\x81\n")
+
+
+CORRUPT_CORPUS_FIXTURES = {
+    "truncated_gzip": _write_truncated_gzip_corpus,
+    "non_gzip_file": _write_non_gzip_file,
+    "malformed_utf8_gzip": _write_malformed_utf8_gzip_corpus,
+}
+
+
+@contextlib.contextmanager
+def _client_expect_clean_startup(
+    api_module,
+    monkeypatch,
+    *,
+    index_dir: Path,
+    corpus_path: Path,
+    ui_dir: Path | None = None,
+    prices_cache_dir: Path | None = None,
+):
+    """Like `_client`, but converts ANY exception escaping ASGI startup
+    (`TestClient.__enter__()`) into a clean `pytest.fail(...)` instead of
+    letting it propagate as an uncaught traceback out of the test.
+    `raise_server_exceptions=False` does NOT help here (module docstring's
+    "AMENDMENT" section) -- lifespan-startup exceptions bypass that flag
+    entirely, so this is the only seam available."""
+    monkeypatch.setenv("ONRECORD_INDEX", str(index_dir))
+    monkeypatch.setenv("ONRECORD_CORPUS", str(corpus_path))
+    if ui_dir is not None:
+        monkeypatch.setenv("ONRECORD_UI_DIR", str(ui_dir))
+    if prices_cache_dir is not None:
+        monkeypatch.setenv("ONRECORD_PRICES_CACHE", str(prices_cache_dir))
+    try:
+        with TestClient(api_module.app) as client:
+            yield client
+    except Exception as exc:
+        pytest.fail(
+            f"ASGI startup crashed instead of degrading gracefully to a 503 -- a corrupt/"
+            f"unreadable ONRECORD_CORPUS snapshot must never take the whole process down "
+            f"(reviewer finding Critical-1, .tdd-swarm/reports/T-015-review.md): "
+            f"{type(exc).__module__}.{type(exc).__name__}: {exc}"
+        )
+
+
+@pytest.mark.parametrize("fixture_name", sorted(CORRUPT_CORPUS_FIXTURES))
+def test_bootstrap_survives_corrupt_corpus_snapshot_never_crashes_startup(
+    tmp_path, monkeypatch, caplog, fixture_name
+):
+    # spec(T-015:AC-3) spec(T-015:AC-4)
+    api_module = _api_module()
+    missing_index_dir = tmp_path / "no_such_index"
+    ui_dir, index_content, _support_js = _write_ui_dir(tmp_path)
+    corrupt_corpus_path = tmp_path / "corpus" / "v1" / "corpus.jsonl.gz"
+    CORRUPT_CORPUS_FIXTURES[fixture_name](corrupt_corpus_path)
+    assert corrupt_corpus_path.exists()
+
+    with caplog.at_level(logging.ERROR):
+        with _client_expect_clean_startup(
+            api_module,
+            monkeypatch,
+            index_dir=missing_index_dir,
+            corpus_path=corrupt_corpus_path,
+            ui_dir=ui_dir,
+        ) as client:
+            health_resp = client.get("/health")
+            root_resp = client.get("/")
+            search_resp = client.get("/api/search", params={"q": "substation", "mode": "lexical"})
+
+    assert health_resp.status_code == 200
+    assert health_resp.json().get("status") == "ok"
+
+    assert root_resp.status_code == 200, "the UI must still serve when the corpus is corrupt"
+    assert root_resp.text == index_content
+
+    assert search_resp.status_code == 503, (
+        "a corrupt/unreadable corpus must degrade to the same missing-index 503 as an "
+        "absent one -- never a 500, never a crash"
+    )
+    body = search_resp.json()
+    assert set(body.keys()) == {"error"}
+    assert isinstance(body["error"], str)
+    assert "index" in body["error"].lower()
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(error_records) >= 1, (
+        f"expected at least one ERROR-level log line describing the corpus-bootstrap "
+        f"failure, got: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
