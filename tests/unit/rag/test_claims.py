@@ -39,37 +39,46 @@ AMENDMENT-2 (post-implementation code/security review, see
 REJECTED -- 1 Critical + 1 Important on Verdict 2, code quality/security)
 -----------------------------------------------------------------------
 Tests-first per the T-003 precedent: this section extends the frozen suite
-with RED tests pinning two defects the FIRST freeze never covered, both now
-recorded in `tickets/T-027.md`'s Context as AMENDMENT-2. (a) [Critical,
-review C-1] a `[n]` marker chain directly adjacent to an ASCII terminator
-with NO intervening whitespace (`voted.[1]`) must still end the sentence --
-the current implementation's terminator lookahead only recognizes
+with RED tests pinning defects the FIRST freeze never covered, recorded in
+`tickets/T-027.md`'s Context as AMENDMENT-2. (a) [Critical, review C-1,
+STANDS] a `[n]` marker chain directly adjacent to an ASCII terminator with
+NO intervening whitespace (`voted.[1]`) must still end the sentence -- the
+current implementation's terminator lookahead only recognizes
 whitespace-or-end-of-string, so this shape never splits at all, silently
 reporting "grounded" for partially-uncited answers. (b) [Important,
-orchestrator-ruled, review C-2] a bare list enumerator (`\d+.` + whitespace,
-with nothing else since the start of the claim) merges into the following
-sentence instead of being emitted as its own junk claim. All tests in this
-section were verified RED against the pre-amendment implementation
-(commit 23b3e78) before being added; see each test's comment for the exact
+originally orchestrator-ruled per review C-2 as an enumerator-merge fix --
+REVERSED, see AMENDMENT-3 immediately below] was a bare list enumerator
+(`\d+.` + whitespace) merging into the following sentence. All (a) tests
+were verified RED against the pre-amendment implementation (commit
+23b3e78) before being added; see each test's comment for the exact
 counterexample.
 
-Documented tension for the implementer (not a test requirement, a heads-up):
-a NAIVE enumerator check -- "does the whole claim-so-far match `^\d+\.$`
-literally anywhere a claim can start" -- collides with the ORIGINAL AC-4
-property above once you consider that its `_BODY_ALPHABET` includes digits,
-so hypothesis can (and, verified, does) generate a body that is itself
-purely digits (e.g. two generated sentences `"0."` `"0."` joined as
-`"0. 0."`). A naive fixer would merge that pair into one claim, breaking the
-original property's untouched `len(claims) == n` invariant. A conforming
-implementation must therefore find a narrower signal than "any bare
-`\d+\.`-shaped claim prefix, anywhere" to satisfy this amendment's pinned
-test below WITHOUT regressing the pre-existing property test -- e.g.
-requiring the merged-into content not itself look like another bare
-enumerator, or some other rule stronger than the review's own minimal
-`^\d+\.$` suggestion. This suite deliberately does not prescribe the exact
-mechanism (per T-027's "the EXACT rule is whatever the frozen tests pin" --
-the mechanism is the implementer's to choose), only the pinned input/output
-pairs both tests must agree on simultaneously.
+AMENDMENT-3 (adjudication, ledger 2026-08-12 -- REVERSES AMENDMENT-2(b))
+-----------------------------------------------------------------------
+Satisfiability check (Test Agent, this worktree, pre-freeze): four
+increasingly narrow enumerator-merge discriminators were built and
+stress-tested (up to 45,000 generated examples) against the ORIGINAL,
+untouched AC-4 property (`test_property_rejoin_preserves_nonwhitespace_and_
+isolates_markers`, whose `_BODY_ALPHABET` includes digits). Every
+discriminator collided -- concrete counterexamples included `'0. 0.'`,
+`'0. 1.'`, `'1. 2.'` -- because the property's alphabet is expressive
+enough to reconstruct, with nonzero probability, any digit-sequence shape a
+merge rule could key on. Structural proof: the pinned enumerator-merge
+input `"1. Dominion filed a rate case. [1] 2. Regulators agreed. [2]"` and
+the property-legal input `"1. 2."` (exactly constructible by the property's
+own strategy: n=2, bodies=["1","2"], terminators=[".", "."]) share the
+identical `digit-period ... digit-period` skeleton a general merge rule
+must key on -- no generalizable (non-hardcoded) rule can treat them
+oppositely. Reported UNSATISFIABLE; orchestrator adjudicated the PROPERTY
+WINS -- AMENDMENT-2(b) is reversed. Rationale for the record: enumerator
+shatter fails conservative (junk claims -> pessimistic grounding), while
+any merge rule general enough to work risks false-`"grounded"` receipts
+(uncited text riding a cited claim) -- junk beats lies. Mitigation moved to
+T-023's generation prompt (prose-only instruction, out of this module's
+scope). The accepted, documented behavior is now: bare list enumerators
+segment as their own sentences/claims, same as any other digit+period --
+see `test_bare_list_enumerator_shatters_into_its_own_claims` below, which
+replaces the reversed merge pin with the opposite, now-correct expectation.
 
 Test Agent design decisions (pinning what the ticket leaves to the frozen
 tests, per T-027's own "the EXACT rule is whatever the frozen tests pin")
@@ -538,9 +547,12 @@ def test_property_rejoin_preserves_nonwhitespace_and_isolates_markers(data):
 # --------------------------------------------------------------------------
 # AMENDMENT-2 (post-implementation review, T-027-review.md, REJECTED verdict)
 # -- (a) marker chain directly adjacent to a terminator (no space) still
-# splits [Critical, C-1]; (b) bare list enumerator merges forward instead of
-# becoming its own claim [Important, orchestrator-ruled, C-2]. All tests in
-# this section are additive -- nothing above this point was modified.
+# splits [Critical, C-1, STANDS]. (b) originally: bare list enumerator
+# merges forward instead of becoming its own claim [Important,
+# orchestrator-ruled, C-2] -- REVERSED by AMENDMENT-3 (adjudication, ledger
+# 2026-08-12; see module docstring): the property wins, enumerators shatter.
+# All tests in this section are additive -- nothing above this point (i.e.
+# the original 29 + the fix-round tests) was modified.
 # --------------------------------------------------------------------------
 
 
@@ -584,36 +596,43 @@ def test_marker_chain_directly_adjacent_to_terminator_still_splits(text, expecte
     assert claims_mod.split_claims(text) == expected
 
 
-def test_bare_list_enumerator_merges_into_the_following_sentence():
-    # spec(T-027:AC-1) -- AMENDMENT-2(b) (post-review, orchestrator-ruled;
-    # closes T-027-review.md finding C-2, Important). A bare list
-    # enumerator (`\d+.` immediately followed by whitespace, with nothing
-    # else since the start of the claim) is not itself a sentence -- it
-    # merges into the sentence that follows rather than being emitted as
-    # its own claim. Verified RED against the pre-amendment implementation
-    # (commit 23b3e78), which shatters this into FOUR claims --
-    # `['1.', 'Dominion filed a rate case. [1]', '2.', 'Regulators agreed.
-    # [2]']` -- corrupting T-023's grounding count (a fully-cited 2-item
-    # answer would report "partial" 2/4 instead of "grounded" 2/2) and
-    # burning two real T-026 judge calls on punctuation-only junk claims.
+def test_bare_list_enumerator_shatters_into_its_own_claims():
+    # spec(T-027:AC-1) -- AMENDMENT-3 (adjudication, ledger 2026-08-12).
+    # REPLACES the reversed AMENDMENT-2(b) merge pin
+    # (`test_bare_list_enumerator_merges_into_the_following_sentence`,
+    # removed): the Test Agent's satisfiability check found the enumerator-
+    # merge requirement UNSATISFIABLE in combination with the pre-existing,
+    # untouched AC-4 property's `len(claims) == n` invariant -- every
+    # generalizable merge discriminator tried collided with property-legal
+    # inputs (e.g. `'1. 2.'`, exactly constructible by the property's own
+    # strategy, needs 2 claims; the same merge mechanism required for this
+    # test's input would collapse it to 1). Orchestrator ruling: the
+    # PROPERTY WINS. A bare list enumerator (`\d+.`) is therefore accepted,
+    # documented behavior as its OWN claim/sentence, same as any other
+    # digit+period -- conservative by design (junk claims depress grounding
+    # rather than risk a false "grounded" verdict on uncited text riding a
+    # cited claim). The shape this test pins is prevented at the SOURCE by
+    # T-023's generation prompt instead (out of this module's scope).
     claims_mod = _claims_module()
     text = "1. Dominion filed a rate case. [1] 2. Regulators agreed. [2]"
 
     assert claims_mod.split_claims(text) == [
-        "1. Dominion filed a rate case. [1]",
-        "2. Regulators agreed. [2]",
+        "1.",
+        "Dominion filed a rate case. [1]",
+        "2.",
+        "Regulators agreed. [2]",
     ]
 
 
 def test_trailing_number_and_period_that_is_not_an_enumerator_still_splits():
-    # spec(T-027:AC-1) -- AMENDMENT-2(b) control case. A number immediately
-    # before a terminator must NOT suppress the split when it is not a
-    # BARE enumerator at claim start (real sentence content precedes it) --
-    # guards against an over-broad enumerator fix that would merge
-    # ordinary numeric sentence endings ("5 to 4.") into the next sentence.
-    # Already GREEN against the pre-amendment implementation (no
-    # enumerator-specific logic exists yet to over-trigger on it); pinned
-    # here so a future enumerator-suppression fix cannot regress it.
+    # spec(T-027:AC-1) -- kept post-AMENDMENT-3 (adjudication, ledger
+    # 2026-08-12) as a plain base-rule regression pin, no longer an
+    # "enumerator control case" (that concept was retired along with the
+    # reversed AMENDMENT-2(b) merge -- see module docstring). A number
+    # immediately before a terminator, with real sentence content preceding
+    # it (not a bare digit+period at claim start), must still split
+    # normally -- unaffected either way by the enumerator-shatter decision.
+    # GREEN against the current implementation and expected to stay GREEN.
     claims_mod = _claims_module()
     text = "The vote was 5 to 4. The motion passed."
 
