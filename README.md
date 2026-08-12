@@ -79,3 +79,62 @@ message. CORS is open to `http://localhost:5173` (the UI's dev origin).
 
 See `tests/unit/test_api.py`'s module docstring for the exact frozen JSON
 contracts (the UI parses these directly).
+
+The same FastAPI app also serves the static UI and a prices endpoint
+(T-015, single-service Railway deployment):
+
+| Endpoint | What it does |
+|---|---|
+| `GET /` | Serves `<ONRECORD_UI_DIR>/index.html` (default `ui/`). |
+| `GET /<any-other-path>` | Serves a matching static asset under `ONRECORD_UI_DIR` if one exists (e.g. `/support.js`, guessed content type); an unmatched extension-less path SPA-falls-back to `index.html`; an unmatched path with an extension `404`s. `/api/*` paths are never shadowed by this fallback. |
+| `GET /api/prices/{ticker}?range=365&threshold=5.0` | EOD price series + significant-move timeline joined to nearby receipts, via `onrecord.ingest.prices.api_payload`. Index-independent; an unsafe/unknown ticker `200`s with an empty series rather than erroring. |
+
+## Deploy (Railway, single service)
+
+FastAPI (`onrecord/api.py`) serves both the JSON API and the static UI from
+one process, so the whole app deploys as a single Railway service built
+from the repo's `Dockerfile` (`python:3.12-slim` + `uv`, `uv sync
+--no-dev`, `CMD` binds `0.0.0.0:$PORT`).
+
+```sh
+# One-time: install the Railway CLI, then from the repo root:
+railway login
+railway init          # create/link a Railway project for this repo
+railway up            # build the Dockerfile and deploy
+```
+
+`railway.json` pins `"builder": "DOCKERFILE"` and the start command
+(`uv run uvicorn onrecord.api:app --host 0.0.0.0 --port $PORT`) — Railway
+injects `$PORT` automatically, no manual configuration needed for that
+one.
+
+**Cold start "just works" out of the box — no extra env vars required.**
+The `Dockerfile` bakes `ENV ONRECORD_CORPUS=corpus/v1/corpus.jsonl.gz`
+(the committed corpus snapshot lands in the image via `COPY . .`, at
+exactly that path), so a fresh `railway up` with zero configured env vars
+already bootstraps an in-memory index from it on first startup — no
+"deployer trap" where the obvious deploy path silently 503s (post-review
+fix; see `.tdd-swarm/reports/T-015-review.md` Important-1). This default
+is **image-local only** — `onrecord/api.py` itself still has no built-in
+default for `ONRECORD_CORPUS` (only `/api/prices`' corpus path defaults;
+index bootstrap requires the env var explicitly present), so local runs
+and the test suite are unaffected; it only takes effect inside the
+container, where the `Dockerfile`'s `ENV` sets it for you.
+
+Optionally override any of these in the Railway project's environment
+variables (`railway variables set NAME=value`, or the dashboard) — e.g. to
+point at a different/updated corpus snapshot without rebuilding the image:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `ONRECORD_INDEX` | `artifacts/index` | Saved `InvertedIndex` directory. `artifacts/` isn't committed, so on a fresh deploy this won't exist yet — startup bootstraps an in-memory index from `ONRECORD_CORPUS` instead of 503ing (the `Dockerfile` already sets this for you — see above), then saves it back to this path for a warm restart. A corrupt/unreadable corpus snapshot degrades to the same 503 rather than crashing startup (never a Railway crash-loop). |
+| `ONRECORD_CORPUS` | *(unset in code; `corpus/v1/corpus.jsonl.gz` in the `Dockerfile`)* | Corpus snapshot path (gzip newline-JSON). Powers `/api/prices`' receipt join (defaults to `corpus/v1/corpus.jsonl.gz` there even if unset) **and**, when present in the environment, cold-start index bootstrap when `ONRECORD_INDEX` is missing/unbuilt. |
+| `ONRECORD_UI_DIR` | `ui/` | Static UI asset directory (`index.html`, `support.js`, ...). |
+| `ONRECORD_PRICES_CACHE` | `artifacts/prices` | On-disk cache dir for fetched EOD price series (`onrecord.ingest.prices`). |
+| `FMP_API_KEY` | *(unset)* | Optional Financial Modeling Prep API key, used as a fallback price source when the primary (stooq) source fails. |
+| `PORT` | *(Railway-injected)* | Bind port; never set this manually in Railway — the platform provides it. |
+
+Both the index-missing and corpus-missing/corrupt cases degrade gracefully
+rather than crashing the deploy: with neither a usable index nor a usable
+corpus snapshot, `/api/search` and `/api/tickers` return a `503` with an
+actionable message while `/` (the UI) and `/health` keep serving normally.
