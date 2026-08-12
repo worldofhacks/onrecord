@@ -51,3 +51,4 @@ Posture: mvp (see posture.md). Deadline: MVP checkpoint tonight 23:59.
 - T-010: impl DONE (4a37831.., 179/179; orchestrator gates re-run green)
 - T-010: review APPROVED w/ 2 Important (non-dict row crash → fix loop; real snapshot commit → orchestrator at cutoff)
 - T-010: done (e535661 fix verified by orchestrator repro; merged into swarm). WAVE 3 COMPLETE.
+- WAVE 4 opened: T-011 bm25 / T-013 api / T-014 prices worktrees created; test agents dispatched (T-012 differential queued for wave 5)
