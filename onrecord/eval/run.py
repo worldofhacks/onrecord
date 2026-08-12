@@ -18,6 +18,7 @@ frozen contract this implementation satisfies.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -56,10 +57,18 @@ def _git_sha() -> str:
 
 
 def _corpus_version() -> str:
-    """No corpus-version manifest exists yet (ingest/build_corpus lands in
-    later-wave tickets T-006..T-010) — a stable placeholder keeps the
-    history-row schema honest until one does."""
-    return "unversioned"
+    """Reads the corpus-version manifest (T-018; `onrecord.ingest.build_corpus`)
+    out of `ONRECORD_INDEX` (falling back to `DEFAULT_INDEX_PATH`) and
+    returns its `corpus_version`. Any failure — no manifest present, a
+    corrupt manifest, or a manifest missing the `corpus_version` key —
+    falls back to the `"unversioned"` placeholder, never raises."""
+    from onrecord.ingest.build_corpus import read_manifest
+
+    index_path = os.environ.get("ONRECORD_INDEX", DEFAULT_INDEX_PATH)
+    manifest = read_manifest(index_path)
+    if manifest is None:
+        return "unversioned"
+    return manifest.get("corpus_version", "unversioned")
 
 
 def _load_judgments(path: Path) -> dict[str, dict]:
