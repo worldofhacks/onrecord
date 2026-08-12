@@ -40,11 +40,20 @@ Summary of what's implemented here:
     once at ingest so cosine reduces to a dot product) — the SAME array
     object is returned across accesses; nothing on the query path
     re-stacks it (pin round I-6).
-  * `save` publishes both files with exactly ONE `os.replace` call (a
-    private, uniquely-named staging directory is symlink-swapped into
-    place), so a crash anywhere before that single rename leaves any
-    previously-published store untouched and cannot land on a hybrid of
-    old+new files (pin round I-1). `load` validates structural integrity —
+  * `save` publishes into a PLAIN directory (`mkdir(parents=True,
+    exist_ok=True)` semantics — a Docker `COPY`-baked store, a volume
+    mount, a `cp -R`/`rsync`/`tar` copy and an operator symlink pointing
+    the store at a roomier volume all just work; nothing outside the
+    directory is ever created or removed, and nothing inside it beyond
+    the two published files and this module's own transient
+    `*.tmp.<uuid>`/`*.prev` names). Both files are
+    staged next to their destinations and published with `os.replace`;
+    if the second rename fails, the first is ROLLED BACK from a hard-link
+    snapshot of the pair that was published, so an interrupted save leaves
+    the store byte-identical to the previous generation — never a hybrid
+    of old+new (pin round I-1). The same snapshot covers a HARD kill in
+    that window, which unwinds no `except`: `load` reads the previous
+    generation back out of it. `load` validates structural integrity —
     row-count/duplicate/out-of-range row, matrix dtype/ndim/width, a
     non-integer identity field, or an unreadable `matrix.npy` (truncated,
     empty, garbage, or pickled) — and raises a typed `CorruptStore` naming
@@ -58,9 +67,10 @@ Summary of what's implemented here:
     re-embed. A non-finite (NaN/inf) provider vector is rejected rather
     than persisted (pin round M-6).
 - `cosine_top_k(store, query_vec, k, block_rows=8192)`: blocked fp16->fp32
-  dot product (query is normalized too), deterministic ties broken by
-  ascending row index, negative `k` clamps to zero results (pin round
-  M-10).
+  dot product (query is normalized too), top-k selected with
+  `np.argpartition` rather than a full Python sort (re-review I-C),
+  deterministic ties broken by ascending row index, negative `k` clamps to
+  zero results (pin round M-10).
 
 Memory / cost estimates (ticket-required, research-required pricing caveat
 — verify live provider pricing at provisioning time and record ACTUALS in
@@ -69,10 +79,15 @@ docs/cost-analysis.md):
     1536-d (text-embedding-3-small): 265,000 * 1536 * 2 B ~= 0.78 GB fp16
         resident (+ <= 8192*1536*4 B ~= 50 MB fp32 per block during
         scoring — blocking keeps the transient bounded, and since `matrix`
-        is now cached rather than re-stacked per query, that bound is the
-        actual transient, not 33x over it).
+        is cached rather than re-stacked per query, that bound is the
+        actual transient rather than 33x over it. Measured peak is ~0.1 GB
+        = two blocks, because the next block is allocated before the
+        previous one is released — re-review m-1).
     1024-d (Voyage class): ~= 0.52 GB.
-    Brute-force query ~= 0.8 GFLOP -> est. 50-150 ms/query in numpy.
+    Brute-force query ~= 0.8 GFLOP -> est. 50-150 ms/query in numpy
+        (measured at 265,000 x 1536 on this machine: see the T-021
+        implementation report; the dot product dominates now that top-k
+        selection is `np.argpartition` instead of a full Python sort).
     Cost: ~$30-80 for a full ~265K-chunk freeze (orchestrator-measured
         corpus growth vs. a stale $3-8 @ 24-40K-chunk estimate; a token-math
         cross-check at published small-model rates suggests materially
@@ -100,6 +115,7 @@ handling.
 from __future__ import annotations
 
 import contextlib
+import filecmp
 import hashlib
 import json
 import logging
@@ -371,6 +387,149 @@ class DuplicateChunkId(Exception):
 
 
 # --------------------------------------------------------------------------
+# Publication primitives (plain files, no symlink indirection)
+# --------------------------------------------------------------------------
+
+_MATRIX_NAME = "matrix.npy"
+_ENTRIES_NAME = "entries.json"
+# The recovery snapshot: hard links to the pair that was published when a
+# save began, kept only for the duration of that save's rename window (see
+# `EmbeddingStore.save`). They cost no disk space and no copy, and they are
+# what makes a HARD kill (SIGTERM/SIGKILL/power loss — which unwinds no
+# Python `except`) between the two renames recoverable rather than fatal.
+_PREV_MATRIX_NAME = "matrix.npy.prev"
+_PREV_ENTRIES_NAME = "entries.json.prev"
+_TEMP_GLOBS = (f"{_MATRIX_NAME}.tmp.*", f"{_ENTRIES_NAME}.tmp.*")
+
+# A reader that lands between `save`'s two renames sees one file from each
+# generation. Where the recovery snapshot above does not cover it (the
+# publisher finished and swept it), the tear has exactly one signature — an
+# entries/matrix row-count disagreement — and the window is two syscalls
+# wide, so `load` re-reads the pair once before declaring the store corrupt
+# (re-review I-D). A genuinely corrupt store re-reads to the same
+# disagreement and still raises.
+_LOAD_TEAR_REREADS = 1
+
+
+def _snapshot_file(source: Path, destination: Path) -> None:
+    """Snapshot `source` so a rename over it can be undone.
+
+    A hard link costs no space and no copy (the 0.83 GB matrix is not
+    duplicated); filesystems that refuse one fall back to a byte copy.
+    """
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+
+
+def _is_same_file(left: Path, right: Path) -> bool:
+    """True when both names resolve to the same inode."""
+    try:
+        a, b = os.stat(left), os.stat(right)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _recovery_snapshot_is_current(directory: Path) -> bool:
+    """True when the recovery snapshot belongs to the CURRENTLY published
+    `entries.json` — i.e. `matrix.npy.prev` is the matrix that the
+    published `entries.json` describes, whatever `matrix.npy` currently is.
+
+    `entries.json.prev` is a hard link taken before the renames, so while
+    the published entries are still the ones the snapshot was taken
+    against, the two names are the same inode; once `entries.json` has been
+    replaced they are not, and the snapshot is stale. Copying a store
+    (`cp -R`, `rsync`, `tar`, Docker `COPY`) breaks the link but preserves
+    the bytes, so an equal-content fallback keeps a store that was copied
+    mid-publish recoverable. Both checks are skipped entirely in the normal
+    case, where no snapshot exists at all.
+    """
+    prev_matrix = directory / _PREV_MATRIX_NAME
+    prev_entries = directory / _PREV_ENTRIES_NAME
+    entries_path = directory / _ENTRIES_NAME
+    if not (prev_matrix.exists() and prev_entries.exists()):
+        return False
+    if _is_same_file(prev_entries, entries_path):
+        return True
+    try:
+        return filecmp.cmp(prev_entries, entries_path, shallow=False)
+    except OSError:
+        return False
+
+
+def _sweep_stale_temp_files(directory: Path) -> None:
+    """Remove temp files abandoned by a hard-killed save (re-review m-3).
+
+    Only the two `*.tmp.<uuid>` namespaces this module owns are touched.
+    Saves into one store directory are single-writer (checkpointing runs
+    from one process); a second concurrent saver would already be racing on
+    the published names.
+    """
+    for pattern in _TEMP_GLOBS:
+        for stale in directory.glob(pattern):
+            with contextlib.suppress(OSError):
+                stale.unlink()
+
+
+def _recover_snapshot_matrix(directory: Path, entry_count: int) -> np.ndarray | None:
+    """The matrix matching a published `entries.json` whose `matrix.npy`
+    was replaced by an interrupted save, or None if unavailable."""
+    if not _recovery_snapshot_is_current(directory):
+        return None
+    try:
+        candidate = _read_matrix(directory / _PREV_MATRIX_NAME)
+    except CorruptStore:
+        return None
+    if candidate.ndim == 2 and candidate.shape[0] == entry_count:
+        return candidate
+    return None
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Flush the directory entry so a completed rename survives power loss
+    (review M-12). Best-effort: platforms that refuse a directory fd skip
+    it rather than failing the save."""
+    with contextlib.suppress(OSError):
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _read_entries_payload(entries_path: Path) -> dict:
+    """Read + JSON-parse `entries.json`, typed on failure."""
+    try:
+        raw = json.loads(entries_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise CorruptStore(
+            f"embedding store entries.json is not valid JSON ({entries_path}): {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise CorruptStore(f"embedding store entries.json is not a JSON object ({entries_path})")
+    return raw
+
+
+def _read_matrix(matrix_path: Path) -> np.ndarray:
+    """Read `matrix.npy`, typed on failure.
+
+    Pin round I-2/M-9: matrix.npy is an untrusted on-disk artifact —
+    `allow_pickle=False` is stated explicitly (not just inherited), and a
+    truncated/empty/garbage file (exactly what a killed checkpoint save
+    produces) raises a typed `CorruptStore` instead of an untyped
+    `ValueError`/`EOFError` that would crash a consumer's startup.
+    """
+    try:
+        return np.load(matrix_path, allow_pickle=False)
+    except (ValueError, OSError, EOFError) as exc:
+        raise CorruptStore(
+            f"embedding store matrix.npy is unreadable or corrupt ({matrix_path}): {exc}"
+        ) from exc
+
+
+# --------------------------------------------------------------------------
 # EmbeddingStore
 # --------------------------------------------------------------------------
 
@@ -537,51 +696,113 @@ class EmbeddingStore:
         )
 
     def save(self, directory: str | Path) -> None:
-        """Publish this store to `directory` with exactly ONE atomic rename.
+        """Publish this store into `directory`, which is a PLAIN directory.
 
-        Both files are written into a private, uniquely-named staging
-        directory; a symlink pointing at that staging directory is then
-        published with a SINGLE `os.replace` call, atomically repointing
-        `directory` (which this method always manages as a symlink) at the
-        new generation. `matrix.npy`/`entries.json` are still readable at
-        their frozen paths directly under `directory` — path resolution
-        follows the symlink transparently.
+        `directory` is created with `mkdir(parents=True, exist_ok=True)`
+        semantics, and once a save returns it holds exactly the two
+        published file names (plus whatever the operator put there),
+        so every ordinary way an operator gets a store onto a machine keeps
+        working: a directory baked into an image by Docker `COPY` (which
+        dereferences symlinks), a volume/PVC mount point, a pre-created
+        output directory, and `cp -R`/`rsync -a`/`tar` copies of a saved
+        store — all real files, no symlink indirection, nothing outside
+        this directory touched (re-review C-1/I-A/I-B). If the store path
+        is itself an operator symlink onto a roomier volume, `save` simply
+        writes THROUGH it into the target and never removes anything the
+        operator put there.
 
-        A crash while WRITING the staged files (e.g. `np.save` raising)
-        leaves `directory` pointed at whatever it pointed at before this
-        call, untouched, and cleans up the abandoned staging directory —
-        pin round I-1/M-12: no crash window can land on a hybrid of
-        old+new files, and no `*.tmp`-style leftovers accumulate. The
-        previous generation is removed only after the swap succeeds.
+        Atomicity (pin round I-1, integrity contract I-10a) is a
+        rename pair guarded by a recovery snapshot, not a single rename:
+
+        1. both files are written to unique temp names beside their
+           destinations and fsync'd;
+        2. the currently-published pair is snapshotted as
+           `matrix.npy.prev` / `entries.json.prev` — hard links, so no copy
+           and no extra disk beyond the temp file already staged;
+        3. `matrix.npy` is published with `os.replace`, then
+           `entries.json` is published with `os.replace`;
+        4. if the second rename raises, the first is ROLLED BACK from the
+           snapshot, so what remains is exactly the previous generation;
+        5. the snapshot is dropped once the pair is consistent again
+           (published or rolled back).
+
+        A HARD kill in the window between 3 and 4 (SIGTERM, SIGKILL, power
+        loss) unwinds no Python `except`, so the rollback cannot run — the
+        snapshot is what covers it: it survives the kill, `entries.json`
+        is still the generation it was taken against (proved by inode
+        identity, not by guesswork), and `load` reads the matrix back out
+        of it, yielding exactly the previous store. The same snapshot makes
+        a CONCURRENT READER safe across the same window (re-review I-D).
+
+        Temp names are unique (two concurrent savers cannot clobber each
+        other), are always cleaned up including on the crash path (review
+        M-12), and any left by a hard-killed save are swept at the start of
+        the next one (re-review m-3). The directory entry is fsync'd so a
+        completed publish survives power loss.
         """
         directory = Path(directory)
-        directory.parent.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
+        _sweep_stale_temp_files(directory)
         payload = {"model": self.model, "dim": self.dim, "entries": self._entries}
 
+        matrix_path = directory / _MATRIX_NAME
+        entries_path = directory / _ENTRIES_NAME
+        prev_matrix = directory / _PREV_MATRIX_NAME
+        prev_entries = directory / _PREV_ENTRIES_NAME
         token = uuid.uuid4().hex
-        staging = directory.parent / f".{directory.name}.staging-{token}"
-        staging.mkdir(parents=True)
+        matrix_tmp = directory / f"{_MATRIX_NAME}.tmp.{token}"
+        entries_tmp = directory / f"{_ENTRIES_NAME}.tmp.{token}"
+
+        consistent = False
         try:
-            with open(staging / "matrix.npy", "wb") as fh:
+            with open(matrix_tmp, "wb") as fh:
+                # AC-3 pins the interruption through numpy.save itself, so
+                # the matrix write must go through np.save (not
+                # np.lib.format.write_array).
                 np.save(fh, self.matrix)
-            (staging / "entries.json").write_text(json.dumps(payload), encoding="utf-8")
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
+                fh.flush()
+                os.fsync(fh.fileno())
+            with open(entries_tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload))
+                fh.flush()
+                os.fsync(fh.fileno())
 
-        link = directory.parent / f".{directory.name}.link-{token}"
-        os.symlink(staging, link, target_is_directory=True)
-        previous_target = directory.resolve() if directory.is_symlink() else None
-        try:
-            os.replace(link, directory)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                link.unlink()
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
+            # Refresh the recovery snapshot unless the one on disk is
+            # already the matching partner of the published entries.json —
+            # which is exactly the state a previously hard-killed save
+            # leaves behind, and the one snapshot that must NOT be
+            # overwritten (the published matrix.npy is the torn half).
+            if not _recovery_snapshot_is_current(directory):
+                prev_matrix.unlink(missing_ok=True)
+                prev_entries.unlink(missing_ok=True)
+                if matrix_path.exists() and entries_path.exists():
+                    _snapshot_file(matrix_path, prev_matrix)
+                    _snapshot_file(entries_path, prev_entries)
 
-        if previous_target is not None and previous_target != staging.resolve():
-            shutil.rmtree(previous_target, ignore_errors=True)
+            os.replace(matrix_tmp, matrix_path)
+            try:
+                os.replace(entries_tmp, entries_path)
+            except BaseException:
+                # Undo the half-published generation. A failure of the
+                # rollback itself propagates (chaining the original as its
+                # context) rather than being swallowed — and leaves the
+                # snapshot in place, since that is what `load` then needs.
+                if prev_matrix.exists():
+                    os.replace(prev_matrix, matrix_path)
+                else:
+                    matrix_path.unlink(missing_ok=True)
+                consistent = True
+                raise
+            consistent = True
+        finally:
+            for leftover in (matrix_tmp, entries_tmp):
+                with contextlib.suppress(OSError):
+                    leftover.unlink(missing_ok=True)
+            if consistent:
+                for snapshot in (prev_matrix, prev_entries):
+                    with contextlib.suppress(OSError):
+                        snapshot.unlink(missing_ok=True)
+            _fsync_directory(directory)
 
     @classmethod
     def load(
@@ -607,14 +828,33 @@ class EmbeddingStore:
         if not entries_path.exists():
             raise FileNotFoundError(f"embedding store missing entries.json: {entries_path}")
 
-        try:
-            raw = json.loads(entries_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise CorruptStore(
-                f"embedding store entries.json is not valid JSON ({entries_path}): {exc}"
-            ) from exc
+        # A save publishes matrix.npy and then entries.json. Between those
+        # two renames the published pair is one file from each generation,
+        # whose only signature is a row-count disagreement — reachable by a
+        # concurrent reader (re-review I-D) and left on disk by a save the
+        # kernel killed before its rollback could run. Both are resolved
+        # here, and neither weakens the corruption check: a genuinely
+        # corrupt store has no matching snapshot, re-reads to the same
+        # disagreement, and still raises below.
+        for reread in range(_LOAD_TEAR_REREADS + 1):
+            raw = _read_entries_payload(entries_path)
+            matrix = _read_matrix(matrix_path)
+            persisted = raw.get("entries")
+            if not isinstance(persisted, dict) or matrix.ndim != 2:
+                break
+            if len(persisted) == matrix.shape[0]:
+                break
+            recovered = _recover_snapshot_matrix(directory, len(persisted))
+            if recovered is not None:
+                # An interrupted save's own snapshot of the matrix this
+                # entries.json describes — the store reads as the previous
+                # generation, whole.
+                matrix = recovered
+                break
+            if reread == _LOAD_TEAR_REREADS:
+                break
 
-        if not isinstance(raw, dict) or "model" not in raw:
+        if "model" not in raw:
             raise CorruptStore(
                 f"embedding store entries.json is missing the 'model' identity field "
                 f"({entries_path})"
@@ -641,18 +881,6 @@ class EmbeddingStore:
                 f"embedding store entries.json has a non-integer 'dim': {stored_dim!r} "
                 f"({entries_path})"
             )
-
-        # Pin round I-2/M-9: matrix.npy is an untrusted on-disk artifact —
-        # allow_pickle=False is stated explicitly (not just inherited), and
-        # a truncated/empty/garbage file (exactly what a killed checkpoint
-        # save produces) raises a typed CorruptStore instead of an untyped
-        # ValueError/EOFError that would crash a consumer's startup.
-        try:
-            matrix = np.load(matrix_path, allow_pickle=False)
-        except (ValueError, OSError, EOFError) as exc:
-            raise CorruptStore(
-                f"embedding store matrix.npy is unreadable or corrupt ({matrix_path}): {exc}"
-            ) from exc
 
         if matrix.dtype != np.float16:
             raise CorruptStore(
@@ -738,6 +966,15 @@ def cosine_top_k(
     bounds the transient fp32 memory, never changes the result. `store
     .matrix` is a cached array (pin round I-6), so this only ever slices,
     casts one block at a time, and dots — never a full-matrix copy.
+
+    Top-k is a SELECTION, not a full sort (re-review I-C): the Python
+    `sorted(range(n_rows), ...)` this replaces was measured at 189.1 ms of
+    a 220.7 ms query at 265,000 x 1536 — 86% of the call, and the reason
+    the ticket's own 50-150 ms/query estimate was missed. `np.argpartition`
+    is O(N) in C. Ordering is bit-for-bit the same as the full sort: score
+    descending, ties by ascending row index, including at the k-boundary
+    (the only place a partition can disagree with a sort), which is
+    resolved by taking the lowest row indices among the tied set.
     """
     query = np.asarray(query_vec_f32, dtype=np.float32)
     norm = np.linalg.norm(query)
@@ -754,5 +991,13 @@ def cosine_top_k(
         block = matrix[start:end].astype(np.float32)
         scores[start:end] = block @ query
 
-    order = sorted(range(n_rows), key=lambda row: (-scores[row], row))[:k]
-    return [(row, float(scores[row])) for row in order]
+    if k == 0:
+        return []
+
+    negated = -scores
+    threshold = negated[np.argpartition(negated, k - 1)[k - 1]]
+    better = np.flatnonzero(negated < threshold)  # strictly inside the cut
+    tied = np.flatnonzero(negated == threshold)  # ascending row index already
+    candidates = np.concatenate((better, tied[: k - better.size]))
+    order = candidates[np.lexsort((candidates, negated[candidates]))]
+    return [(int(row), float(scores[row])) for row in order]
