@@ -149,3 +149,38 @@ Hand-built judgment set: 5 queries, 65 blind pooled judgments (`evalsets/judgmen
 | BM25 (k1=1.5, b=0.75) | 0.520 | 0.540 | 0.612 | 0.949 | 1.000 | 0.622 |
 
 MRR = 1.000: the top-ranked result was human-judged relevant on every query. The identical labels produce both rows — the delta is the ranking function, measured, not vibed. History: `evalsets/scoreboard.jsonl`.
+
+## Defended k1/b
+
+BM25's `k1` (tf-saturation strength) and `b` (length-normalization
+strength) are not picked by convention — they're swept over a grid and
+defended against the judgment set's mean NDCG@10, via
+`onrecord/eval/sweep.py`:
+
+```sh
+uv run python -m onrecord.eval.sweep \
+    --index artifacts/index \
+    --judgments evalsets/judgments.jsonl \
+    --out artifacts/sweeps/k1b_ndcg10.json \
+    [--plot]
+```
+
+The sweep scores every cell of `k1 ∈ {0.0, 0.25, …, 2.5}` ×
+`b ∈ {0.0, 0.1, …, 1.0}` (121 cells) as the mean NDCG@10 across every
+judgment query — a query that retrieves nothing still counts (as a 0.0)
+toward the mean, so the number below cannot be inflated by silently
+dropping hard queries. `--plot` additionally renders a heatmap PNG next to
+the JSON artifact.
+
+**Chosen (k1, b): TBD — filled in after the corpus-v2 sweep run.**
+
+| k1 | b | Mean NDCG@10 |
+|---|---|---|
+| TBD | TBD | TBD |
+
+*Grid summary (corpus-v2, post re-judged q1–q5 — see `tickets/T-019.md`'s
+hard precondition): TBD.*
+
+**Defense:** TBD — one paragraph explaining why the chosen `(k1, b)` beats
+the BM25 textbook default (1.5, 0.75) and any nearby cell on this corpus's
+judgment set, once the operational sweep has run.
