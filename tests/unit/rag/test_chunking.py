@@ -191,7 +191,20 @@ the REAL retriever. NOTHING is written to disk — never `artifacts/index`
 `retrieve_fn_factory(chunks) -> retrieve_fn(query_text) -> list[chunk_id]`
 is the injection seam (T-022+ re-runs the same sweep semantically); the
 retrieve_fn is called with the judgment row's QUERY TEXT, not its query_id,
-and exactly ONCE per valid cell.
+and exactly ONCE per valid cell. **At most ONE cell's index is alive at any
+moment** — the previous cell's chunks and retriever must be released before
+the next cell's index is built (pin round, review CQ-2: measured 13.71 GB
+peak against 8.70 GB for a single index at real corpus scale, because the
+loop variables are only rebound after the next right-hand side has been
+evaluated).
+
+**Grid parameter validation** — `window < 1` and `overlap < 0` are AC-7
+errors wherever they are supplied, including through `windows`/`overlaps`;
+`chunk_sweep` raises rather than filtering them out (pin round, review CQ-5 —
+filtering them produced a fully-formed artifact with an empty curve and
+`best: null`, so a typo in a CLI grid flag published a blank deliverable with
+no error anywhere). `overlap >= window` remains a SILENT SKIP: that is the
+ticket's own stated invalid-cell class, not a typo class.
 
 **Return / artifact shape** (exact top-level key set, all JSON-native so it
 round-trips through `json.dumps`/`json.loads` unchanged):
@@ -206,15 +219,20 @@ round-trips through `json.dumps`/`json.loads` unchanged):
 
 `best` = max `"recall@10"`, ties broken by SMALLEST `(window, overlap)`
 lexicographically — pinned against a scrambled `windows`/`overlaps` input
-below, so it must be an explicit sort, not iteration luck. (`best` is only
-exercised with a `k_values` containing 10; the ticket defines the tie-break
-on `recall@10` and says nothing about a grid lacking it, so that case is
-deliberately left unpinned.)
+below, so it must be an explicit sort, not iteration luck. **`k_values` must
+therefore contain 10**: a grid without it makes the ticket's tie-break metric
+undefined, and the artifact's key set is closed, so there is nowhere to record
+that `best` was actually chosen on some other k. `chunk_sweep` raises
+`ValueError` naming `k_values`, up front, before any retrieval work (pin
+round, review CQ-6 — the alternative observed in review was every cell
+scoring `-0.0` and `best` silently returning `(1, 0)` no matter which cell
+won).
 
 `corpus_version` — tolerant inline read of `<manifest_dir>/manifest.json`
 (T-018's filename/`corpus_version` key): `manifest_dir=None`, a missing
-dir, a missing file, corrupt JSON, or a manifest without the key all yield
-`"unversioned"`.
+dir, a missing file, corrupt JSON, a manifest without the key, **or a
+non-UTF-8 (byte-corrupt) manifest** all yield `"unversioned"`. The tolerance
+is over BYTES, not just over JSON syntax (pin round, review CQ-8).
 
 `retrieval` is pinned to `"bm25"` for the DEFAULT retriever only — the
 ticket names no other value, so nothing here pins what an injected
@@ -225,25 +243,53 @@ labelled `"retrieval": "bm25"`. That is an adoption-honesty wart on a graded
 deliverable; resolving it (a label derived from the retriever, or a new key)
 is a ticket amendment, not a post-freeze test edit.
 
-**Not frozen-tested, per the ticket:** the `main()` CLI (its flag set is not
-specified by the ticket) and the `--plot` matplotlib path (dev dep;
-font/renderer nondeterminism — same convention as T-019).
+**CLI `main(argv=None) -> int`** — added to the frozen contract in the pin
+round (code review SC-1: the ticket assigns this file the writer of the
+graded curve, `T-020.md:25`, and it was missing entirely, which also orphaned
+`manifest_dir`). Full flag set and rationale in the CLI test section's banner
+comment near the end of this file. The **PNG itself stays un-frozen** per the
+ticket (matplotlib is a dev dep; font/renderer nondeterminism — same
+convention as T-019). What IS pinned about `--plot`: the flag is recognised,
+and the JSON artifact is written BEFORE any plotting is attempted, so a
+missing or broken matplotlib can never cost the deliverable.
 
 **Deliberately left unpinned** (raised in review; each would freeze behavior
 the ticket does not state): duplicate/conflicting judgment rows for the same
 `(query_id, doc_id)` — `onrecord.eval.run._load_judgments` is last-row-wins
 by construction, but T-020 does not name that loader, so pinning it here
 would freeze a loader choice; ids with more than three colon-separated parts
-(see Grouping above); and `best` under a `k_values` lacking 10 (see best,
-above). The ticket DoD's *"`onrecord/rag/__init__.py` is empty"* is an
-orchestrator merge-gate check on the IMPLEMENTER's file (shared with T-021),
-not a behavior of `chunk_corpus`/`chunk_sweep` — it is not asserted here.
+(see Grouping above); an EMPTY `windows`/`overlaps` tuple (neither the ticket
+nor the review's fix list names it, and its correct behavior — raise, or an
+empty grid — is genuinely undefined). The ticket DoD's
+*"`onrecord/rag/__init__.py` is empty"* is an orchestrator merge-gate check on
+the IMPLEMENTER's file (shared with T-021), not a behavior of
+`chunk_corpus`/`chunk_sweep` — it is not asserted here.
+
+**Caption-gap disclosure (review CQ-4) — NOT pinned, by design.** Ingest omits
+empty caption windows (`onrecord/ingest/youtube.py:100-113`), so segment
+indices within a video can be non-contiguous and a merged "300 s window" can
+span a real-time gap — measured at 0.7-1.6 % of merged chunks on corpus v1,
+worst case `yt:0Ij8OxBcnFc` jumping seg028 -> seg085 (~71 minutes). The
+implementation is CORRECT as specified: the ticket says "merge into sliding
+windows of `window` SEGMENTS" (`T-020.md:20`), which is positional, and this
+file pins exactly that. The artifact's key set is closed at 6 keys, so there
+is no schema slot for a disclosure field — adding one would break AC-6.
+Therefore this belongs in the README curve caption at number-fill (alongside
+the existing adoption-honesty note), or in a ticket amendment making windows
+gap-aware. Recorded here so it is not lost, not encoded as a test.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import gc
+import gzip
+import importlib
 import importlib.util
 import json
+import subprocess
+import sys
+import weakref
 from itertools import chain
 from pathlib import Path
 
@@ -252,6 +298,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from onrecord.types import Doc
+
+# tests/unit/rag/test_chunking.py -> parents[3] is the worktree root.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # --------------------------------------------------------------------------
 # Module-presence guards (see module docstring)
@@ -289,6 +338,18 @@ def _chunk_corpus(docs, *args, **kwargs):
 
 def _chunk_sweep(docs, judgments_path, **kwargs):
     return _sweep_module().chunk_sweep(docs, judgments_path, **kwargs)
+
+
+def _sweep_main():
+    """The ticket-body CLI entry point (T-020.md:25). Guarded like the modules
+    themselves so its absence is one clean RED, never an AttributeError."""
+    main = getattr(_sweep_module(), "main", None)
+    if main is None:
+        pytest.fail(
+            "onrecord.rag.chunk_sweep.main missing — the ticket's CLI "
+            "(T-020.md:25) writes artifacts/sweeps/chunking_recall.json"
+        )
+    return main
 
 
 # --------------------------------------------------------------------------
@@ -428,6 +489,25 @@ def _write_judgments(path: Path, rows: list[dict]) -> Path:
         for row in rows:
             fh.write(json.dumps(row) + "\n")
     return path
+
+
+def _write_corpus_snapshot(path: Path, docs: list[Doc]) -> Path:
+    """Write a corpus snapshot in the committed format — gzipped JSONL, one
+    `Doc(**json.loads(line))` per line, exactly what `corpus/v1/corpus.jsonl.gz`
+    holds and what `onrecord.ingest.build_corpus.load_corpus_snapshot` reads."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        for doc in docs:
+            fh.write(json.dumps(dataclasses.asdict(doc)) + "\n")
+    return path
+
+
+def _write_manifest(dir_path: Path, version: str = "v2") -> Path:
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "manifest.json").write_text(
+        json.dumps({"corpus_version": version, "doc_count": 4}), encoding="utf-8"
+    )
+    return dir_path
 
 
 # --------------------------------------------------------------------------
@@ -1322,3 +1402,330 @@ def test_overlap_greater_than_window_raises_value_error_naming_overlap():
     # spec(T-020:AC-7)
     with pytest.raises(ValueError, match="overlap"):
         _chunk_corpus(_mixed_corpus(), window=2, overlap=5)
+
+
+# ==========================================================================
+# AC-7 extension — chunk_sweep must not swallow the same invalid parameters
+# (pin round, code review CQ-5: `_valid_cells` filtered `0 <= overlap <
+# window` BEFORE anything reached chunk_corpus, so a typo in the grid flags
+# emitted a fully-formed artifact with an EMPTY curve and `best: null`
+# instead of AC-7's ValueError. `overlap >= window` stays a silent skip --
+# that is the ticket's own stated invalid-cell class, pinned by
+# test_invalid_cells_are_excluded_from_the_grid -- but `window < 1` and
+# `overlap < 0` are AC-7 errors wherever they are supplied.)
+# ==========================================================================
+
+
+def test_sweep_rejects_window_below_one_instead_of_emitting_an_empty_curve(tmp_path):
+    # spec(T-020:AC-7) -- review CQ-5
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    with pytest.raises(ValueError, match="window"):
+        _chunk_sweep(MERGE_DOCS, judgments, windows=(0,), overlaps=(0,))
+
+
+def test_sweep_rejects_negative_overlap_instead_of_emitting_an_empty_curve(tmp_path):
+    # spec(T-020:AC-7) -- review CQ-5
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    with pytest.raises(ValueError, match="overlap"):
+        _chunk_sweep(MERGE_DOCS, judgments, windows=(2,), overlaps=(-1,))
+
+
+def test_sweep_rejects_invalid_grid_parameters_before_doing_any_retrieval_work(tmp_path):
+    # spec(T-020:AC-7) -- review CQ-5. Validation is up front: the real
+    # sweep spends ~13 min building indexes, so a bad grid flag must fail
+    # in the first millisecond, not after the corpus has been chunked.
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    calls = []
+
+    def factory(chunks):
+        calls.append(chunks)
+        return lambda query: []
+
+    with pytest.raises(ValueError):
+        _chunk_sweep(
+            MERGE_DOCS, judgments, windows=(3, -1), overlaps=(0,), retrieve_fn_factory=factory
+        )
+    assert calls == []
+
+
+# ==========================================================================
+# AC-6 extension — `best` must not be silently wrong when k_values lacks 10
+# (pin round, code review CQ-6)
+# ==========================================================================
+
+
+def test_best_raises_when_k_values_lacks_the_recall_at_10_tie_break_metric(tmp_path):
+    # spec(T-020:AC-6) -- review CQ-6. The ticket defines `best` as "by
+    # recall@10, ties -> smallest (window, overlap)" and the artifact's key
+    # set is CLOSED (6 keys), so there is nowhere to record "best was
+    # actually chosen on recall@20". The previous behaviour -- every cell
+    # scoring `cell.get("recall@10", 0.0)` == -0.0 and the tie-break handing
+    # back (1,0) regardless of which cell won -- publishes a wrong `best` on
+    # a graded artifact with no warning anywhere. Test Agent decision
+    # (delegated by the orchestrator): fail loudly, naming the parameter,
+    # rather than silently redefining the metric.
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    with pytest.raises(ValueError, match="k_values"):
+        _chunk_sweep(MERGE_DOCS, judgments, k_values=(5, 20))
+
+
+def test_k_values_validation_happens_before_any_retrieval_work(tmp_path):
+    # spec(T-020:AC-6) -- review CQ-6; same up-front rule as CQ-5.
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    calls = []
+
+    def factory(chunks):
+        calls.append(chunks)
+        return lambda query: []
+
+    with pytest.raises(ValueError, match="k_values"):
+        _chunk_sweep(MERGE_DOCS, judgments, k_values=(5, 20), retrieve_fn_factory=factory)
+    assert calls == []
+
+
+# ==========================================================================
+# AC-6 extension — manifest tolerance is BYTE tolerance
+# (pin round, code review CQ-8)
+# ==========================================================================
+
+
+def test_corpus_version_is_unversioned_for_a_non_utf8_manifest(tmp_path):
+    # spec(T-020:AC-6) -- review CQ-8. The ticket says "None/missing/corrupt
+    # -> unversioned"; a byte-corrupt manifest is squarely corrupt. Catching
+    # only (OSError, JSONDecodeError) lets UnicodeDecodeError escape, so a
+    # truncated/binary-garbage manifest crashes the sweep instead of
+    # degrading. Mirrors T-018's tolerant read contract.
+    manifest_dir = tmp_path / "index"
+    manifest_dir.mkdir()
+    (manifest_dir / "manifest.json").write_bytes(b"\xff\xfe\x00corpus_version")
+    result = _default_sweep(tmp_path, manifest_dir=manifest_dir)
+    assert result["corpus_version"] == "unversioned"
+
+
+# ==========================================================================
+# AC-5 extension — one cell's index alive at a time
+# (pin round, code review CQ-2)
+# ==========================================================================
+
+
+def test_at_most_one_cell_index_is_alive_at_any_point(tmp_path, monkeypatch):
+    # spec(T-020:AC-5) -- review CQ-2. `chunks`/`retrieve_fn` are only
+    # rebound AFTER the next cell's right-hand side is evaluated, so cell
+    # i's index is still held by the not-yet-rebound closure while cell
+    # i+1's index is built to completion. Measured at real scale: 13.71 GB
+    # peak vs 8.70 GB for a single index -- the difference between a sweep
+    # that fits on a 16 GB machine and one that does not.
+    #
+    # This wraps (never replaces) the real InvertedIndex.build and counts
+    # live instances through a WeakSet, so it observes the sweep's own
+    # reference discipline rather than any implementation shape.
+    inverted = importlib.import_module("onrecord.index.inverted")
+    original_build = inverted.InvertedIndex.build
+    live: weakref.WeakSet = weakref.WeakSet()
+    census = []
+
+    def tracking_build(docs, analyzer=None):
+        index = original_build(docs, analyzer)
+        live.add(index)
+        gc.collect()
+        census.append(len(live))
+        return index
+
+    monkeypatch.setattr(inverted.InvertedIndex, "build", staticmethod(tracking_build))
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", MERGE_JUDGMENTS)
+    _chunk_sweep(MERGE_DOCS, judgments)
+
+    assert len(census) == len(DEFAULT_CELLS)
+    assert max(census) == 1
+
+
+# ==========================================================================
+# Ticket-body CLI (T-020.md:25) — the writer of the graded curve artifact
+# (pin round, code review SC-1)
+#
+# The ticket assigns `chunk_sweep.py` a `main()` that writes
+# artifacts/sweeps/chunking_recall.json (+ optional --plot). It was missing
+# entirely, which also orphaned `manifest_dir` -- a parameter that exists
+# specifically because "the CLI passes it" (T-020.md:24), so without a CLI
+# every artifact carries "corpus_version": "unversioned", the exact
+# provenance hole the parameter was added to close.
+#
+# Flag set follows the repo's established CLI convention
+# (onrecord/eval/differential.py, onrecord/eval/judgments.py,
+# onrecord/ingest/build_corpus.py, onrecord/cli.py): `main(argv=None) -> int`
+# with argparse, an explicit argv list, never sys.argv.
+#     --corpus       (required)  gzipped corpus snapshot, the committed
+#                                corpus/v1/corpus.jsonl.gz format
+#     --judgments    (required)  judgments JSONL
+#     --out          (optional)  default artifacts/sweeps/chunking_recall.json,
+#                                resolved relative to CWD, parents created
+#     --manifest-dir (optional)  threaded to chunk_sweep(manifest_dir=...)
+#     --min-grade    (optional)  int, default 1
+#     --plot         (optional)  flag; the PNG itself is NOT frozen-tested
+#                                (matplotlib is a dev dep — ticket's own
+#                                exclusion, same convention as T-019)
+# The grid axes get no flags: the ticket names none, so the CLI runs
+# chunk_sweep's defaults.
+# ==========================================================================
+
+
+def _cli_case(tmp_path):
+    """(corpus.jsonl.gz, judgments.jsonl) for the MERGE fixture."""
+    corpus = _write_corpus_snapshot(tmp_path / "corpus" / "corpus.jsonl.gz", MERGE_DOCS)
+    judgments = _write_judgments(tmp_path / "evalsets" / "judgments.jsonl", MERGE_JUDGMENTS)
+    return corpus, judgments
+
+
+def test_cli_main_returns_zero_on_a_successful_sweep(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1
+    corpus, judgments = _cli_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    exit_code = _sweep_main()(["--corpus", str(corpus), "--judgments", str(judgments)])
+    assert exit_code == 0
+
+
+def test_cli_writes_the_ticket_default_artifact_path_relative_to_cwd(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1. The path is the ticket's, verbatim;
+    # parent dirs are created (they do not exist in a fresh checkout).
+    corpus, judgments = _cli_case(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(["--corpus", str(corpus), "--judgments", str(judgments)])
+    assert (tmp_path / "artifacts" / "sweeps" / "chunking_recall.json").is_file()
+
+
+def test_cli_artifact_content_equals_the_library_sweep_result(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1. The CLI is a thin writer: same docs,
+    # same judgments, same default grid => byte-identical JSON payload.
+    corpus, judgments = _cli_case(tmp_path)
+    expected = _chunk_sweep(MERGE_DOCS, judgments)
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(["--corpus", str(corpus), "--judgments", str(judgments)])
+    written = json.loads(
+        (tmp_path / "artifacts" / "sweeps" / "chunking_recall.json").read_text(encoding="utf-8")
+    )
+    assert written == expected
+
+
+def test_cli_honours_an_explicit_out_path_and_creates_its_parents(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1
+    corpus, judgments = _cli_case(tmp_path)
+    out = tmp_path / "nested" / "elsewhere" / "curve.json"
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(["--corpus", str(corpus), "--judgments", str(judgments), "--out", str(out)])
+    assert out.is_file()
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_cli_threads_manifest_dir_into_the_artifacts_corpus_version(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1. This is WHY manifest_dir exists
+    # (T-020.md:24, plan-review I-1): without the CLI passing it, every
+    # published curve is stamped "unversioned".
+    corpus, judgments = _cli_case(tmp_path)
+    manifest_dir = _write_manifest(tmp_path / "index", "v2")
+    out = tmp_path / "curve.json"
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(
+        [
+            "--corpus",
+            str(corpus),
+            "--judgments",
+            str(judgments),
+            "--manifest-dir",
+            str(manifest_dir),
+            "--out",
+            str(out),
+        ]
+    )
+    assert json.loads(out.read_text(encoding="utf-8"))["corpus_version"] == "v2"
+
+
+def test_cli_threads_min_grade_into_the_artifact(tmp_path, monkeypatch):
+    # spec(T-020:AC-6) -- review SC-1. min_grade is the swept OQ-6 knob;
+    # the artifact echoes whatever the CLI was told.
+    corpus, judgments = _cli_case(tmp_path)
+    out = tmp_path / "curve.json"
+    monkeypatch.chdir(tmp_path)
+    _sweep_main()(
+        [
+            "--corpus",
+            str(corpus),
+            "--judgments",
+            str(judgments),
+            "--min-grade",
+            "2",
+            "--out",
+            str(out),
+        ]
+    )
+    assert json.loads(out.read_text(encoding="utf-8"))["min_grade"] == 2
+
+
+def test_cli_accepts_the_plot_flag_and_still_writes_the_json_artifact(tmp_path):
+    # spec(T-020:AC-6) -- review SC-1. Two things are pinned, neither of
+    # them the PNG (matplotlib is a dev dep and the ticket excludes the
+    # render from frozen tests): (1) --plot is a RECOGNISED flag, i.e.
+    # argparse does not SystemExit(2) on it; (2) the JSON artifact -- the
+    # graded deliverable -- is already on disk before any plotting is
+    # attempted, so a missing/broken matplotlib can never cost the curve.
+    # Runs in a fresh interpreter so a stray matplotlib import cannot leak
+    # into this process and redden the hermetic probe below.
+    corpus, judgments = _cli_case(tmp_path)
+    out = tmp_path / "curve.json"
+    argv = [
+        "--corpus",
+        str(corpus),
+        "--judgments",
+        str(judgments),
+        "--out",
+        str(out),
+        "--plot",
+    ]
+    probe = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(REPO_ROOT)!r})",
+            "import onrecord.rag.chunk_sweep as sweep_mod",
+            "try:",
+            f"    sweep_mod.main({argv!r})",
+            "except SystemExit as exc:",
+            "    raise AssertionError(f'--plot rejected by the parser: {exc}')",
+            "except Exception:",
+            "    pass",
+            f"assert __import__('pathlib').Path({str(out)!r}).is_file(), 'json not written'",
+        ]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(tmp_path)
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_cli_without_plot_flag_never_imports_matplotlib(tmp_path):
+    # spec(T-020:AC-6) -- review SC-1. Ticket: matplotlib is a DEV-only dep
+    # imported only inside the --plot branch; a module-level import would
+    # make the graded artifact path depend on a plotting library.
+    #
+    # The check runs in a FRESH interpreter (idiom copied from T-019's
+    # tests/unit/test_sweep.py, where it survived review): asserting on this
+    # process's sys.modules would be a global, order-dependent claim that any
+    # sibling suite -- including T-019's own, which ships the same --plot
+    # convention and is what installs matplotlib into the dev env -- could
+    # redden. A subprocess makes the assertion about this module only.
+    corpus, judgments = _cli_case(tmp_path)
+    out = tmp_path / "curve.json"
+    argv = ["--corpus", str(corpus), "--judgments", str(judgments), "--out", str(out)]
+    probe = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(REPO_ROOT)!r})",
+            "import onrecord.rag.chunk_sweep as sweep_mod",
+            f"exit_code = sweep_mod.main({argv!r})",
+            "assert exit_code == 0, exit_code",
+            "leaked = sorted(m for m in sys.modules if m.split('.')[0] == 'matplotlib')",
+            "assert not leaked, leaked",
+        ]
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(tmp_path)
+    )
+    assert proc.returncode == 0, proc.stderr
