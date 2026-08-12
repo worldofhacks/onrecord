@@ -1,9 +1,116 @@
 # T-013 Test Agent Report — FastAPI layer (/api/search, /api/tickers, /api/metrics, /api/answer, /health)
 
-**Status:** DONE (see "Update — op whitelist + k bounds" below for the
-current state; original section preserved beneath it).
+**Status:** DONE (see "Update — re-pin op=AND under BM25" below for the
+current state; earlier sections preserved beneath it).
 
-## Update — op whitelist + k bounds → 422 (post-review fix round)
+## Update — re-pin op=AND under BM25 (wave-4 adjudication)
+
+**Worktree for this round:** `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-013R`
+(branch `ticket/T-013R-and-ranking`) — a NEW repair worktree, branched from
+the merged swarm state after wave-4 landed T-011's `ranked_search` for real
+(previous rounds were done in `/Users/quietguy/Documents/Dev/Gauntlet/wt-T-013`,
+branch `ticket/T-013-api`, where T-011 hadn't merged yet).
+
+**Trigger:** wave-4 merge activated `onrecord/api.py`'s T-011 feature-detect
+(`ranked_search` is now genuinely importable), which broke 3 of the original
+AC-1 pins that baked in boolean-fallback-era assumptions (`score` always
+`0.0`; `op=AND` as a `boolean_search` intersection with no scoring). The
+coordinator relayed the orchestrator's adjudication (recorded in
+`.tdd-swarm/LESSONS.md`): `op=AND` = the conjunctive candidate set (docs
+containing ALL query terms) THEN BM25-ranked; `op=OR` = BM25 over the union
+(unchanged, already what `ranked_search` does); result scores are always
+real positive BM25 floats, never `0.0`, for either `op`.
+
+**3 tests updated** (module docstring's new "Extension — `op=AND` under
+BM25 (wave-4 adjudication)" section has full detail; doc-id-set
+expectations for AND/OR are UNCHANGED from the pre-BM25 pins — only the
+score-shape assertions are new, since the adjudicated candidate-set logic
+for AND is identical to `boolean_search`'s):
+- `test_search_returns_full_field_set_with_correct_values`: `d1["score"]`
+  re-pinned from `== 0.0` to `isinstance(..., float) and > 0.0`.
+- `test_search_op_and_narrows_to_docs_containing_all_terms`: kept the
+  `{"d2", "d5"}` doc-id-set assertion; added "every score is a positive
+  float" + "scores are non-increasing (BM25-ranked)".
+- `test_search_valid_uppercase_op_still_works` (both `AND`/`OR`
+  parametrizations, for symmetry — the score contract isn't AND-specific):
+  same two score assertions added alongside the existing per-op doc-id-set
+  checks.
+
+**Verification against this worktree's current `onrecord/api.py`**
+(`_resolve_search_fn()` resolves `ranked_search` and calls
+`ranked_search(index, q, k=k)` unconditionally — `op` is validated but
+never threaded into the ranked call, api.py:190-194):
+
+Result: **2 failed, 29 passed** in `tests/unit/test_api.py` (up from the
+prior round's 31-test file — this round added 0 new test *functions*, only
+new assertions inside 3 existing ones, so the collected count is unchanged
+at 31; full-repo `uv run pytest -q` → **2 failed, 259 passed**).
+
+- `test_search_op_and_narrows_to_docs_containing_all_terms` and
+  `test_search_valid_uppercase_op_still_works[AND]` **FAIL**, both
+  cleanly on the doc-id-SET assertion (`{"d1","d2","d3","d5"}` returned
+  instead of `{"d2","d5"}`) — proving `op=AND` is currently a no-op once
+  `ranked_search` is the active path, exactly the implementation gap this
+  round exists to pin as a frozen target for a later fix round. Neither
+  fails on the new score assertions.
+- `test_search_returns_full_field_set_with_correct_values` **PASSES**
+  as re-pinned. This one turned out to be a pure stale-assertion problem,
+  not an implementation bug: the default `op="OR"` path was already
+  correctly BM25-scoring every result (real, positive score), so
+  realigning the assertion from `== 0.0` to `> 0.0` makes it pass
+  immediately with zero implementation change. This is the correct,
+  expected outcome for a pin that was stale rather than exposing a real
+  gap — not every "transitional pin" implies a live bug.
+- `test_search_valid_uppercase_op_still_works[OR]` also passes (op=OR's
+  doc-id-set and score assertions were never in question).
+
+**Achievability sanity-check** (no throwaway app built this round — the
+fix is narrow and the underlying formula/algorithm were already
+independently verified by T-011's own frozen tests): confirmed directly
+against the real, already-merged `onrecord.rank.bm25`/
+`onrecord.search.ranked.ranked_search` and `onrecord.search.boolean
+.boolean_search` that the adjudicated contract is mathematically
+achievable — `boolean_search(idx, "substation earnings", "AND")` on the
+`AC1_DOCS` fixture yields exactly `{d2, d5}`, and `ranked_search` over the
+same query scores them `d2=1.133 > d5=1.000` (both positive, strictly
+descending — d2 is the shorter doc, correctly scoring higher under BM25's
+length normalization, consistent with T-011's own AC-3).
+
+**Verification performed:**
+1. `uv run pytest tests/unit/test_api.py -v` (fastapi is a real pyproject
+   dependency in this merged-state worktree, no `--with` needed) → **2
+   failed, 29 passed**, both failures clean `AssertionError`s on the
+   doc-id-set check, no collection errors, no uncaught exceptions.
+2. Full-repo regression: `uv run pytest -q` → **2 failed, 259 passed**.
+3. `bash .tdd-swarm/spec-lint.sh tickets/T-013.md` → still `spec-lint OK:
+   all ACs covered for T-013`.
+4. `uv run ruff format tests/unit/test_api.py` (1 file reformatted) then
+   `uv run ruff format --check tests/` → clean; `uv run ruff check tests/`
+   → `All checks passed!`.
+5. `git status --short` before commit: only `tests/unit/test_api.py`
+   modified — no implementation files touched, no new files.
+
+**Notes for the Implementation Agent (round 3):** in `_resolve_search_fn`'s
+ranked branch (api.py, currently `hits = ranked_search(index, q, k=k)`),
+when `op == "AND"`, first compute the conjunctive candidate doc-id set
+(e.g. via `{r.doc_id for r in boolean_search(index, q, "AND")}`, or by
+intersecting `index.postings(term).doc_ids` per analyzed term directly)
+and restrict `ranked_search`'s scoring to that set before truncating to
+`k` — `ranked_search` itself has no candidate-set-narrowing parameter (by
+design, per its own file-scope contract: "self-contained... `boolean.py`
+is not touched or imported from here"), so the AND-narrowing has to happen
+in `api.py`, either by post-filtering `ranked_search`'s full-union results
+down to the AND set (simplest — score everything via `ranked_search(...,
+k=<large>)`, then filter to the AND id set, then truncate to `k`; loses
+some efficiency but needs no new shared code) or by open-coding the
+BM25-summing loop over a pre-narrowed candidate set (matches T-011's own
+internal implementation shape more closely, avoids requesting more than
+`k` from `ranked_search`). Do not edit the 3 re-pinned tests to make them
+pass — frozen, same as the rest of the file.
+
+---
+
+## Earlier update — op whitelist + k bounds → 422 (post-review fix round)
 
 **Trigger:** Review (`.tdd-swarm/reports/T-013-review.md`) APPROVED T-013
 but flagged 1 Important + folded in 1 Minor, both live-confirmed against the
