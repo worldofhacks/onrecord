@@ -1,6 +1,34 @@
 # T-011 Implementation Report — BM25 ranking (bm25_score + ranked_search)
 
-**Status:** DONE — all 21 frozen tests in `tests/unit/test_bm25.py` pass; local gates green.
+**Status:** DONE — all 25 frozen tests in `tests/unit/test_bm25.py` pass; local gates green.
+
+## Update (post-review fix — Important finding I-1)
+
+Review flagged: `bm25_score(..., k1=0, ...)` raised `ZeroDivisionError` when
+`tf=0` (denominator collapses to `tf` at `k1=0`, and `tf=0` is the ORDINARY
+case for any OR-semantics `ranked_search` candidate that matches only a
+subset of the query's terms — not a contrived direct-call-only edge case).
+Test Agent extended `tests/unit/test_bm25.py` at commit `90cf5cc` with 4 new
+tests pinning: `tf=0` → `0.0` at any `k1` (never raises); `tf>0` at `k1=0` →
+pure IDF (saturation collapses to exactly `1.0`, independent of `tf`
+magnitude and `b`); `avg_doc_len=0` → `0.0` (adjacent guard, same
+division-by-zero shape); `ranked_search(k1=0)` on a partial-match
+multi-term query completes and ranks by summed IDF of only the
+actually-matched terms (tf=1 and tf=3 for the same term now tie).
+
+Fix — a single guard clause at the top of `bm25_score`
+(`onrecord/rank/bm25.py`), before the formula ever divides by anything
+involving `tf`:
+
+```python
+if tf <= 0 or avg_doc_len <= 0:
+    return 0.0
+```
+
+No changes to `onrecord/search/ranked.py` were needed — it already routes
+every score through `bm25_score`, so the guard covers `ranked_search`'s
+`k1=0` partial-match path automatically. All 25 tests pass (21 original +
+4 new); local gates green (`208 passed` = prior `204` + 4 new).
 
 ## Files added (within ticket file_scopes)
 
@@ -51,29 +79,32 @@ No other files modified. `git status` shows only the two new paths above.
   `get_doc`) but not imported from or edited — `ranked.py` is self-contained,
   per the ticket's file scope.
 
-## Gate results
+## Gate results (final, post-fix)
 
 ```
 $ uv run pytest tests/unit/test_bm25.py -v
-21 passed in 0.29s
+25 passed in 0.29s
 
 $ .tdd-swarm/run-local-gates.sh . tickets/T-011.md
 == format ==  41 files already formatted
 == lint ==    All checks passed!
-== unit ==    204 passed, 1 warning in 3.99s
+== unit ==    208 passed, 1 warning in 3.96s
 == spec-lint == spec-lint OK: all ACs covered for T-011
 ALL LOCAL GATES GREEN
 ```
 
-204 = the prior 182 (T-001..T-010) + 21 new (T-011) + 1 previously-existing
-test not counted in the T-010 baseline snapshot; no prior test regressed.
+208 = the prior 204 (baseline through the initial T-011 implementation) + 4
+new k1=0/avg_doc_len=0 boundary tests; no prior test regressed.
 
 ## Disputes
 
-None. Both ambiguities the Test Agent flagged (tie-break direction, snippet
-char-offset mapping) were already resolved and pinned in the frozen test
-file/docstring before this agent started; implementation followed those
-pinned conventions directly. No `BLOCKED(TEST_DISPUTE)`.
+None. Both original ambiguities the Test Agent flagged (tie-break direction,
+snippet char-offset mapping) were already resolved and pinned in the frozen
+test file/docstring before this agent started; implementation followed
+those pinned conventions directly. The post-review k1=0 boundary semantics
+were likewise pinned by the Test Agent (commit `90cf5cc`) before this fix
+was made — implementation followed the pinned semantics directly. No
+`BLOCKED(TEST_DISPUTE)`.
 
 ## Out of scope (per ticket, not touched)
 
