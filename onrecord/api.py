@@ -107,7 +107,7 @@ DEFAULT_INDEX_DIR = "artifacts/index"
 DEFAULT_UI_DIR = "ui/"
 DEFAULT_CORPUS_PATH = "corpus/v1/corpus.jsonl.gz"
 DEFAULT_PRICES_CACHE_DIR = "artifacts/prices"
-SCOREBOARD_PATH = "artifacts/scoreboard.jsonl"
+SCOREBOARD_PATH = os.environ.get("ONRECORD_SCOREBOARD", "artifacts/scoreboard.jsonl")
 
 # 9-key result shape pinned by tests/unit/test_api.py's module docstring:
 # SearchResult's 3 fields (doc_id, score, snippet) + 6 of Doc's metadata
