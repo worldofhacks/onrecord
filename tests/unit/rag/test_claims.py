@@ -484,7 +484,42 @@ _TERMINATORS = [".", "!", "?", "。", "！", "？"]
 # capitalization heuristic slip past a purely lowercase alphabet.
 _BODY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 
-_body_strategy = st.text(alphabet=_BODY_ALPHABET, min_size=1, max_size=12)
+# DEFLAKE (test-integrity, pre-freeze; coordinator-directed -- "editing the
+# original frozen property is SANCTIONED as a test-integrity deflake, no
+# behavior pin changes"). Mirrors the ticket's pinned fixed abbreviation
+# list (Test Agent design decision #1 above, independently exercised by
+# `test_abbreviations_module_constant_drives_every_entry`) -- the 5 entries
+# are hardcoded here, NOT imported from `onrecord.rag.claims`, so this
+# filter is its own independent pin rather than being coupled to whatever
+# the not-yet-authoritative implementation's `ABBREVIATIONS` constant
+# happens to contain. A generated body that spells one of these stems is
+# byte-identical (whole-word, case-insensitive) to a real fixed
+# abbreviation and silently suppresses the split via the implementation's
+# OWN correct `_ends_with_abbreviation` whole-word check (AC-2, a pinned,
+# CORRECT behavior) -- not a bug in `split_claims`, but a poisoned
+# generator input. Reproduced empirically pre-fix: `('No. A.',
+# ['No. A.'], 2)`. The check mirrors the real whole-word boundary rule
+# (suffix match AND the preceding character, if any, is non-alnum) rather
+# than plain whole-body equality, because a body like `"XYZ No"` or a
+# body with a leading space before `"No"` collides via the exact same
+# suffix mechanism without the WHOLE body equaling the stem.
+_ABBREVIATION_STEMS_LOWER = ("inc", "no", "u.s", "corp", "co")
+
+
+def _spells_fixed_abbreviation(body: str) -> bool:
+    lowered = body.lower()
+    for stem in _ABBREVIATION_STEMS_LOWER:
+        if len(lowered) < len(stem) or lowered[-len(stem) :] != stem:
+            continue
+        boundary = len(lowered) - len(stem) - 1
+        if boundary < 0 or not lowered[boundary].isalnum():
+            return True
+    return False
+
+
+_body_strategy = st.text(alphabet=_BODY_ALPHABET, min_size=1, max_size=12).filter(
+    lambda b: not _spells_fixed_abbreviation(b)
+)
 
 
 @st.composite
@@ -653,7 +688,15 @@ def test_trailing_number_and_period_that_is_not_an_enumerator_still_splits():
 # conflate two independent amendment clauses in one invariant -- letters
 # are sufficient to exercise spacing-independent marker attachment.
 _LETTER_BODY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ "
-_letter_body_strategy = st.text(alphabet=_LETTER_BODY_ALPHABET, min_size=1, max_size=12)
+# DEFLAKE (test-integrity, pre-freeze): same `_spells_fixed_abbreviation`
+# guard as `_body_strategy` above, and for the same reason -- this
+# alphabet is letters-only, which can ALSO spell "No"/"Inc"/"Corp"/"Co"
+# (reproduced empirically pre-fix: `('No. A.', ['No. A.'], 2)` against
+# THIS property specifically). See the comment above `_body_strategy` for
+# the full rationale; not repeated here.
+_letter_body_strategy = st.text(alphabet=_LETTER_BODY_ALPHABET, min_size=1, max_size=12).filter(
+    lambda b: not _spells_fixed_abbreviation(b)
+)
 
 
 @st.composite
