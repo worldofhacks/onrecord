@@ -132,6 +132,46 @@ and the implementer should read them as such):
 11. The adapter must not re-emit a transport error's text verbatim (review
     I-7); it wraps it in its own credential-free message.
 
+PIN ROUND — decisions ratified after the implementation code review
+--------------------------------------------------------------------
+The code review (`.tdd-swarm/reports/T-021-review.md`, REQUEST CHANGES,
+6 Important) measured six integrity/spend defects that the frozen suite did
+not pin. The tests in the "PIN ROUND" section at the end of this file close
+them. Three of the six needed a contract decision, ratified by the
+orchestrator's pin-round brief:
+
+12. **A duplicate `chunk_id` within ONE `embed_corpus` call is REJECTED**
+    with typed `DuplicateChunkId`, raised BEFORE any provider call, leaving
+    the store untouched. The brief offered "last occurrence wins" as the
+    alternative; rejection is what the per-chunk contract implies, because:
+    (a) the cross-run rule is already "the chunk_id already in the store
+    wins, the new pair is skipped", so "last wins" would make the answer to
+    *which text is under this id* depend on whether the duplicate happened
+    to straddle a run boundary; (b) under identity chunking
+    `chunk_id == doc_id`, so a repeat is a duplicate corpus document — a
+    data defect an operator must see, not one to silently resolve by
+    dropping a document's text from the index; (c) rejecting before the
+    first provider call spends nothing on a defective corpus. Any repeated
+    chunk_id rejects, whether or not the texts agree — a single set check,
+    with no "same text so it's fine" special case to reason about.
+13. **A provider MAY declare `batch_size`** — the number of texts it bills
+    in one indivisible request — and when it does, `embed_corpus` must never
+    hand it more than that per `embed()` call, regardless of
+    `checkpoint_every`. `OpenAIEmbeddingProvider` declares it (its 512-text
+    HTTP batch). Without this, the store groups at `checkpoint_every`
+    (default 4096 = 8 HTTP requests), and a failure on request 8 discards 7
+    already-paid requests: up to 3,584 re-billed texts per occurrence
+    (review I-5). Providers without the attribute keep the old behavior.
+14. **`store.matrix` is a stable cached array, not a fresh stack per
+    access.** Pinned as object identity (`store.matrix is store.matrix`)
+    plus zero `np.stack`/`np.vstack` calls on the query path. The
+    implementation rebuilt the full matrix on every access, so each
+    `cosine_top_k` call transiently allocated 1.63 GB at 265K x 1536 — 33x
+    the ticket's own locked 0.05 GB per-block bound, which the module
+    docstring reproduces as a DoD deliverable (review I-6). This also
+    closes review M-11 (a consumer reading resolved rows one at a time paid
+    a full re-stack per element).
+
 DELIBERATELY NOT PINNED (documented gaps, not oversights)
 ---------------------------------------------------------
 * Re-embedding an existing `chunk_id` whose TEXT changed. `embed_corpus`
@@ -164,6 +204,7 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -177,8 +218,11 @@ OPENAI_MODEL = "text-embedding-3-small"
 SHARED_TEXT = "identical boilerplate paragraph"
 CANARY = "LOGGING-CAPTURE-CANARY"
 
-# Captured before any test monkeypatches numpy.save (see the atomic-save test).
+# Captured before any test monkeypatches these (atomic-save / query-path tests).
 _REAL_NP_SAVE = np.save
+_REAL_NP_STACK = np.stack
+_REAL_NP_VSTACK = np.vstack
+_REAL_OS_REPLACE = os.replace
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +333,52 @@ class FakeProvider:
     @property
     def texts_returned(self) -> list[str]:
         return [t for batch in self.returned for t in batch]
+
+
+class SubBatchingFakeProvider:
+    """A provider that BILLS in sub-batches, like the real adapter.
+
+    `OpenAIEmbeddingProvider.embed()` splits its input into 512-text HTTP
+    requests internally, so one `embed()` call can spend money several times
+    and then fail — the successful sub-batches are already paid for. This
+    fake reproduces that shape at test scale: `batch_size` texts per billed
+    sub-batch, `fail_on_sub_batch` counting sub-batches across the provider's
+    whole lifetime. `billed` records only texts that were actually paid for
+    (a sub-batch that raises is recorded in `sub_batches`, never in `billed`).
+    """
+
+    def __init__(
+        self,
+        dim: int = 4,
+        model: str = FAKE_MODEL,
+        batch_size: int = 2,
+        fail_on_sub_batch: int | None = None,
+    ):
+        self.dim = dim
+        self.model = model
+        self.batch_size = batch_size
+        self.fail_on_sub_batch = fail_on_sub_batch
+        self.calls: list[list[str]] = []
+        self.sub_batches: list[list[str]] = []
+        self.billed: list[str] = []
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        batch = list(texts)
+        self.calls.append(batch)
+        if not batch:
+            return np.zeros((0, self.dim), dtype=np.float32)
+        produced = []
+        for start in range(0, len(batch), self.batch_size):
+            sub = batch[start : start + self.batch_size]
+            self.sub_batches.append(sub)
+            if (
+                self.fail_on_sub_batch is not None
+                and len(self.sub_batches) == self.fail_on_sub_batch
+            ):
+                raise ProviderBoom(f"simulated failure on sub-batch {self.fail_on_sub_batch}")
+            self.billed.extend(sub)
+            produced.append(np.stack([_fake_vector(t, self.dim, self.model) for t in sub]))
+        return np.concatenate(produced, axis=0).astype(np.float32)
 
 
 class ScriptedProvider:
@@ -1765,3 +1855,477 @@ def test_resumed_store_equals_the_never_crashed_store(tmp_path):
     )
     ids = _ids(pairs)
     assert [resumed.entry_for(i) for i in ids] == [clean.entry_for(i) for i in ids]
+
+
+# ==========================================================================
+# ==========================================================================
+# PIN ROUND — added after the implementation code review
+# (.tdd-swarm/reports/T-021-review.md: REQUEST CHANGES, 6 Important).
+# New tests only; the 64 tests above are untouched and stay green against
+# the current implementation. Every test below is RED against commit
+# 0b1fb9f and pins a measured defect, not a hypothetical one.
+# ==========================================================================
+# ==========================================================================
+
+
+def test_module_exposes_the_pin_round_public_api():
+    # spec(T-021:AC-1)
+    # Kept separate from the original surface test so that one stays green;
+    # these two symbols are new contract (decisions 12 and 13).
+    mod = _module()
+
+    missing = [name for name in ("DuplicateChunkId",) if not hasattr(mod, name)]
+    assert missing == [], f"onrecord.rag.embeddings is missing pin-round symbols: {missing}"
+
+
+# --------------------------------------------------------------------------
+# I-1 — save() is atomic ACROSS BOTH FILES. Measured: a crash between the
+# two os.replace calls leaves a new matrix.npy beside an old entries.json,
+# and the previous checkpoint becomes unloadable. On the ticket's own
+# framing (~65 checkpoints in a multi-hour, ~$30-80 run) that window is
+# entered 65 times, and landing in it forces a full paid re-embed.
+# --------------------------------------------------------------------------
+
+
+def test_a_crash_between_the_two_renames_leaves_a_loadable_store(tmp_path, monkeypatch):
+    # spec(T-021:AC-3)
+    # Deliberately does NOT dictate the fix. Integrity contract I-10a says a
+    # store on disk is always loadable; this asserts that after an
+    # interrupted save the store is EXACTLY ONE OF {previous, new} — never a
+    # half-swapped hybrid. A single-rename design (staging directory) simply
+    # never trips the injected failure and lands on the "new" branch; a
+    # two-rename design must survive the crash with the previous store
+    # intact. Both pass; today's implementation produces the hybrid.
+    path = tmp_path / "store"
+    first_pairs = _pairs(3)
+    first = _new_store()
+    first.embed_corpus(first_pairs, FakeProvider())
+    first.save(path)
+
+    second = _new_store()
+    second.embed_corpus(first_pairs + [("c3", "t 3"), ("c4", "t 4")], FakeProvider())
+
+    renames = {"n": 0}
+
+    def failing_replace(src, dst):
+        renames["n"] += 1
+        if renames["n"] == 2:
+            raise OSError("simulated crash BETWEEN the two os.replace calls")
+        return _REAL_OS_REPLACE(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    try:
+        second.save(path)
+        crashed = False
+    except OSError:
+        crashed = True
+    finally:
+        monkeypatch.undo()
+
+    assert renames["n"] >= 1, (
+        f"precondition: save() must publish through os.replace so the crash "
+        f"window exists at all; it renamed {renames['n']} times"
+    )
+    try:
+        reloaded = _load_store(path)
+    except Exception as exc:  # noqa: BLE001 - the failure IS the finding
+        pytest.fail(
+            f"a save interrupted between its two renames destroyed the store: "
+            f"{type(exc).__name__}: {exc}. Integrity contract I-10a requires any "
+            f"previously-saved store to stay loadable — publish both files with a "
+            f"single atomic rename (staging directory), or record a generation "
+            f"marker load() can use to reject a half-swapped pair."
+        )
+
+    if crashed:
+        assert reloaded.matrix.shape[0] == 3, (
+            f"the interrupted save must leave the PREVIOUS 3-chunk checkpoint, not a "
+            f"hybrid; got {reloaded.matrix.shape[0]} rows"
+        )
+        assert reloaded.rows_for(["c3", "c4"]) == [None, None]
+    else:
+        assert reloaded.matrix.shape[0] == 5, (
+            "a single-rename design must land the NEW store whole; got a partial"
+        )
+        assert reloaded.rows_for(["c3", "c4"]) == [3, 4]
+
+
+def test_an_interrupted_save_leaves_no_temp_files_behind(tmp_path, monkeypatch):
+    # spec(T-021:AC-3)
+    # Review M-12: the abandoned temp is 0.83 GB at production scale, and it
+    # is never cleaned up.
+    path = tmp_path / "store"
+    first = _new_store()
+    first.embed_corpus(_pairs(3), FakeProvider())
+    first.save(path)
+
+    second = _new_store()
+    second.embed_corpus(_pairs(5), FakeProvider())
+    monkeypatch.setattr(np, "save", _save_then_fail)
+    try:
+        second.save(path)
+    except OSError:
+        pass
+    finally:
+        monkeypatch.undo()
+
+    leftovers = sorted(p.name for p in path.iterdir() if ".tmp" in p.name)
+    assert leftovers == [], (
+        f"an interrupted save must clean up its temp files (0.83 GB each at "
+        f"production scale, and a fixed name means two concurrent savers clobber "
+        f"each other); found {leftovers}"
+    )
+
+
+# --------------------------------------------------------------------------
+# I-2 — a corrupt matrix.npy must raise typed CorruptStore. Measured: bare
+# np.load lets ValueError/EOFError escape, which falls off T-024's
+# degradation ladder ("CorruptStore -> embed_store = None, 503, no
+# crash-loop") and crashes app startup instead. A truncated or zero-length
+# matrix.npy is exactly what a killed checkpoint save produces, so this
+# compounds I-1.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("corruption", ["truncated", "garbage", "empty", "pickled_object"])
+def test_load_raises_corrupt_store_on_an_unreadable_matrix_file(tmp_path, corruption):
+    # spec(T-021:AC-7)
+    path = tmp_path / "store"
+    _valid_raw_store(path, rows=3)
+    matrix_path = path / "matrix.npy"
+
+    if corruption == "truncated":
+        data = matrix_path.read_bytes()
+        matrix_path.write_bytes(data[: len(data) // 2])
+    elif corruption == "garbage":
+        matrix_path.write_bytes(b"\x93NUMPY this is not an array at all")
+    elif corruption == "empty":
+        matrix_path.write_bytes(b"")
+    else:
+        # Review M-9: matrix.npy is an untrusted on-disk artifact. numpy's
+        # allow_pickle=False default refuses this today, but as an inherited
+        # default rather than a stated intent — and it surfaces as an
+        # untyped ValueError either way.
+        np.save(matrix_path, np.array([{"payload": "object array"}], dtype=object))
+
+    with pytest.raises(_attr("CorruptStore")) as excinfo:
+        _load_store(path)
+
+    assert "matrix.npy" in str(excinfo.value), (
+        f"the error must name the unreadable file ({corruption}); got {excinfo.value!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# I-3 — the matrix's shape must agree with the store's own recorded dim,
+# and the adapter must check the width the provider actually returned.
+# Measured: a 999-wide matrix and a 1-D matrix both load clean, and
+# ONRECORD_EMBED_MODEL naming any model outside the adapter's 3-entry dim
+# table silently takes the 1536 default — so an entire paid run can produce
+# a store whose cache keys were computed at the wrong dim, defeating the
+# very M-9 poisoning guard dim-in-the-key exists for.
+# --------------------------------------------------------------------------
+
+
+def test_load_raises_corrupt_store_when_matrix_width_contradicts_stored_dim(tmp_path):
+    # spec(T-021:AC-7)
+    path = tmp_path / "store"
+    _matrix, payload = _valid_raw_store(path, rows=3, dim=4)
+    wrong_width = np.zeros((3, 999), dtype=np.float16)
+    _write_raw_store(path, wrong_width, payload)  # entries.json still says dim=4
+
+    with pytest.raises(_attr("CorruptStore")) as excinfo:
+        _load_store(path)
+
+    message = str(excinfo.value)
+    assert "999" in message or "4" in message, (
+        f"the error must name the contradicting widths — a store whose identity "
+        f"lies about its own matrix is the silent mis-map the integrity contract "
+        f"exists to prevent; got {message!r}"
+    )
+
+
+def test_load_raises_corrupt_store_on_a_one_dimensional_matrix(tmp_path):
+    # spec(T-021:AC-7)
+    path = tmp_path / "store"
+    _matrix, payload = _valid_raw_store(path, rows=3, dim=4)
+    # Length 3 so the row-COUNT check still passes and only an ndim/width
+    # check can catch it — otherwise this would go green for the wrong reason.
+    _write_raw_store(path, np.zeros(3, dtype=np.float16), payload)
+
+    with pytest.raises(_attr("CorruptStore")) as excinfo:
+        _load_store(path)
+
+    assert "matrix" in str(excinfo.value).lower(), (
+        f"a matrix.npy that is not N x dim must be rejected, not indexed into; "
+        f"got {excinfo.value!r}"
+    )
+
+
+def test_openai_adapter_rejects_a_response_whose_width_is_not_dim():
+    # spec(T-021:AC-5)
+    # Frozen decision 8 anticipated exactly this guard ("so a defensive
+    # arr.shape[1] == self.dim check stays valid"); it was never written.
+    dim = _openai_dim()
+    requests: list[httpx.Request] = []
+    transport = httpx.MockTransport(_openai_handler(3, requests))  # 3-wide, not `dim`
+    provider = _openai_provider(SENTINEL_KEY, transport)
+
+    with pytest.raises(Exception) as excinfo:
+        provider.embed(["doc-0", "doc-1"])
+
+    assert not isinstance(excinfo.value, AssertionError)
+    message = str(excinfo.value).lower()
+    assert str(dim) in message or "dim" in message or "shape" in message, (
+        f"the adapter must reject vectors whose width is not its declared dim — "
+        f"otherwise cache keys are computed at one dim while vectors are another; "
+        f"got {excinfo.value!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# I-4 — a duplicate chunk_id inside ONE embed_corpus call. Measured: both
+# occurrences append a row while the second overwrites the first's entry,
+# producing 3 rows / 2 entries — a store that saves happily, orphans a
+# paid-for row, and then fails its OWN load validation. Verbatim the failure
+# mode the review-C-2 ruling was written to prevent. Ratified decision 12:
+# typed rejection before any provider call.
+# --------------------------------------------------------------------------
+
+
+def test_duplicate_chunk_id_in_one_call_is_rejected_before_any_provider_call():
+    # spec(T-021:AC-2)
+    provider = FakeProvider()
+    store = _new_store()
+    pairs = [("DOC-A", "alpha"), ("DOC-B", "beta"), ("DOC-A", "gamma")]
+
+    with pytest.raises(_attr("DuplicateChunkId")):
+        store.embed_corpus(pairs, provider)
+
+    assert provider.calls == [], (
+        f"the duplicate must be caught before any money is spent on a defective "
+        f"corpus; the provider was called with {provider.calls}"
+    )
+
+
+def test_duplicate_chunk_id_rejection_names_the_offending_id():
+    # spec(T-021:AC-2)
+    store = _new_store()
+    pairs = [("DOC-A", "alpha"), ("DOC-B", "beta"), ("DOC-A", "gamma")]
+
+    with pytest.raises(_attr("DuplicateChunkId")) as excinfo:
+        store.embed_corpus(pairs, FakeProvider())
+
+    assert "DOC-A" in str(excinfo.value), (
+        f"the operator has to find the duplicate document in a 265K-chunk corpus — "
+        f"the error must name it; got {excinfo.value!r}"
+    )
+
+
+def test_store_survives_a_duplicate_chunk_id_rejection_intact(tmp_path):
+    # spec(T-021:AC-2)
+    store = _new_store()
+    store.embed_corpus(_pairs(2), FakeProvider())
+
+    with pytest.raises(_attr("DuplicateChunkId")):
+        store.embed_corpus([("DOC-A", "alpha"), ("DOC-A", "gamma")], FakeProvider())
+
+    assert store.matrix.shape[0] == 2, (
+        f"a rejected call must leave no orphan rows behind; got "
+        f"{store.matrix.shape[0]} rows for 2 chunks"
+    )
+    store.save(tmp_path / "store")
+    reloaded = _load_store(tmp_path / "store")
+    assert reloaded.rows_for(_ids(_pairs(2))) == [0, 1], (
+        "and the store must still round-trip its own load validation"
+    )
+
+
+# --------------------------------------------------------------------------
+# I-5 — a failure late in a checkpoint group discards every already-billed
+# sub-batch in it. Measured: the adapter bills 512 texts per HTTP request
+# while embed_corpus groups at checkpoint_every (default 4096), so a failure
+# on request 8 of 8 throws away 7 already-paid requests — up to 3,584
+# re-billed texts. The frozen AC-8 tests never see it because they use
+# checkpoint_every=2, below the batch size, so one group is one call.
+# Ratified decision 13: providers may declare `batch_size`, and
+# embed_corpus must never exceed it.
+# --------------------------------------------------------------------------
+
+
+def test_openai_provider_declares_its_http_batch_size():
+    # spec(T-021:AC-5)
+    provider = _openai_provider(SENTINEL_KEY, httpx.MockTransport(_never_called))
+
+    batch_size = getattr(provider, "batch_size", None)
+
+    assert isinstance(batch_size, int) and 1 <= batch_size <= 512, (
+        f"the adapter must publish the size of one indivisible billed request so "
+        f"embed_corpus can checkpoint at that granularity; got {batch_size!r}"
+    )
+
+
+def test_embed_corpus_never_asks_for_more_texts_than_the_provider_bills_at_once(tmp_path):
+    # spec(T-021:AC-8)
+    provider = SubBatchingFakeProvider(batch_size=2)
+    store = _new_store()
+
+    store.embed_corpus(_pairs(6), provider, checkpoint_dir=tmp_path / "ckpt", checkpoint_every=4096)
+
+    sizes = [len(call) for call in provider.calls]
+    assert sizes and all(size <= 2 for size in sizes), (
+        f"checkpoint_every (4096) must be clamped by the provider's own batch_size "
+        f"(2) — anything larger makes one embed() call span several billed requests, "
+        f"and a late failure discards the earlier ones; call sizes were {sizes}"
+    )
+
+
+def test_a_failure_mid_group_never_re_bills_an_already_paid_sub_batch(tmp_path):
+    # spec(T-021:AC-8)
+    pairs = _pairs(6)
+    checkpoint_dir = tmp_path / "ckpt"
+    first = SubBatchingFakeProvider(batch_size=2, fail_on_sub_batch=3)
+    store = _new_store()
+
+    with pytest.raises(ProviderBoom):
+        store.embed_corpus(pairs, first, checkpoint_dir=checkpoint_dir, checkpoint_every=4096)
+
+    assert first.billed == ["t 0", "t 1", "t 2", "t 3"], (
+        f"precondition: two sub-batches were successfully billed before the third "
+        f"failed; billed {first.billed}"
+    )
+    assert (checkpoint_dir / "matrix.npy").exists(), (
+        "the 4 texts already paid for were discarded — no checkpoint exists after "
+        "the crash. embed_corpus must not hand a provider more texts in one call "
+        "than it is willing to lose (decision 13)"
+    )
+
+    resumed = _load_store(checkpoint_dir)
+    second = SubBatchingFakeProvider(batch_size=2)
+    resumed.embed_corpus(pairs, second, checkpoint_dir=checkpoint_dir, checkpoint_every=4096)
+
+    re_billed = sorted(set(first.billed) & set(second.billed))
+    assert re_billed == [], (
+        f"these texts were paid for before the crash and paid for again after it: "
+        f"{re_billed} (up to 3,584 texts per occurrence at production defaults)"
+    )
+    assert resumed.rows_for(_ids(pairs)) == [0, 1, 2, 3, 4, 5]
+
+
+# --------------------------------------------------------------------------
+# I-6 — the query path must not materialize a copy of the whole store.
+# Measured at 265K x 1536: every cosine_top_k call rebuilt the 0.81 GB
+# matrix twice, for a 1.63 GB transient per query — 33x the ticket's locked
+# 0.05 GB per-block bound, which the module docstring reproduces as a DoD
+# deliverable. Two concurrent T-024 searches would transiently need 3.3 GB
+# on top of the resident store. Ratified decision 14.
+# --------------------------------------------------------------------------
+
+
+def test_matrix_property_returns_the_same_array_across_accesses(tmp_path):
+    # spec(T-021:AC-4)
+    store = _new_store()
+    store.embed_corpus(_pairs(3), FakeProvider())
+    store.save(tmp_path / "store")
+    loaded = _load_store(tmp_path / "store")
+
+    assert loaded.matrix is loaded.matrix, (
+        "`matrix` must expose a cached array, not rebuild one per access: a "
+        "consumer reading resolved rows one at a time otherwise pays a full "
+        "re-stack per element (0.24 s each at 265K scale). Returning the same "
+        "(optionally read-only) array satisfies this"
+    )
+
+
+def test_cosine_top_k_does_not_restack_the_matrix_per_query(tmp_path):
+    # spec(T-021:AC-4)
+    # Behavioral proxy for the memory bound: the re-stack is what allocates
+    # the full-matrix copy, and it is observable as np.stack/np.vstack calls
+    # on a path that should only slice, cast per block, and dot.
+    store = _new_store()
+    store.embed_corpus(_pairs(6), FakeProvider())
+    store.save(tmp_path / "store")
+    loaded = _load_store(tmp_path / "store")
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+    cosine_top_k = _attr("cosine_top_k")
+    calls = {"n": 0}
+
+    def counting_stack(*args, **kwargs):
+        calls["n"] += 1
+        return _REAL_NP_STACK(*args, **kwargs)
+
+    def counting_vstack(*args, **kwargs):
+        calls["n"] += 1
+        return _REAL_NP_VSTACK(*args, **kwargs)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(np, "stack", counting_stack)
+    monkey.setattr(np, "vstack", counting_vstack)
+    try:
+        results = cosine_top_k(loaded, query, 2, block_rows=2)
+    finally:
+        monkey.undo()
+
+    assert calls["n"] == 0, (
+        f"cosine_top_k re-stacked the whole store {calls['n']} time(s): the packed "
+        f"matrix must be cached at the load/save boundary so scoring only slices, "
+        f"casts one block at a time, and dots. Blocking bounds the fp32 slice, but "
+        f"a full-matrix copy in front of it is 33x the entire transient budget"
+    )
+    assert len(results) == 2, "and the query must still return its top-k"
+
+
+def test_cosine_top_k_clamps_a_negative_k_to_no_results():
+    # spec(T-021:AC-4)
+    # Review M-10: k=-1 silently returned N-1 rows via the `[:k]` slice.
+    store = _build_cosine_store([[1, 0, 0, 0], [0, 1, 0, 0], [1, 1, 0, 0]])
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+
+    assert _attr("cosine_top_k")(store, query, -1) == [], (
+        "a negative k must clamp to zero results, never silently drop the last "
+        "|k| rows off an otherwise-full ranking"
+    )
+
+
+# --------------------------------------------------------------------------
+# Minor one-liners worth freezing (review M-6, M-8).
+# --------------------------------------------------------------------------
+
+
+def test_a_non_finite_provider_vector_is_rejected_not_persisted():
+    # spec(T-021:AC-2)
+    # Review M-6: `norm > 0` is False for NaN, so the raw vector passes the
+    # guard unchanged. The NaN row persists, loads clean through every
+    # CorruptStore check, scores NaN (which breaks the ascending-row
+    # tie-break, since all NaN comparisons are False), and is not valid JSON
+    # by the time it reaches T-024's response.
+    provider = ScriptedProvider({"nan-text": [1.0, float("nan"), 0.0, 0.0]})
+    store = _new_store()
+
+    with pytest.raises(Exception) as excinfo:
+        store.embed_corpus([("DOC-NAN", "nan-text")], provider)
+
+    assert not isinstance(excinfo.value, AssertionError)
+    message = str(excinfo.value).lower()
+    assert "finite" in message or "nan" in message or "doc-nan" in message, (
+        f"the rejection must be actionable about what arrived; got {excinfo.value!r}"
+    )
+    assert store.rows_for(["DOC-NAN"]) == [None], "and no poisoned row may be left in the store"
+
+
+def test_load_raises_corrupt_store_when_dim_is_not_an_integer(tmp_path):
+    # spec(T-021:AC-7)
+    # Review M-8: a string dim loads clean, then content_hash(model, "four",
+    # text) yields a disjoint key space — a 100% cache miss that re-bills the
+    # entire corpus.
+    path = tmp_path / "store"
+    matrix, payload = _valid_raw_store(path, rows=3)
+    payload["dim"] = "four"
+    _write_raw_store(path, matrix, payload)
+
+    with pytest.raises(_attr("CorruptStore")) as excinfo:
+        _load_store(path)
+
+    assert "dim" in str(excinfo.value).lower(), (
+        f"the error must name the mistyped identity field; got {excinfo.value!r}"
+    )
