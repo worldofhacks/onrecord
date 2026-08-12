@@ -26,17 +26,42 @@ as malformed, not logged).
 gzipped snapshot -- shared by `onrecord.cli`'s offline clean-clone fallback
 (building an in-memory index from `corpus/v1/corpus.jsonl.gz` when no
 `artifacts/index` exists yet).
+
+Corpus-version manifest (T-018; tickets/T-018.md): every successful build
+also writes `MANIFEST_FILENAME` (`manifest.json`) into BOTH the snapshot
+`out_dir` and `index_out` -- the version travels with the built index since
+`onrecord.eval.run` / `onrecord.api` read the index, not the snapshot, at
+serve time. The manifest is a JSON object with exactly six keys:
+`corpus_version` (`"v{N}"`), `created_at` (ISO-8601 UTC), `doc_count`
+(rows successfully indexed), `source_counts` (`{source_type: n, ...}`,
+summing to `doc_count`), `git_sha` (`HEAD` short-circuited via `git
+rev-parse HEAD`, or the literal string `"unknown"` outside a git repo / on
+any git failure), and `snapshot_sha256` (the sha256 hexdigest of the
+written `corpus.jsonl.gz` file's bytes -- what lets a fetched/rebuilt
+Release-asset snapshot be verified by hashing). The gzip itself is written
+with a pinned `mtime=0` header so byte-identical raw input produces a
+byte-identical `corpus.jsonl.gz` (and thus an equal `snapshot_sha256`)
+regardless of wall-clock build time. `read_manifest(dir_path)` reads a
+directory's `manifest.json` back out and is tolerant of every failure mode
+(missing directory, missing file, corrupt JSON, or JSON that isn't an
+object) -- it returns `None` rather than raising, so callers like
+`onrecord.eval.run._corpus_version()` can treat "no manifest yet" as a
+plain, ordinary case.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import logging
+import subprocess
 import sys
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 from onrecord.index.inverted import InvertedIndex
@@ -50,6 +75,9 @@ OPTIONAL_FIELDS = ("ticker", "jurisdiction", "speaker")
 DEFAULT_RAW_DIR = "corpus/raw"
 DEFAULT_OUT_DIR = "corpus/v1"
 DEFAULT_INDEX_OUT = "artifacts/index"
+DEFAULT_VERSION = 1
+
+MANIFEST_FILENAME = "manifest.json"
 
 
 def _parse_jsonl_lines(lines: Iterable[str], source_label: str) -> Iterator[Doc]:
@@ -123,10 +151,52 @@ def load_corpus_snapshot(path: str | Path) -> list[Doc]:
         return list(_parse_jsonl_lines(fh, str(path)))
 
 
-def build_corpus(raw_dir: Path, out_dir: Path, index_out: Path) -> int:
+def _git_sha() -> str:
+    """Best-effort HEAD SHA; falls back to `"unknown"` outside a git repo or
+    on any git failure (mirrors `onrecord.eval.run._git_sha`)."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def read_manifest(dir_path: str | Path) -> dict | None:
+    """Read `MANIFEST_FILENAME` out of `dir_path`. Tolerant contract: never
+    raises -- returns `None` for a missing directory, a missing manifest
+    file, corrupt JSON, or JSON that decodes to something other than a
+    (schema-unvalidated) object."""
+    manifest_path = Path(dir_path) / MANIFEST_FILENAME
+    try:
+        with manifest_path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _write_manifest(dir_path: Path, manifest: dict) -> None:
+    dir_path.mkdir(parents=True, exist_ok=True)
+    manifest_path = dir_path / MANIFEST_FILENAME
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def build_corpus(
+    raw_dir: Path, out_dir: Path, index_out: Path, version: int = DEFAULT_VERSION
+) -> int:
     """Merge `raw_dir`'s JSONL rows into `<out_dir>/corpus.jsonl.gz` and
-    build + save an `InvertedIndex` to `index_out`. Returns the process
-    exit code: 0 on success (>=1 valid doc merged), 1 if none were found."""
+    build + save an `InvertedIndex` to `index_out`. On success, also writes
+    the corpus-version `manifest.json` (module docstring) into BOTH
+    `out_dir` and `index_out`. Returns the process exit code: 0 on success
+    (>=1 valid doc merged), 1 if none were found."""
     docs = _iter_raw_dir_docs(raw_dir)
     if not docs:
         logger.warning("no valid docs discovered under %s; nothing to build", raw_dir)
@@ -134,12 +204,28 @@ def build_corpus(raw_dir: Path, out_dir: Path, index_out: Path) -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     corpus_path = out_dir / "corpus.jsonl.gz"
-    with gzip.open(corpus_path, "wt", encoding="utf-8") as fh:
-        for doc in docs:
-            fh.write(json.dumps(asdict(doc)) + "\n")
+    payload = "".join(json.dumps(asdict(doc)) + "\n" for doc in docs).encode("utf-8")
+    # mtime=0 pins the gzip header so byte-identical raw input produces a
+    # byte-identical corpus.jsonl.gz (and equal snapshot_sha256) regardless
+    # of wall-clock build time (ORCHESTRATOR RULING, locked; see module
+    # docstring).
+    compressed = gzip.compress(payload, mtime=0)
+    corpus_path.write_bytes(compressed)
 
     index = InvertedIndex.build(docs)
     index.save(index_out)
+
+    source_counts = dict(Counter(doc.source_type for doc in docs))
+    manifest = {
+        "corpus_version": f"v{version}",
+        "created_at": datetime.now(UTC).isoformat(),
+        "doc_count": len(docs),
+        "source_counts": source_counts,
+        "git_sha": _git_sha(),
+        "snapshot_sha256": hashlib.sha256(compressed).hexdigest(),
+    }
+    _write_manifest(out_dir, manifest)
+    _write_manifest(index_out, manifest)
 
     print(f"onrecord.ingest.build_corpus: merged {len(docs)} doc(s) -> {corpus_path}")
     print(f"onrecord.ingest.build_corpus: index saved -> {index_out}")
@@ -165,9 +251,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=f"Recursively search this dir for *.jsonl adapter output (default: {DEFAULT_RAW_DIR})",
     )
     parser.add_argument(
+        "--version",
+        type=int,
+        default=DEFAULT_VERSION,
+        help=(
+            "Corpus version N (int, default: 1). Also derives --out's default "
+            "as corpus/v{N} when --out is not explicitly given."
+        ),
+    )
+    parser.add_argument(
         "--out",
-        default=DEFAULT_OUT_DIR,
-        help=f"Output directory for corpus.jsonl.gz (default: {DEFAULT_OUT_DIR})",
+        default=None,
+        help=(
+            f"Output directory for corpus.jsonl.gz (default: corpus/v{{version}}, "
+            f"i.e. {DEFAULT_OUT_DIR} when --version is omitted). Explicit --out "
+            "always wins over the derived default."
+        ),
     )
     parser.add_argument(
         "--index-out",
@@ -180,7 +279,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _parse_args(argv)
-    return build_corpus(Path(args.raw_dir), Path(args.out), Path(args.index_out))
+    out = args.out if args.out is not None else f"corpus/v{args.version}"
+    return build_corpus(Path(args.raw_dir), Path(out), Path(args.index_out), version=args.version)
 
 
 if __name__ == "__main__":
