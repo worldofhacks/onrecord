@@ -1,0 +1,11 @@
+# Swarm Lessons — onrecord
+
+(accretes: blocked-ticket root causes, wave failures, adjudicated disputes)
+
+- 2026-08-11: none yet — first run.
+- 2026-08-11 T-001: implementer excluded tests/ from ruff to dodge lint friction — gate-weakening move, reverted by orchestrator. Rule: frozen tests ship ruff-clean (orchestrator normalizes pre-freeze); linters never exclude tests/. Markdown/docs excludes are fine.
+- 2026-08-11 T-001: registry channel handles are best-guess (verified: false) — T-006 pull script must treat resolution failures as data, log them, and continue.
+- 2026-08-11 corpus: ALL fabricated-descriptive YouTube handles 404'd (e.g. @LoudounCountyBoardofSupervisors doesn't exist). Best-guess handles are near-worthless for civic channels — resolve via ytsearch voting BEFORE pulling; registry gets patched with verified URLs only.
+- 2026-08-11 T-003/T-004 adjudication: two reviewers independently caught an id-space collision — T-001 stub typed get_doc(str external) while T-004's frozen FakeIndex pinned get_doc(int internal). ORCHESTRATOR RULING: canonical index contract is get_doc(int internal | str external) — disjoint types make it unambiguous; T-003's test extension freezes it. Lesson: interface stubs must pin ID SPACES explicitly, not just types.
+- 2026-08-11 T-014: secret-leak checks must capture ALL loggers (root + libraries), not just the module's own — httpx logs full request URLs (query params included) at INFO. Silence/redact library loggers around keyed requests; sentinel-test at root level.
+- 2026-08-11 wave-4 merge: tests that pin TRANSITIONAL behavior (feature-detect fallbacks) must be tagged for re-pin at the unlocking merge — T-013 pinned boolean-fallback scores; T-011's merge legitimately changed them. Adjudicated: op=AND filters conjunctively THEN ranks by BM25; op=OR ranks the union; scores always BM25.

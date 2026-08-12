@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# uv / venv
+.venv/
+uv.lock.bak
+
+# Build artifacts
+dist/
+build/
+
+# onrecord runtime artifacts (indexes, caches) — not source
+artifacts/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store

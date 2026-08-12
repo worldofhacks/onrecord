@@ -1,0 +1,10 @@
+substation
+transformer
+interconnection
+variance
+megawatt
+petitioner
+substation megawatt curtailment
+transformer capacitor
+interconnection hearing docket
+variance easement

@@ -1,0 +1,35 @@
+{
+  "cik": "0007654321",
+  "entityName": "Good Energy Corp",
+  "tickers": ["GOOD"],
+  "exchanges": ["NYSE"],
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0007654321-26-000001",
+        "0007654321-26-000002",
+        "0007654321-26-000003"
+      ],
+      "filingDate": [
+        "2026-08-01",
+        "2026-07-15",
+        "2026-06-01"
+      ],
+      "reportDate": [
+        "2025-12-31",
+        "2026-07-14",
+        "2026-05-30"
+      ],
+      "form": [
+        "10-K",
+        "8-K",
+        "10-Q"
+      ],
+      "primaryDocument": [
+        "good10k.htm",
+        "good8k_missing.htm",
+        "good10q_timeout.htm"
+      ]
+    }
+  }
+}
