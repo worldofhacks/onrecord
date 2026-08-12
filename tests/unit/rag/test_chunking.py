@@ -59,12 +59,20 @@ Field DEFAULTS are deliberately NOT pinned — every construction below goes
 through `chunk_corpus`.
 
 **Validation** — `window >= 1` and `0 <= overlap < window`, else `ValueError`
-whose message names the offending parameter ("window" / "overlap"). When
-both rules are violated at once (e.g. `window=0, overlap=0`) the message
-must name `window` — the window rule is checked first.
+whose message names the offending parameter ("window" / "overlap"). AC-7 asks
+only that the parameter be NAMED, so that is all the tests pin: a substring
+search over the message. Check ORDER is deliberately NOT pinned — when both
+rules are violated at once (`window=0, overlap=0`) a natural overlap message
+("overlap must satisfy 0 <= overlap < window") also contains "window", so any
+precedence claim would be unenforceable theatre rather than a real freeze.
 
 **Grouping** — a doc participates in windowing iff its id matches
-`yt:<video>:seg<NNN>` (NNN = digits). Matching docs group per `<video>`,
+`yt:<video>:seg<NNN>` (NNN = digits, `seg` lowercase as ingest emits it —
+`SEG001` is therefore a passthrough, not a window participant). An id with
+MORE than three colon-separated parts (`yt:VID:sub:seg001`) is deliberately
+left unpinned: whether the video group is greedy is an implementation detail
+the ticket does not state, and no such id exists in the corpus (video ids are
+`[A-Za-z0-9_-]{11}`). Matching docs group per `<video>`,
 are ordered by NNN NUMERICALLY (not by input-list order — input order is
 arbitrary — and not lexicographically: ingest emits `f"seg{i:03d}"`, so a
 long enough video yields `seg1000`, which string-sorts before `seg999`),
@@ -108,7 +116,13 @@ Note the `w{window}` suffix uses the WINDOW ARGUMENT, never
 **Doc ids are echoed VERBATIM** — `doc_ids` holds the exact input id
 strings, in ascending segment order, never re-minted, re-cased, reshaped or
 re-prefixed (the 49 judged `yt:VIDEO:segNNN` ids are the judgment set's
-primary key — locked-decision).
+primary key — locked-decision). Parsing an id to SORT by NNN is fine;
+rebuilding the string from the parsed parts is not. Every yt fixture below
+therefore uses realistic MIXED-CASE video ids, and the verbatim-echo tests
+plus the hypothesis strategy feed NON-CANONICAL segment widths (`seg7`
+alongside `seg008`), so a parse-and-rebuild implementation emits a string
+the input never contained and fails loudly. `seg7` and `seg007` are two
+DIFFERENT doc ids and must never collapse onto one chunk.
 
 **Text join** — `" ".join(doc.text for doc in constituent_docs)`, a single
 space, no strip, no normalization (an empty constituent text therefore
@@ -159,15 +173,25 @@ relevant chunk.
 **recall@k** — per query: `|retrieved[:k] ∩ relevant_chunks| /
 |relevant_chunks|`, then the arithmetic MEAN over judgment queries. A query
 with ZERO coverage-relevant chunks contributes `0.0` and must never raise
-(matches `onrecord.eval.metrics.recall_at_k`'s pinned convention).
+(matches `onrecord.eval.metrics.recall_at_k`'s pinned convention) — and it
+STAYS IN THE MEAN'S DENOMINATOR, exactly as `onrecord.eval.run._mean_metrics`
+keeps every query in `per_query`. Dropping such a query instead of scoring it
+0.0 inflates the whole curve; it goes live the moment `min_grade=2` is swept
+(OQ-6), where any query without a grade-2 doc lands here. The denominator is
+a count of coverage-relevant CHUNKS, never of judged doc ids: a judgment
+naming a doc the sweep was not given produces no chunk and is not counted.
 
 **Default retrieval** — in-memory `InvertedIndex.build([...])` over
 `Doc(id=chunk.chunk_id, text=chunk.text, <chunk metadata>)` + BM25
-`ranked_search`, at a depth of at least `max(k_values)`. NOTHING is written
-to disk — never `artifacts/index` (the real index stays corpus-doc-keyed).
+`ranked_search`, at a depth of at least `max(k_values)`. `ranked_search`
+defaults to `k=10`, so omitting an explicit depth is correct only at the
+default `k_values=(5, 10)` — pinned below at `k_values=(5, 10, 50)` through
+the REAL retriever. NOTHING is written to disk — never `artifacts/index`
+(the real index stays corpus-doc-keyed).
 `retrieve_fn_factory(chunks) -> retrieve_fn(query_text) -> list[chunk_id]`
 is the injection seam (T-022+ re-runs the same sweep semantically); the
-retrieve_fn is called with the judgment row's QUERY TEXT, not its query_id.
+retrieve_fn is called with the judgment row's QUERY TEXT, not its query_id,
+and exactly ONCE per valid cell.
 
 **Return / artifact shape** (exact top-level key set, all JSON-native so it
 round-trips through `json.dumps`/`json.loads` unchanged):
@@ -194,11 +218,26 @@ dir, a missing file, corrupt JSON, or a manifest without the key all yield
 
 `retrieval` is pinned to `"bm25"` for the DEFAULT retriever only — the
 ticket names no other value, so nothing here pins what an injected
-`retrieve_fn_factory` should report.
+`retrieve_fn_factory` should report. IMPLEMENTER/T-022 NOTE (raised in
+review, deliberately NOT frozen because the ticket's key set is closed): as
+specified, T-022's semantic re-run through the seam would write an artifact
+labelled `"retrieval": "bm25"`. That is an adoption-honesty wart on a graded
+deliverable; resolving it (a label derived from the retriever, or a new key)
+is a ticket amendment, not a post-freeze test edit.
 
 **Not frozen-tested, per the ticket:** the `main()` CLI (its flag set is not
 specified by the ticket) and the `--plot` matplotlib path (dev dep;
 font/renderer nondeterminism — same convention as T-019).
+
+**Deliberately left unpinned** (raised in review; each would freeze behavior
+the ticket does not state): duplicate/conflicting judgment rows for the same
+`(query_id, doc_id)` — `onrecord.eval.run._load_judgments` is last-row-wins
+by construction, but T-020 does not name that loader, so pinning it here
+would freeze a loader choice; ids with more than three colon-separated parts
+(see Grouping above); and `best` under a `k_values` lacking 10 (see best,
+above). The ticket DoD's *"`onrecord/rag/__init__.py` is empty"* is an
+orchestrator merge-gate check on the IMPLEMENTER's file (shared with T-021),
+not a behavior of `chunk_corpus`/`chunk_sweep` — it is not asserted here.
 """
 
 from __future__ import annotations
@@ -268,23 +307,47 @@ METADATA_FIELDS = (
 
 CHUNK_FIELDS = ("chunk_id", "doc_ids", "text") + METADATA_FIELDS
 
-VIDEO_A = "AAAAAAAAAAA"
-VIDEO_B = "BBBBBBBBBBB"
-VIDEO_C = "CCCCCCCCCCC"
+# Realistic MIXED-CASE 11-char YouTube video ids -- VIDEO_A is a real id from
+# evalsets/judgments.jsonl. Never placeholder "AAAAAAAAAAA"-style ids: an
+# implementation that re-DERIVES doc ids instead of echoing them (parse the
+# parts to sort, then rebuild) is observationally identical on canonical
+# uppercase input, and re-minting the judged ids is the ticket's #1
+# forbidden move.
+VIDEO_A = "0Ij8OxBcnFc"
+VIDEO_B = "dQw4w9WgXcQ"
+VIDEO_C = "aB3dE5fG7hI"
 
 DEFAULT_CELLS = ((1, 0), (2, 0), (2, 1), (3, 0), (3, 1), (4, 0), (4, 1))
 
 
+def _seg(n: int) -> str:
+    """The canonical segment component, exactly as onrecord/ingest/youtube.py
+    emits it (`f"seg{i:03d}"`)."""
+    return f"seg{n:03d}"
+
+
+def _noncanonical_seg(n: int) -> str:
+    """A segment component that is VALID (`seg` + digits) but not what ingest
+    would have written for `n` -- odd n loses the zero padding entirely.
+    Numerically still `n`, so ids stay unique per (video, n) and the segment
+    ordering stays unambiguous, while any parse-and-rebuild implementation
+    emits a string the input never contained."""
+    return f"seg{n}" if n % 2 else f"seg{n:03d}"
+
+
 def _yt_id(video: str, n: int) -> str:
-    return f"yt:{video}:seg{n:03d}"
+    return f"yt:{video}:{_seg(n)}"
 
 
-def _yt_doc(video: str, n: int, text: str | None = None, **overrides) -> Doc:
+def _yt_doc(
+    video: str, n: int, text: str | None = None, seg: str | None = None, **overrides
+) -> Doc:
     """A caption-window Doc. `deep_link` and `speaker` deliberately VARY per
     segment so "metadata comes from the FIRST constituent doc" is provable
-    (a real 75s window's deep_link carries its own start timestamp)."""
+    (a real 75s window's deep_link carries its own start timestamp).
+    `seg` overrides the segment component verbatim (non-canonical widths)."""
     fields = {
-        "id": _yt_id(video, n),
+        "id": f"yt:{video}:{seg if seg is not None else _seg(n)}",
         "text": text if text is not None else f"caption {video} window {n:03d}",
         "source_type": "youtube",
         "venue_type": "spoken",
@@ -691,14 +754,51 @@ def test_yt_prefixed_ids_that_do_not_match_the_segment_pattern_pass_through():
         _edgar_doc("98", id="yt:VIDXXXXXXXX:segDEF"),
         _edgar_doc("97", id="yt:VIDYYYYYYYY"),
         _edgar_doc("96", id="ytx:VIDZZZZZZZ:seg001"),
+        _edgar_doc("95", id=f"yt:{VIDEO_A}:SEG001"),
     ]
     chunks = _chunk_corpus(docs, window=3, overlap=1)
     assert _doc_ids_map(chunks) == {d.id: [d.id] for d in docs}
 
 
 # ==========================================================================
-# AC-4 — doc ids echoed verbatim (hypothesis property tests)
+# AC-4 — doc ids echoed verbatim (deterministic + hypothesis property tests)
 # ==========================================================================
+
+
+def test_doc_ids_are_echoed_verbatim_from_non_canonically_padded_input():
+    # spec(T-020:AC-4) -- THE locked decision. "seg7" is a valid seg<NNN> id
+    # that ingest would have written as "seg007"; an implementation that
+    # parses the id to sort and then REBUILDS it (f"yt:{video}:seg{n:03d}")
+    # is invisible on canonical fixtures but silently breaks the join to the
+    # 49 judged doc ids. The window merges both docs, so the reformat would
+    # show up in doc_ids AND in the derived chunk_id.
+    docs = [_yt_doc(VIDEO_A, 7, seg="seg7"), _yt_doc(VIDEO_A, 8, seg="seg008")]
+    chunks = _chunk_corpus(docs, window=2, overlap=0)
+    assert _doc_ids_map(chunks) == {
+        f"yt:{VIDEO_A}:seg7+w2": [f"yt:{VIDEO_A}:seg7", f"yt:{VIDEO_A}:seg008"]
+    }
+
+
+def test_ids_differing_only_in_zero_padding_stay_distinct_chunks():
+    # spec(T-020:AC-4) -- "seg7" and "seg007" are DIFFERENT doc ids. A
+    # parse-and-rebuild implementation collapses them onto one chunk_id,
+    # silently dropping a doc from the corpus.
+    docs = [_yt_doc(VIDEO_A, 7, seg="seg7"), _yt_doc(VIDEO_A, 7, seg="seg007")]
+    chunks = _chunk_corpus(docs, window=1, overlap=0)
+    assert _doc_ids_map(chunks) == {
+        f"yt:{VIDEO_A}:seg7": [f"yt:{VIDEO_A}:seg7"],
+        f"yt:{VIDEO_A}:seg007": [f"yt:{VIDEO_A}:seg007"],
+    }
+
+
+def test_mixed_case_video_ids_survive_windowing_byte_for_byte():
+    # spec(T-020:AC-4) -- real video ids are mixed case (yt:0Ij8OxBcnFc:...);
+    # any casefold/upper applied while parsing the id must never reach the
+    # emitted doc_ids or chunk_id.
+    docs = [_yt_doc(VIDEO_A, n) for n in range(2)]
+    chunk = _chunk_corpus(docs, window=2, overlap=0)[0]
+    assert chunk.doc_ids == ["yt:0Ij8OxBcnFc:seg000", "yt:0Ij8OxBcnFc:seg001"]
+    assert chunk.chunk_id == "yt:0Ij8OxBcnFc:seg000+w2"
 
 
 @st.composite
@@ -716,7 +816,11 @@ def _yt_corpus_and_params(draw):
     )
     window = draw(st.integers(1, 5))
     overlap = draw(st.integers(0, window - 1))
-    return [_yt_doc(video, n) for video, n in pairs], window, overlap
+    # Mixed-case video ids AND non-canonical segment widths, so every
+    # property below is also a verbatim-echo check: a parse-and-rebuild
+    # implementation emits strings the input never contained.
+    docs = [_yt_doc(video, n, seg=_noncanonical_seg(n)) for video, n in pairs]
+    return docs, window, overlap
 
 
 @given(_yt_corpus_and_params())
@@ -827,6 +931,58 @@ def test_grade_zero_docs_are_never_coverage_relevant(tmp_path):
         assert cell["recall@10"] == 0.0, setting
 
 
+def test_zero_relevant_query_is_a_float_zero_not_an_int(tmp_path):
+    # spec(T-020:AC-5) -- `== 0.0` is also satisfied by int 0, which would
+    # reach the published artifact as `0` instead of `0.0`.
+    rows = [_judgment_row("q1", "substation", COVERAGE_DOCS[0].id, 0)]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    result = _chunk_sweep(COVERAGE_DOCS, judgments)
+    for setting, cell in _cells_by_setting(result).items():
+        assert isinstance(cell["recall@5"], float), setting
+
+
+def test_zero_relevant_query_still_counts_in_the_mean_denominator(tmp_path):
+    # spec(T-020:AC-5) -- q1 recalls its only relevant chunk (1.0); q2 has
+    # NO coverage-relevant chunk and contributes 0.0. The mean is 0.5 over
+    # BOTH queries. An implementation that skips zero-relevant queries
+    # instead of scoring them 0.0 reports 1.0 -- the same defect class as
+    # T-019's Critical. Live once min_grade=2 is swept (OQ-6): any query
+    # with no grade-2 doc lands exactly here.
+    rows = [
+        _judgment_row("q1", "substation", COVERAGE_DOCS[0].id, 2),
+        _judgment_row("q2", "transformer", COVERAGE_DOCS[1].id, 0),
+        _judgment_row("q2", "transformer", COVERAGE_DOCS[2].id, 0),
+    ]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    result = _chunk_sweep(COVERAGE_DOCS, judgments)
+    for setting, cell in _cells_by_setting(result).items():
+        assert cell["recall@5"] == pytest.approx(0.5), setting
+
+
+def test_n_queries_counts_a_query_that_has_no_relevant_chunks(tmp_path):
+    # spec(T-020:AC-5) -- the zero-relevant query stays in the query set, so
+    # the denominator it contributes to is visible in the artifact too.
+    rows = [
+        _judgment_row("q1", "substation", COVERAGE_DOCS[0].id, 2),
+        _judgment_row("q2", "transformer", COVERAGE_DOCS[1].id, 0),
+    ]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    assert _chunk_sweep(COVERAGE_DOCS, judgments)["n_queries"] == 2
+
+
+def test_judged_doc_ids_absent_from_the_corpus_do_not_inflate_the_denominator(tmp_path):
+    # spec(T-020:AC-5) -- relevance is counted over CHUNKS, not over judged
+    # doc ids: a judgment naming a doc the sweep was not given produces no
+    # chunk, so it cannot be recalled and must not be counted as missed.
+    rows = COVERAGE_JUDGMENTS + [
+        _judgment_row("q1", "substation", "edgar:0000000000-00-000000:item1a", 2)
+    ]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    result = _chunk_sweep(COVERAGE_DOCS, judgments, min_grade=1)
+    for setting, cell in _cells_by_setting(result).items():
+        assert cell["recall@5"] == pytest.approx(0.5), setting
+
+
 def test_merged_chunk_covering_two_relevant_docs_counts_as_one_relevant_chunk(tmp_path):
     # spec(T-020:AC-5) -- at (1,0) the two relevant docs are 2 relevant
     # chunks and only one is retrieved (0.5); at (2,0) they merge into a
@@ -916,6 +1072,55 @@ def test_retrieve_fn_factory_receives_each_cells_own_chunks(tmp_path):
         for w, o in DEFAULT_CELLS
     }
     assert set(seen) == expected
+
+
+def test_retrieve_fn_factory_is_called_exactly_once_per_valid_cell(tmp_path):
+    # spec(T-020:AC-5) -- the ticket's per-cell structure is "build chunks,
+    # then recall@k per query". Rebuilding the retriever per (cell x query)
+    # is functionally identical but means 7 x N index builds over a ~265K-doc
+    # corpus instead of 7.
+    rows = MERGE_JUDGMENTS + [_judgment_row("q2", "budget", _yt_id(VIDEO_C, 2), 1)]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    calls = []
+
+    def factory(chunks):
+        calls.append(chunks)
+        return lambda query: []
+
+    _chunk_sweep(MERGE_DOCS, judgments, retrieve_fn_factory=factory)
+    assert len(calls) == len(DEFAULT_CELLS)
+
+
+def test_default_retriever_ranks_deeper_than_the_largest_k_value(tmp_path):
+    # spec(T-020:AC-5) -- `ranked_search` defaults to k=10
+    # (onrecord/search/ranked.py), so an implementation that omits an
+    # explicit depth is correct ONLY at the default k_values=(5, 10). Here
+    # 12 docs are relevant and all match the query, through the REAL BM25
+    # retriever: a k=10 default caps recall@50 at 10/12 = 0.833. k_values
+    # keeps 10 so `best`'s recall@10 tie-break stays defined.
+    docs = [_edgar_doc(f"{n:02d}", text="substation capacity request") for n in range(12)]
+    rows = [_judgment_row("q1", "substation", d.id, 2) for d in docs]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    result = _chunk_sweep(docs, judgments, k_values=(5, 10, 50))
+    for setting, cell in _cells_by_setting(result).items():
+        assert cell["recall@50"] == pytest.approx(1.0), setting
+
+
+def test_sweep_handles_a_mixed_yt_and_edgar_corpus(tmp_path):
+    # spec(T-020:AC-5) -- the real corpus is mixed: EDGAR sections stay
+    # identity chunks in every cell while the yt segments window, so both
+    # kinds of chunk sit in one index and one relevant-chunk set.
+    #   (1,0): chunks [s0][s1][s2][s3][edgar]; relevant {s0, s1, edgar};
+    #          retrieved {s0, edgar} -> 2/3
+    #   (2,0): chunks [s0,s1][s2,s3][edgar];  relevant {[s0,s1], edgar};
+    #          both retrieved -> 2/2
+    edgar = _edgar_doc("77", text="substation interconnection queue")
+    docs = MERGE_DOCS + [edgar]
+    rows = MERGE_JUDGMENTS + [_judgment_row("q1", "substation", edgar.id, 1)]
+    judgments = _write_judgments(tmp_path / "j" / "judgments.jsonl", rows)
+    cells = _cells_by_setting(_chunk_sweep(docs, judgments))
+    assert cells[(1, 0)]["recall@5"] == pytest.approx(2 / 3)
+    assert cells[(2, 0)]["recall@5"] == pytest.approx(1.0)
 
 
 def test_retrieve_fn_is_called_with_the_query_text_not_the_query_id(tmp_path):
