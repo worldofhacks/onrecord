@@ -48,10 +48,10 @@ input::placeholder{color:#B5B0A1}
       <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}">
         <div style="display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #E7E4DA;padding-left:32px;align-self:end">
           <div style="grid-column:1/-1;padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid #E7E4DA">
-            <div style="font-family:Fraunces,serif;font-size:36px;font-weight:560;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">24,412</div>
+            <div style="font-family:Fraunces,serif;font-size:36px;font-weight:560;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">{{ heroDocuments }}</div>
             <div style="font-size:11px;color:#6E6A5E;letter-spacing:.06em;text-transform:uppercase;margin-top:2px">documents indexed</div>
           </div>
-          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">31</div><div style="font-size:11px;color:#6E6A5E">jurisdictions</div></div>
+          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">{{ heroJurisdictions }}</div><div style="font-size:11px;color:#6E6A5E">jurisdictions</div></div>
           <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">{{ tickerTotal }}</div><div style="font-size:11px;color:#6E6A5E">tickers</div></div>
         </div>
       </sc-if>
@@ -452,6 +452,7 @@ const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo In
 //   GET  /api/prices/{sym}?range=365 -> {ticker, series:[{date,close}], significant_moves:[...]}
 //   GET  /api/metrics        -> [ {timestamp, git_sha, corpus_version, metrics:{per_query, mean}} ]
 //   POST /api/answer         <- {question, mode, k}   -> {"error":"available_thursday"}
+//   GET  /api/stats          -> {documents, jurisdictions, tickers, sources, corpus_version} (T-017)
 // ---------------------------------------------------------------------------
 const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, PRICE_RANGE = 365, JUR_PROBE_K = 150;
 const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 15000;
@@ -466,6 +467,8 @@ const NEUTRAL_CHIP = { color: '#6E6A5E', background: '#F0EEE4', borderRadius: '4
 
 function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function titleize(slug) { return String(slug || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()); }
+// Thousands-separated integer for the hero strip (e.g. 24115 -> "24,115").
+function fmtCount(n) { return typeof n === 'number' ? n.toLocaleString('en-US') : ''; }
 function srcLabel(s) { return SOURCE_LABELS[s] || (s ? String(s).replace(/_/g, ' ') : 'record'); }
 function venueOf(v) { return VENUES[v] || { label: v ? String(v).toUpperCase() : 'ON RECORD', style: NEUTRAL_CHIP }; }
 function hms(total) { const n = Math.max(0, Math.round(total)), h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), x = n % 60, p = (v) => String(v).padStart(2, '0'); return h ? h + ':' + p(m) + ':' + p(x) : m + ':' + p(x); }
@@ -520,7 +523,7 @@ class Component extends DCLogic {
     fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null, teaser: null,
     apiLive: false, apiDown: false,
     hits: [], searchMs: 0, searching: true,
-    tickers: null, metrics: null, jurs: [], jurProbed: false,
+    tickers: null, metrics: null, jurs: [], jurProbed: false, stats: null,
     priceSym: null, price: null, priceState: 'idle',
     detSym: null, mkI: null, openCite: null, drawerOpen: false, askQ: '', askQueued: null,
   };
@@ -562,6 +565,7 @@ class Component extends DCLogic {
     this.setState({ apiDown: false, jurProbed: false, jurs: [] });
     this.loadTickers();
     this.loadMetrics();
+    this.loadStats();
     this.runSearch(true);
   }
 
@@ -572,6 +576,18 @@ class Component extends DCLogic {
     this.fetchJson('/api/tickers').then(r => {
       if (r.ok && r.body && Array.isArray(r.body.sectors)) this.setState({ tickers: r.body.sectors, apiLive: true, apiDown: false });
       else this.setState({ tickers: null, apiLive: false, apiDown: true });
+    });
+  }
+
+  // --- /api/stats (T-017) ----------------------------------------------------
+  // Hero-strip live corpus numbers. Not a liveness probe (unlike /api/tickers
+  // above) -- loading or a 503/unreachable failure both just leave `stats`
+  // `null`, and the render step below falls back to the designer's own hero
+  // copy ("24,412" / "31") so the strip is never blank.
+  loadStats() {
+    this.fetchJson('/api/stats').then(r => {
+      const ok = r.ok && r.body && typeof r.body.documents === 'number' && typeof r.body.jurisdictions === 'number';
+      this.setState({ stats: ok ? r.body : null });
     });
   }
 
@@ -861,6 +877,11 @@ class Component extends DCLogic {
       vSearch: s.view === 'search', vAsk: s.view === 'ask', vTickers: s.view === 'tickers', vScore: s.view === 'scoreboard', vLedger: s.view === 'ledger',
       rootClick: () => { if (s.openFilter) this.setState({ openFilter: null }); },
       heroGrid: { display: 'grid', gridTemplateColumns: notMobile ? '1fr 280px' : '1fr', gap: '48px', alignItems: 'end', padding: (isMobile ? '30px' : '48px') + ' 0 30px' },
+      // Live /api/stats (T-017). While loading (`stats` still null on first
+      // paint) or on failure (loadStats' own fetch never sets it), keep the
+      // designer's own hero copy -- the strip must never go blank.
+      heroDocuments: s.stats ? fmtCount(s.stats.documents) : '24,412',
+      heroJurisdictions: s.stats ? fmtCount(s.stats.jurisdictions) : '31',
       q: s.q, setQ: (e) => { this.setState({ q: e.target.value, selIdx: 0 }); this.runSearch(); },
       qKey: (e) => { if (e.key === 'Enter') { e.target.blur(); this.runSearch(true); } },
       searchRef: (el) => { this.searchEl = el; },

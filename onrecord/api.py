@@ -62,6 +62,13 @@ pins T-015's additions (static UI serving, `/api/prices`, index bootstrap)
   corpus-driven, imported as `from onrecord import registry` and called
   fresh per-request (never cached) so tests can monkeypatch
   `api.registry.load`.
+- `/api/stats` (T-017): `{"documents", "jurisdictions", "tickers",
+  "sources", "corpus_version"}` — computed once from the loaded index
+  during ASGI *startup* (right after `app.state.index` is set) and cached
+  on `app.state.stats_cache`; never recomputed per request. Missing index
+  → the same flat 503 `_missing_index_response()` other data endpoints
+  use. See `tests/unit/test_stats.py`'s module docstring for the frozen
+  contract.
 - `/api/metrics` reads a module-level `SCOREBOARD_PATH` constant fresh per
   request (mirrors `onrecord/eval/run.py`'s `DEFAULT_HISTORY_PATH`), so
   tests can monkeypatch it directly.
@@ -168,6 +175,30 @@ def _bootstrap_index_from_corpus(index_dir: Path, corpus_path: Path) -> Inverted
     return index
 
 
+def _compute_stats(index: InvertedIndex) -> dict:
+    """One-time stats computation (T-017) over every doc in `index`, mirroring
+    `/api/tickers`'s existing `index.get_doc(i)` enumeration idiom. Called
+    once at ASGI startup and cached on `app.state.stats_cache` — never
+    per-request (AC-2)."""
+    jurisdictions: set[str] = set()
+    tickers: set[str] = set()
+    sources: dict[str, int] = {}
+    for i in range(index.doc_count()):
+        doc = index.get_doc(i)
+        if doc.jurisdiction:
+            jurisdictions.add(doc.jurisdiction)
+        if doc.ticker:
+            tickers.add(doc.ticker)
+        sources[doc.source_type] = sources.get(doc.source_type, 0) + 1
+    return {
+        "documents": index.doc_count(),
+        "jurisdictions": len(jurisdictions),
+        "tickers": len(tickers),
+        "sources": sources,
+        "corpus_version": "v1",
+    }
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     index_dir = Path(os.environ.get("ONRECORD_INDEX", DEFAULT_INDEX_DIR))
@@ -198,6 +229,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         explicit_corpus = os.environ.get("ONRECORD_CORPUS")
         if explicit_corpus is not None:
             app.state.index = _bootstrap_index_from_corpus(index_dir, Path(explicit_corpus))
+
+    # T-017: computed once here (not per-request) and cached; `None` when
+    # no index loaded, mirroring the existing missing-index 503 contract.
+    app.state.stats_cache = _compute_stats(app.state.index) if app.state.index is not None else None
     yield
 
 
@@ -390,6 +425,20 @@ async def tickers():
         for sector, entries in sorted(by_sector.items())
     ]
     return {"sectors": sectors}
+
+
+# --------------------------------------------------------------------------
+# GET /api/stats (T-017) -- hero-strip live corpus numbers, computed once
+# at startup (see _compute_stats + _lifespan above) and cached.
+# --------------------------------------------------------------------------
+
+
+@app.get("/api/stats")
+async def stats():
+    cache = getattr(app.state, "stats_cache", None)
+    if cache is None:
+        return _missing_index_response()
+    return cache
 
 
 # --------------------------------------------------------------------------
