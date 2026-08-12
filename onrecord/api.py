@@ -1,20 +1,41 @@
 """FastAPI layer — `/api/search`, `/api/tickers`, `/api/metrics`,
-`/api/answer`, `/health` (T-013).
+`/api/answer`, `/api/prices/{ticker}`, `/health`, plus static UI serving
+(T-013, extended by T-015).
 
 The commissioned UI (design studio, in flight) is built directly against
 the JSON shapes pinned in `tests/unit/test_api.py`'s module docstring — that
 file is the frozen, load-bearing contract for this module; read it in full
-before touching this file. Summary of the seams it pins:
+before touching this file. `tests/unit/test_serve.py`'s module docstring
+pins T-015's additions (static UI serving, `/api/prices`, index bootstrap)
+— read it too. Summary of the seams they pin:
 
 - Index lifecycle: `ONRECORD_INDEX` (default `artifacts/index`, mirrors
   `onrecord/cli.py`'s `DEFAULT_INDEX_DIR`) is re-read from `os.environ` at
   ASGI *startup* time (not baked in at module-import time), so
   `monkeypatch.setenv(...)` before `with TestClient(app) as client:` works
-  per-test. A missing/unloadable index stores `None` on `app.state.index`;
-  "data endpoints" (`/api/search`, `/api/tickers`) 503 in that case, via a
-  flat `JSONResponse({"error": ...})` body (never `HTTPException`, which
-  would wrap the body in `{"detail": ...}`). `/health`, `/api/metrics`, and
-  `/api/answer` never depend on index state.
+  per-test. A missing/unloadable index falls back to bootstrapping an
+  in-memory index from the `ONRECORD_CORPUS` snapshot (default
+  `corpus/v1/corpus.jsonl.gz`) when that snapshot has docs — built +
+  `.save()`d back to `ONRECORD_INDEX` so a restart is warm (T-015 AC-3).
+  When neither the index nor the corpus snapshot is available,
+  `app.state.index` stays `None`; "data endpoints" (`/api/search`,
+  `/api/tickers`) 503 in that case, via a flat `JSONResponse({"error":
+  ...})` body (never `HTTPException`, which would wrap the body in
+  `{"detail": ...}`). `/health`, `/api/metrics`, and `/api/answer` never
+  depend on index state.
+- Static UI: `ONRECORD_UI_DIR` (default `ui/`) is served at `GET /`
+  (`index.html`'s contents) and via a catch-all fallback for any other
+  unmatched non-`/api/*` path — an existing static asset under the UI dir
+  is served with a guessed content type (e.g. `support.js` as
+  JavaScript); an unmatched extension-less path falls back to `index.html`
+  (SPA-style); an unmatched path WITH an extension 404s. `/api/*` paths are
+  never shadowed by this catch-all (T-015 AC-1).
+- `/api/prices/{ticker}?range=365&threshold=5.0` wires
+  `onrecord.ingest.prices.api_payload` (corpus path from `ONRECORD_CORPUS`,
+  price cache dir from `ONRECORD_PRICES_CACHE`, default `artifacts/prices`
+  mirroring `onrecord.ingest.prices`'s own private default). Independent of
+  index state — a hostile/unknown ticker degrades to an empty series via
+  `prices.py`'s own contract, never a 503 (T-015 AC-2).
 - `mode=lexical` retrieval: feature-detects `onrecord.search.ranked
   .ranked_search` via import (T-011). If importable, used for real scoring;
   else falls back to `boolean_search(index, q, op)` with `score` pinned to
@@ -53,23 +74,32 @@ Run locally:
 from __future__ import annotations
 
 import json
+import logging
+import mimetypes
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from onrecord import registry
 from onrecord.index.inverted import InvertedIndex
+from onrecord.ingest.build_corpus import load_corpus_snapshot
+from onrecord.ingest.prices import api_payload
 from onrecord.search.boolean import boolean_search
 from onrecord.types import Doc
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_INDEX_DIR = "artifacts/index"
+DEFAULT_UI_DIR = "ui/"
+DEFAULT_CORPUS_PATH = "corpus/v1/corpus.jsonl.gz"
+DEFAULT_PRICES_CACHE_DIR = "artifacts/prices"
 SCOREBOARD_PATH = "artifacts/scoreboard.jsonl"
 
 # 9-key result shape pinned by tests/unit/test_api.py's module docstring:
@@ -92,13 +122,60 @@ _RESULT_METADATA_FIELDS = (
 # --------------------------------------------------------------------------
 
 
+def _bootstrap_index_from_corpus(index_dir: Path, corpus_path: Path) -> InvertedIndex | None:
+    """Build (and, on success, `.save()` back to `index_dir` for a warm
+    restart) an in-memory index from the corpus snapshot at `corpus_path`,
+    used when `ONRECORD_INDEX` itself failed to load (missing dir, most
+    commonly). Returns `None` if the snapshot has no docs either (missing
+    path, empty file, all-malformed rows) — the caller then keeps
+    `app.state.index` as `None`, preserving the existing 503 behavior
+    (T-015 AC-3/AC-4)."""
+    docs = load_corpus_snapshot(corpus_path)
+    if not docs:
+        return None
+
+    index = InvertedIndex.build(docs)
+    try:
+        index.save(index_dir)
+    except OSError:
+        logger.warning(
+            "failed to persist bootstrapped index to %s (serving from memory only)",
+            index_dir,
+            exc_info=True,
+        )
+    return index
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     index_dir = Path(os.environ.get("ONRECORD_INDEX", DEFAULT_INDEX_DIR))
+    app.state.ui_dir = Path(os.environ.get("ONRECORD_UI_DIR", DEFAULT_UI_DIR))
+    # `/api/prices` always has a default corpus path, per the ticket.
+    app.state.corpus_path = os.environ.get("ONRECORD_CORPUS", DEFAULT_CORPUS_PATH)
+    app.state.prices_cache_dir = os.environ.get("ONRECORD_PRICES_CACHE", DEFAULT_PRICES_CACHE_DIR)
+
     try:
         app.state.index = InvertedIndex.load(index_dir)
     except Exception:
         app.state.index = None
+        # Index bootstrap (T-015 AC-3/AC-4): only when ONRECORD_CORPUS is
+        # EXPLICITLY set in the environment -- deliberately NO implicit
+        # fallback to DEFAULT_CORPUS_PATH here (unlike /api/prices above).
+        # Both AC-3 and AC-4's own test text describe ONRECORD_CORPUS as
+        # explicitly pointed at a specific path (valid or deliberately
+        # missing), never an unset var; T-013's frozen AC-5 tests
+        # (tests/unit/test_api.py) exercise exactly that unset case and
+        # pin a 503 there. Since this worktree already has a real
+        # corpus/v1/corpus.jsonl.gz snapshot committed, defaulting the
+        # bootstrap trigger itself (as opposed to just the prices route's
+        # corpus path) would silently flip those frozen tests from 503 to
+        # 200 -- an unintended regression, not a sanctioned contract
+        # change. Real deploys (Railway) must set ONRECORD_CORPUS
+        # explicitly to opt into cold-start bootstrap (README Deploy
+        # section documents this).
+        explicit_corpus = os.environ.get("ONRECORD_CORPUS")
+        if explicit_corpus is not None:
+            app.state.index = _bootstrap_index_from_corpus(index_dir, Path(explicit_corpus))
     yield
 
 
@@ -312,3 +389,73 @@ async def metrics():
                 continue
             rows.append(json.loads(line))
     return rows
+
+
+# --------------------------------------------------------------------------
+# GET /api/prices/{ticker} (T-015 AC-2) -- index-independent; degrades
+# gracefully (empty series) via prices.py's own hostile-ticker/missing-
+# corpus handling, never a 503.
+# --------------------------------------------------------------------------
+
+
+@app.get("/api/prices/{ticker}")
+async def prices(ticker: str, range: int = 365, threshold: float = 5.0) -> dict:
+    corpus_path = getattr(app.state, "corpus_path", DEFAULT_CORPUS_PATH)
+    cache_dir = getattr(app.state, "prices_cache_dir", DEFAULT_PRICES_CACHE_DIR)
+    return api_payload(
+        ticker,
+        corpus_path,
+        range_days=range,
+        threshold_pct=threshold,
+        cache_dir=cache_dir,
+    )
+
+
+# --------------------------------------------------------------------------
+# Static UI serving (T-015 AC-1): `GET /` serves ONRECORD_UI_DIR/index.html;
+# a catch-all (registered LAST, after every /api/* route above, so it never
+# shadows them) serves any other existing static asset under the UI dir
+# with a guessed content type, falls back to index.html for an unmatched
+# extension-less path (SPA-style), and 404s an unmatched path that either
+# has an extension or starts with `api/`.
+# --------------------------------------------------------------------------
+
+
+def _ui_dir() -> Path:
+    return getattr(app.state, "ui_dir", Path(DEFAULT_UI_DIR))
+
+
+def _serve_index(ui_dir: Path) -> Response:
+    try:
+        content = (ui_dir / "index.html").read_bytes()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="UI not built") from exc
+    return Response(content=content, media_type="text/html")
+
+
+@app.get("/")
+async def root() -> Response:
+    return _serve_index(_ui_dir())
+
+
+@app.get("/{full_path:path}")
+async def spa_catch_all(full_path: str) -> Response:
+    if full_path == "api" or full_path.startswith("api/"):
+        # Never SPA-fallback an unmatched /api/... path -- stay a clean 404
+        # (every real /api/* route above already matched before this
+        # catch-all is ever reached).
+        raise HTTPException(status_code=404)
+
+    ui_dir = _ui_dir()
+    resolved_ui_dir = ui_dir.resolve()
+    candidate = (ui_dir / full_path).resolve()
+    if candidate.is_relative_to(resolved_ui_dir) and candidate.is_file():
+        media_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        return Response(content=candidate.read_bytes(), media_type=media_type)
+
+    if Path(full_path).suffix:
+        # Has a file extension but no matching static asset -- 404, never
+        # SPA-fallback (the ticket's explicit exception to the fallback).
+        raise HTTPException(status_code=404)
+
+    return _serve_index(ui_dir)
