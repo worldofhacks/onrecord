@@ -67,25 +67,45 @@ touching this file. Summary of what's implemented here:
   regardless of what `min_agreement` the validation run used (decision 16,
   closes review C-2) — else raises `JudgeNotValidated`. On success appends
   `{"timestamp", "git_sha", "corpus_version", "kind": "faithfulness",
-  "metrics": {"mean_faithfulness", "per_answer"}}` to
+  "metrics": {"mean_faithfulness", "per_answer", "judge_errors"}}` to
   `artifacts/rag_eval.jsonl` (append-only, shared sidecar with T-025's
-  runner; row shape pinned identically in both tickets' Context, not a
-  code import) and returns the appended row. `mean_faithfulness` is the
-  MEAN OF PER-ANSWER faithfulness (macro), not the micro total-supported/
-  total-claims average. `corpus_version` is read via `ONRECORD_INDEX`
-  (falling back to `artifacts/index`) through T-018's `read_manifest` —
-  verbatim the mechanism already frozen for `onrecord.eval.run
-  ._corpus_version`, so the two artifact writers never disagree about
-  which corpus a number describes.
+  runner; TOP-LEVEL row shape pinned identically in both tickets' Context,
+  not a code import — `metrics` is free-form per `kind` in both) and
+  returns the appended row. `mean_faithfulness` is the MEAN OF PER-ANSWER
+  faithfulness (macro), not the micro total-supported/total-claims
+  average — EXCEPT it is `None` (JSON null) when claims were judged and
+  NOT ONE produced a verdict (decision 20, pin round 2: a total outage
+  must never be written as a confident, publishable `0.0` indistinguishable
+  from genuine unfaithfulness). Each `per_answer` entry also carries
+  `"errors"` (claims whose verdict was `"error"` — transport/provider
+  failures only, never `"unparseable"`, decision 19) and `metrics` carries
+  the aggregate `"judge_errors"`; every answer keeps its entry even when
+  every one of its claims errored. `corpus_version` is read via
+  `ONRECORD_INDEX` (falling back to `artifacts/index`) through T-018's
+  `read_manifest` — verbatim the mechanism already frozen for
+  `onrecord.eval.run._corpus_version`, so the two artifact writers never
+  disagree about which corpus a number describes.
 - `default_judge(model=None, transport=None)` — OpenAI chat-completions
   adapter over httpx (`transport=` injects an `httpx.MockTransport`, same
   seam as `onrecord/rag/embeddings.py`, `ingest/fmp.py`, `ingest/edgar.py`,
   `ingest/prices.py`). `OPENAI_API_KEY` absent/blank -> typed
   `JudgeNotConfigured` naming the var. Retries 429/5xx with backoff, bounded
   well inside the house precedent (`_JUDGE_MAX_RETRIES = 3`, i.e. <= 4
-  requests per call).
-- `resolved_judge_model() -> str` — `ONRECORD_JUDGE_MODEL` env, else
-  `DEFAULT_JUDGE_MODEL`; read ONLY here (never a second env lookup
+  requests per call); every request carries an explicit `timeout=120.0`
+  (decision 18, pin round 2 — httpx's 5.0s-per-phase default abandons a
+  normal chat completion mid-flight, and OpenAI still bills the abandoned
+  request) and a `max_tokens` output cap (a verdict is ~30 tokens of JSON).
+  A `JudgeRequestError` (public API, decision 21) raised after retries are
+  exhausted is always raised OUTSIDE the `except` clause that observed the
+  failure, so `__context__` never references the original transport error
+  (whose text can carry the Authorization header) — `from None` alone
+  suppresses only the default traceback's DISPLAY of that reference, not
+  the reference itself.
+- `resolved_judge_model() -> str` — `ONRECORD_JUDGE_MODEL` env, STRIPPED,
+  else `DEFAULT_JUDGE_MODEL` when absent or blank/whitespace-only (decision
+  22, pin round 2 — an unstripped padded id survives `classify_family`'s
+  internal stripping and then goes on the wire padded, 400s, and every
+  claim comes back `"error"`); read ONLY here (never a second env lookup
   elsewhere in this module), mirroring T-023's `resolved_generator_model`.
 - `_resolve_generator_model()` / `_resolve_answers()` — `main()`'s TWO lazy
   seams (mirrors T-025's `_resolve_answer_fn`, plan-review I-9): T-022
@@ -651,26 +671,50 @@ def run_faithfulness(
         )
 
     per_answer = []
+    judge_errors = 0
     for row in answers:
         result = judge_answer(row["question"], row["answer_text"], row["chunk_texts"], judge_fn)
+        # "errors" counts the `error` verdict ONLY (decision 19) -- an
+        # `unparseable` claim is a judge that answered and broke the
+        # protocol (a judge-quality signal, already counted not-supported),
+        # not a transport outage; conflating the two would make a
+        # badly-prompted judge look like a provider failure and vice versa.
+        errors = sum(1 for claim in result["claims"] if claim["verdict"] == "error")
+        judge_errors += errors
         per_answer.append(
             {
                 "qa_id": row["qa_id"],
                 "faithfulness": result["faithfulness"],
                 "supported": result["supported"],
                 "total": result["total"],
+                "errors": errors,
             }
         )
-    mean_faithfulness = (
-        sum(entry["faithfulness"] for entry in per_answer) / len(per_answer) if per_answer else 0.0
-    )
+
+    total_claims = sum(entry["total"] for entry in per_answer)
+    if not per_answer:
+        mean_faithfulness = 0.0
+    elif total_claims > 0 and judge_errors == total_claims:
+        # Decision 20: claims were judged and NOT ONE produced a verdict --
+        # a total outage must never be written as a confident, publishable
+        # 0.0 indistinguishable from "the generator hallucinated
+        # everything". No measurement happened, so none is reported; the
+        # row is still written (per_answer + judge_errors preserve the
+        # outage's evidence and provenance -- failures as data).
+        mean_faithfulness = None
+    else:
+        mean_faithfulness = sum(entry["faithfulness"] for entry in per_answer) / len(per_answer)
 
     eval_row = {
         "timestamp": datetime.now(UTC).isoformat(),
         "git_sha": _git_sha(),
         "corpus_version": _corpus_version(),
         "kind": "faithfulness",
-        "metrics": {"mean_faithfulness": mean_faithfulness, "per_answer": per_answer},
+        "metrics": {
+            "mean_faithfulness": mean_faithfulness,
+            "per_answer": per_answer,
+            "judge_errors": judge_errors,
+        },
     }
 
     eval_path = Path(DEFAULT_RAG_EVAL_PATH)
@@ -696,15 +740,27 @@ DEFAULT_JUDGE_MODEL = "gpt-4o-mini"
 _OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 _JUDGE_MAX_RETRIES = 3  # retries beyond the initial attempt (<= 4 requests/call)
 _JUDGE_BACKOFF_BASE = 0.05  # seconds; tests that don't monkeypatch time.sleep still run fast
+# Review I-2 / decision 18: httpx's 5.0s-per-phase default abandons a normal
+# chat completion mid-flight (OpenAI still bills the abandoned request) —
+# generous floor matching the sibling T-023 generator adapter's house
+# number (answer.py's `_REQUEST_TIMEOUT = 120.0`).
+_JUDGE_REQUEST_TIMEOUT = 120.0
+# Review Minor-1: the judge emits ~30 tokens of JSON by protocol; bound it
+# so a misbehaving/verbose model can't run up per-claim billing.
+_JUDGE_MAX_OUTPUT_TOKENS = 64
 _LIBRARY_LOGGER_NAMES = ("httpx", "httpcore", "openai")
 
 
 def resolved_judge_model() -> str:
-    """This module's own judge id: `ONRECORD_JUDGE_MODEL` env, else
-    `DEFAULT_JUDGE_MODEL` (decision 11). Read ONLY here — `default_judge`
-    consumes this resolver rather than reading the env itself a second
-    time, mirroring T-023's `resolved_generator_model`."""
-    env = os.environ.get("ONRECORD_JUDGE_MODEL")
+    """This module's own judge id: `ONRECORD_JUDGE_MODEL` env (STRIPPED —
+    review Minor-5, decision 22: an unstripped padded id sails through
+    `classify_family`'s internal stripping and then goes on the wire
+    padded, 400s, and every claim comes back `"error"`), else
+    `DEFAULT_JUDGE_MODEL` when the env is absent or blank/whitespace-only.
+    Read ONLY here — `default_judge` consumes this resolver rather than
+    reading the env itself a second time, mirroring T-023's
+    `resolved_generator_model`."""
+    env = os.environ.get("ONRECORD_JUDGE_MODEL", "").strip()
     return env if env else DEFAULT_JUDGE_MODEL
 
 
@@ -754,13 +810,30 @@ class _OpenAIChatJudge:
 
     def __call__(self, prompt: str) -> str:
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        body = {"model": self._model, "messages": [{"role": "user", "content": prompt}]}
+        body = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": _JUDGE_MAX_OUTPUT_TOKENS,
+        }
 
+        # Set on failure INSIDE the loop, raised AFTER it (review Minor-3):
+        # a `raise ... from None` executed while still inside the `except`
+        # clause sets `__suppress_context__` but leaves `__context__`
+        # referencing the original transport error, whose text can carry
+        # the Authorization header -- reachable by any chain-walking
+        # reporter even though standard traceback rendering hides it.
+        # Raising once no exception is being handled starts a clean chain.
+        failure_message: str | None = None
         with _silenced_library_loggers(), httpx.Client(transport=self._transport) as client:
             for attempt in range(_JUDGE_MAX_RETRIES + 1):
                 more_retries_left = attempt < _JUDGE_MAX_RETRIES
                 try:
-                    response = client.post(_OPENAI_CHAT_URL, headers=headers, json=body)
+                    response = client.post(
+                        _OPENAI_CHAT_URL,
+                        headers=headers,
+                        json=body,
+                        timeout=_JUDGE_REQUEST_TIMEOUT,
+                    )
                 except httpx.HTTPError:
                     # Never re-emit a transport error's own text verbatim
                     # -- it can carry request headers, including
@@ -768,9 +841,8 @@ class _OpenAIChatJudge:
                     if more_retries_left:
                         time.sleep(_JUDGE_BACKOFF_BASE * (2**attempt))
                         continue
-                    raise JudgeRequestError(
-                        "judge request to OpenAI failed: transport error"
-                    ) from None
+                    failure_message = "judge request to OpenAI failed: transport error"
+                    break
 
                 if response.status_code == 200:
                     payload = response.json()
@@ -782,12 +854,12 @@ class _OpenAIChatJudge:
                     time.sleep(_JUDGE_BACKOFF_BASE * (2**attempt))
                     continue
 
-                raise JudgeRequestError(
-                    f"judge request to OpenAI failed: HTTP {response.status_code}"
-                )
+                failure_message = f"judge request to OpenAI failed: HTTP {response.status_code}"
+                break
 
-        # Unreachable: the loop above always returns or raises.
-        raise JudgeRequestError("judge request to OpenAI failed: retries exhausted")
+        raise JudgeRequestError(
+            failure_message or "judge request to OpenAI failed: retries exhausted"
+        )
 
 
 def default_judge(
@@ -885,14 +957,27 @@ def _resolve_answers() -> list[dict]:
 def main() -> int:
     """CLI entrypoint: resolve the generator id via the lazy seam, the
     judge id via `resolved_judge_model()`, real answers via the lazy
-    `_resolve_answers()` seam, and run the verdicts-don't-count gate."""
+    `_resolve_answers()` seam, and run the verdicts-don't-count gate.
+
+    Converts ANY of this module's OWN typed errors into a non-zero exit
+    code rather than a traceback (decision 21) -- every one of them is an
+    expected operational state, not a crash. A third-party exception (e.g.
+    `ModuleNotFoundError` from `_resolve_answers`'s not-yet-merged imports)
+    is deliberately left to propagate — it should surface loudly, not be
+    flattened into an exit code that reads like a policy refusal.
+    """
     generator_model = _resolve_generator_model()
     judge_model = resolved_judge_model()
     try:
         judge_fn = default_judge()
         answers = _resolve_answers()
         row = run_faithfulness(answers, judge_fn, judge_model, generator_model)
-    except (JudgeNotConfigured, JudgeNotValidated, CrossFamilyViolation) as exc:
+    except (
+        JudgeNotConfigured,
+        JudgeNotValidated,
+        CrossFamilyViolation,
+        JudgeRequestError,
+    ) as exc:
         sys.stderr.write(f"onrecord.rag.judge: {exc}\n")
         return 1
     sys.stdout.write(json.dumps(row) + "\n")
