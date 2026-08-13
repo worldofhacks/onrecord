@@ -176,6 +176,35 @@ DELIBERATELY NOT PINNED (documented gaps, not oversights)
   this module consumes it, so naming one would be a gratuitous new id space
   (T-021 review I-4's lesson cuts the other way here).
 * The Anthropic request/response wire schema (see decision 10).
+* The request TIMEOUT and the RETRY BUDGET (code-review m-10, mutants M29/M30).
+  Both were independently probed as correctly bounded in the shipped
+  implementation (120 s per request; persistent 429 or transport error → 4
+  attempts then a typed failure; exponential backoff), and both are cost/
+  latency knobs the ticket leaves to the implementer and T-025's eval sweeps.
+  Pinning numbers here would freeze tuning that has not happened yet; the
+  hygiene consequences that DO matter (no credential in logs, body, exception
+  chain) are pinned directly instead. Deliberate non-pins, not oversights.
+* Exception-chain suppression (`raise … from None`, mutant M28): the frozen
+  transport tests already assert the sentinel is absent from `str()`/`repr()`
+  of the raised error, which is the property that matters; how the
+  implementation achieves it stays free.
+
+PIN ROUND (post-implementation code review — CHANGES REQUESTED)
+---------------------------------------------------------------
+Review: `.tdd-swarm/reports/T-023-review.md` against implementation commit
+`c980b06` — Verdict 1 (spec compliance) PASS, Verdict 2 CHANGES REQUESTED,
+1 Important + 11 Minor, and a clean-harness mutation battery (34 mutants,
+28 killed) whose 6 survivors are frozen-suite coverage gaps rather than
+implementation defects. This round adds, tests-first per the T-003 precedent:
+* **RED** — `resolved_generator_model()` must STRIP a whitespace-padded
+  override (review I-1: ` claude-opus-5` classifies as `unknown`, so T-026's
+  gate fails closed and faithfulness scoring dies silently).
+* **GREEN regression pins** for three surviving mutants, each verified to
+  fail against the mutant and pass against the shipped code (T-018 guard
+  standard): M24 (the prose-only amendment pin was vacuously satisfiable),
+  M33 (credential copied into the request body), M27 (library-logger
+  silencing had no teeth).
+No existing test was modified in this round.
 
 SECRET HYGIENE (.tdd-swarm/LESSONS.md, T-014, 2026-08-11)
 ----------------------------------------------------------
@@ -1623,6 +1652,68 @@ def test_build_prompt_instructs_prose_only_answers():
     )
 
 
+_PROHIBITION_RE = re.compile(r"\b(do not|don't|never|avoid|no|without)\b", re.IGNORECASE)
+# Word-boundary `list`/`lists` deliberately: the instructions legitimately say
+# "a block number that is not listed below", and "listed" must NOT count as a
+# prohibition of list FORMATTING (that substring is half of why the original
+# pin was vacuous — code-review m-1).
+_LIST_FORM_RE = re.compile(r"\blists?\b|bullet|enumerat", re.IGNORECASE)
+_PROSE_RE = re.compile(r"\bprose\b|\bparagraphs?\b|\bcontinuous\b", re.IGNORECASE)
+_FIRST_BLOCK_RE = re.compile(r"\[\d+\]")
+
+
+def _instruction_region(prompt: str) -> str:
+    """Everything before the first numbered context block — the part of the
+    prompt that GOVERNS generation.
+
+    Scoping matters (code-review m-1): the trailing answer cue after the
+    blocks contains the word "prose", so a whole-prompt search is satisfied by
+    a label rather than by an instruction. The instructions themselves never
+    spell a block number as a digit (they talk about `[n]`, with a literal n),
+    so the first `[digits]` in the prompt is block 1.
+    """
+    match = _FIRST_BLOCK_RE.search(prompt)
+    assert match is not None, "precondition: the prompt must contain numbered blocks"
+    return prompt[: match.start()]
+
+
+def test_the_prose_only_amendment_is_load_bearing_in_the_instruction_region():
+    # spec(T-023:AC-6)
+    # PIN ROUND, code-review m-1 (mutant M24 SURVIVED the reviewer's battery:
+    # deleting the entire 2026-08-12 amendment paragraph left the suite green).
+    # Diagnosed mechanism: the old pin searched the WHOLE prompt for
+    # `prose|paragraph|continuous` — satisfied by the answer cue
+    # "ANSWER (prose only, …)" — and for `list|bullet|numbered|enumerat` —
+    # satisfied by "listed" in "not listed below" and by "numbered" in "the
+    # numbered context blocks". Neither hit was the amendment.
+    #
+    # This pin gives it teeth without dictating wording: inside the GOVERNING
+    # instruction region there must be (a) a commitment to prose/paragraphs
+    # and (b) a single sentence that both PROHIBITS and names the enumerated
+    # form. The reviewer's alternate phrasing ("Write in continuous
+    # paragraphs; do not use bullet points or enumerations.") satisfies both.
+    # The original pin is left untouched alongside this one.
+    region = _instruction_region(_attr("build_prompt")(QUESTION, _chunks()))
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+|\n+", region) if part.strip()]
+
+    assert _PROSE_RE.search(region), (
+        "the governing instructions must commit the model to continuous prose "
+        "(2026-08-12 amendment) — a trailing answer-cue label does not count, "
+        f"region was: {region!r}"
+    )
+    prohibitions = [
+        sentence
+        for sentence in sentences
+        if _PROHIBITION_RE.search(sentence) and _LIST_FORM_RE.search(sentence)
+    ]
+    assert prohibitions, (
+        "no instruction sentence both PROHIBITS and names the enumerated form "
+        "(bulleted/numbered lists, enumerations). Without it the amendment can "
+        "be deleted silently and enumerated answers shatter into junk claims, "
+        f"grounding pessimistically. Instruction sentences were: {sentences!r}"
+    )
+
+
 def test_build_prompt_with_a_single_chunk_uses_block_one():
     # spec(T-023:AC-6)
     # The k=1 edge, where a 0-based implementation is at its least visible.
@@ -1738,6 +1829,49 @@ def test_resolved_generator_model_passes_a_bedrock_shaped_override_through(monke
         f"T-026 an id the operator never configured; got {resolved!r}"
     )
     assert _classify_family(resolved) == "anthropic"
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        pytest.param(" claude-opus-5 ", "claude-opus-5", id="padded-both-sides"),
+        pytest.param(" claude-opus-5", "claude-opus-5", id="leading-space"),
+        pytest.param("\tclaude-opus-5", "claude-opus-5", id="leading-tab"),
+        pytest.param("claude-opus-5\n", "claude-opus-5", id="trailing-newline"),
+        pytest.param(
+            " us.anthropic.claude-opus-5-v1:0 ",
+            "us.anthropic.claude-opus-5-v1:0",
+            id="padded-bedrock-id",
+        ),
+    ],
+)
+def test_resolved_generator_model_strips_a_whitespace_padded_override(
+    monkeypatch, override, expected
+):
+    # spec(T-023:AC-7)
+    # PIN ROUND, code-review I-1 (Important). A dashboard- or `.env`-sourced
+    # value routinely carries a stray leading space or tab (this repo deploys
+    # via Railway/Docker). Returned unstripped, ` claude-opus-5` classifies as
+    # `unknown` under the canonical family map — T-026's gate then fails
+    # CLOSED and faithfulness scoring is silently disabled at eval time, the
+    # exact failure this function exists to prevent.
+    #
+    # This does NOT contradict the verbatim-passthrough pin below it: that
+    # rule protects the ID (`us.anthropic.…` must never be rewritten to
+    # `claude-…`), and trimming surrounding whitespace is not rewriting an id
+    # — the padded-Bedrock row pins both rules holding at once.
+    monkeypatch.setenv("ONRECORD_GENERATOR_MODEL", override)
+
+    resolved = _attr("resolved_generator_model")()
+
+    assert resolved == expected, (
+        f"surrounding whitespace is noise, not part of the model id; "
+        f"{override!r} must resolve to {expected!r}, got {resolved!r}"
+    )
+    assert _classify_family(resolved) == "anthropic", (
+        f"the resolved id must still classify for T-026's fail-closed gate; "
+        f"{resolved!r} classifies as {_classify_family(resolved)!r}"
+    )
 
 
 def test_resolved_generator_model_falls_back_to_the_module_constant(monkeypatch):
@@ -1925,6 +2059,102 @@ def test_api_key_never_leaks_when_a_real_keyed_request_fails(caplog, monkeypatch
             f"the failure must not surface the credential in its message; got {raised!r}"
         )
         assert SENTINEL_KEY not in repr(raised)
+
+
+def test_the_api_key_never_appears_in_the_request_body(monkeypatch):
+    # spec(T-023:AC-7)
+    # PIN ROUND, code-review m-10 (mutant M33 SURVIVED: copying the credential
+    # into the JSON body left the suite green). The header is the credential's
+    # only legitimate carrier; a key in the body is logged by proxies and
+    # gateways that redact headers, and it rides into any request-echo the
+    # provider returns. The request SCHEMA stays unpinned — this asserts only
+    # that the sentinel is absent from the bytes actually sent, and that the
+    # prompt IS in them (so the assertion cannot pass on an empty request).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", SENTINEL_KEY)
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"content": [], "stop_reason": "end_turn"})
+
+    generate = _attr("default_generator")(transport=httpx.MockTransport(_handler))
+    with contextlib.suppress(Exception):
+        generate(_attr("build_prompt")(QUESTION, _chunks()))
+
+    assert requests, "precondition: the injected transport must actually have been used"
+    body = requests[0].content
+    assert any(SENTINEL_KEY in value for value in requests[0].headers.values()), (
+        "precondition: the key really was in flight, carried by a header"
+    )
+    assert QUESTION.encode() in body, (
+        "precondition: this is the generation request — the prompt travels in the body"
+    )
+    assert SENTINEL_KEY.encode() not in body, (
+        "the credential must never be copied into the request body; it belongs in the header alone"
+    )
+    assert SENTINEL_KEY not in body.decode("utf-8", "replace")
+
+
+def _header_logging_transport(recorder: list[str]) -> httpx.MockTransport:
+    """A transport whose LIBRARY log record carries the credential header.
+
+    LESSONS T-014 reproduced in miniature (adapted from T-026's frozen
+    `_header_logging_transport`, its review I-1): the leak that actually
+    happened was a LIBRARY logger emitting the secret — httpx logging FMP's
+    `?apikey=` query string at INFO — not the module's own logging. Anthropic's
+    key travels in an `x-api-key` HEADER, so httpx's real record is
+    credential-free and "no record contains the key" passes even with the
+    silencing deleted. Emitting here, on the `httpx` logger, at ERROR (above
+    INFO, so no level trick hides it), interpolating the request headers, makes
+    the silencing/redaction the only thing that can keep the sentinel out.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = f"HTTP Request: POST {request.url} headers={dict(request.headers)}"
+        recorder.append(message)
+        logging.getLogger("httpx").error(message)
+        return httpx.Response(200, json={"content": [], "stop_reason": "end_turn"})
+
+    return httpx.MockTransport(handler)
+
+
+def test_library_logger_records_during_the_keyed_request_never_carry_the_key(monkeypatch, caplog):
+    # spec(T-023:AC-7)
+    # PIN ROUND, code-review m-10 (mutant M27 SURVIVED: deleting the library-
+    # logger silencing left the suite green, because the key never reaches
+    # httpx's own real record). The assertion is "no captured record contains
+    # the sentinel", NOT "no httpx record exists" — redaction (a filter that
+    # scrubs the credential and keeps the record) must pass exactly as
+    # silencing does.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", SENTINEL_KEY)
+    emitted: list[str] = []
+    generate = _attr("default_generator")(transport=_header_logging_transport(emitted))
+
+    with _library_loggers_unmuted(), caplog.at_level(logging.INFO):
+        with contextlib.suppress(Exception):
+            generate(_attr("build_prompt")(QUESTION, _chunks()))
+        _assert_capture_is_live(caplog)
+        during = [record.getMessage() for record in caplog.records]
+        # LIVENESS ("it WOULD have been captured absent the silencing"): the
+        # SAME message, SAME logger, SAME level, emitted immediately after the
+        # generator's window closes. Without this, the absence above could be
+        # a dead capture rather than the implementation's hygiene.
+        logging.getLogger("httpx").error("post-call canary: %s", emitted[0])
+        after = [record.getMessage() for record in caplog.records[len(during) :]]
+
+    assert emitted and all(SENTINEL_KEY in message for message in emitted), (
+        "precondition: the library logger really did try to emit the credential "
+        "header — otherwise this test proves nothing"
+    )
+    leaked = [message for message in during if SENTINEL_KEY in message]
+    assert leaked == [], (
+        f"a library logger emitted the credential during the keyed request and "
+        f"nothing silenced or redacted it (LESSONS T-014): {leaked}"
+    )
+    assert any(SENTINEL_KEY in message for message in after), (
+        "liveness failed: the identical record is not captured OUTSIDE the "
+        "generator's window either, so the in-call absence proves nothing"
+    )
 
 
 # ==========================================================================
