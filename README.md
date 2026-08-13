@@ -211,14 +211,14 @@ uv run uvicorn onrecord.api:app --reload
 
 ## Metrics report (reproducible)
 
-Hand-built judgment set: 5 queries, 65 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
+Judgment set: 15 queries, 255 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Session 1 (5 queries, 65 rows) was hand-labeled at the MVP checkpoint against corpus-v1; session 2 (q1–q5 re-pooled against corpus-v2 + 10 new queries, 190 rows) was labeled by an LLM judge (`gpt-5.2` — a different model family from the answer generator; provenance in `evalsets/judgment-session-2-provenance.json`) under the same protocol: criterion-first, pooled grep+BM25+random, shuffled, blind to source. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
 
-| Retrieval | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
+| Retrieval (corpus-v2, 15 queries) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
-| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.003 | 0.000 |
-| BM25 (k1=1.5, b=0.75) | 0.520 | 0.540 | 0.612 | 0.949 | 1.000 | 0.622 |
+| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 |
+| BM25 (k1=1.5, b=0.75) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
 
-MRR = 1.000: the top-ranked result was human-judged relevant on every query. The identical labels produce both rows — the delta is the ranking function, measured, not vibed. History: `evalsets/scoreboard.jsonl`.
+The identical labels produce both rows — the delta is the ranking function, measured, not vibed. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
 
 ## Defended k1/b
 
@@ -242,15 +242,31 @@ toward the mean, so the number below cannot be inflated by silently
 dropping hard queries. `--plot` additionally renders a heatmap PNG next to
 the JSON artifact.
 
-**Chosen (k1, b): TBD — filled in after the corpus-v2 sweep run.**
+**Chosen (k1, b): 1.5, 0.75 — the shipped default, kept deliberately.**
 
 | k1 | b | Mean NDCG@10 |
 |---|---|---|
-| TBD | TBD | TBD |
+| 1.25 | 0.8 | 0.7617 (grid best) |
+| 1.5 | 0.8 | 0.7611 |
+| 1.5 | 0.7 | 0.7425 |
+| **1.5** | **0.75 (shipped)** | **≈0.752 (between its grid neighbors)** |
+| 0.0 | any | 0.2937 (degenerate floor) |
 
-*Grid summary (corpus-v2, post re-judged q1–q5 — see `tickets/T-019.md`'s
-hard precondition): TBD.*
+*Grid summary (corpus-v2, 289,536 docs, 15-query judgment set with q1–q5
+re-pooled against v2 per `tickets/T-019.md`'s hard precondition; run
+2026-08-12, 121 cells in 4.0 min, artifact + heatmap in
+`artifacts/sweeps/`, `corpus_version: v2` recorded in the artifact):
+the top of the surface is a broad plateau — the best five cells span
+`k1 ∈ [0.75, 1.75]` × `b ∈ [0.5, 0.9]` within 0.006 NDCG of each other.*
 
-**Defense:** TBD — one paragraph explaining why the chosen `(k1, b)` beats
-the BM25 textbook default (1.5, 0.75) and any nearby cell on this corpus's
-judgment set, once the operational sweep has run.
+**Defense:** the shipped default sits on the same plateau as the grid best —
+0.752 vs 0.7617, a gap of ~0.01 that is well within noise on a 15-query set —
+so changing frozen-tested defaults would be noise-chasing, not tuning. What
+the sweep *does* establish is that the parameters are load-bearing: every
+`k1 = 0` cell collapses to 0.294 (tf-saturation off means term frequency
+stops discriminating), and low-`b` cells lag because this corpus mixes
+75-second caption windows with filing sections a hundred times longer, so
+length normalization has real work to do. The defense of (1.5, 0.75) is
+therefore measured, not conventional: it is statistically indistinguishable
+from the best cell on this corpus's judgment set, and the sweep artifact
+regenerates in ~4 minutes whenever the judgment set grows.
