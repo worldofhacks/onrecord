@@ -322,22 +322,91 @@ def _corpus_version(manifest_dir: str | None) -> str:
     return version if isinstance(version, str) else "unversioned"
 
 
+_DEFAULT_INDEX_PATH = "artifacts/index"
+_ANSWER_RETRIEVAL_K = 10
+
+
+def _deferred_failure(exc: Exception) -> Callable[[str], str]:
+    """A `Callable[[str], str]` that raises `exc` when invoked, never at
+    construction time. Used to defer a generator-configuration problem
+    (missing `default_generator` attribute, or a real `GeneratorNotConfigured`
+    when `ANTHROPIC_API_KEY` is unset) from seam-construction time to actual
+    generation time -- a caller whose questions never reach generation (every
+    retrieved `chunks` list is empty, which `answer()` itself short-circuits
+    into a refusal before ever calling `generate_fn`) is never penalized for
+    a generator that isn't configured yet."""
+
+    def _raise(prompt: str) -> str:
+        raise exc
+
+    return _raise
+
+
+def _resolve_generate_fn(answer_module) -> Callable[[str], str]:
+    """T-023's documented default-generator path (`tickets/T-023.md:21`,
+    `onrecord.rag.answer.default_generator`) -- tolerant of the attribute
+    being absent (mirrors the same collection-safety posture as the rest of
+    this seam) or of construction failing, in either case deferring the
+    failure into the returned callable rather than raising here (see
+    `_deferred_failure`)."""
+    build_generator = getattr(answer_module, "default_generator", None)
+    if build_generator is None:
+        return _deferred_failure(
+            RuntimeError("onrecord.rag.answer.default_generator is unavailable")
+        )
+    try:
+        return build_generator()
+    except Exception as exc:  # pragma: no cover -- real key-provisioning path
+        return _deferred_failure(exc)
+
+
 def _resolve_answer_fn() -> Callable[[str], dict]:
     """Real-pipeline wiring seam (plan-review I-9). LAZILY imports
     `onrecord.rag.answer` + retrieval inside this function body -- safe only
     because this CLI runs post-wave-9-merge and post-provisioning (T-023 is
     same-wave and may be unmerged during this ticket's implementation; a
-    module-level import would be a collection error in this worktree). Tests
-    monkeypatch this attribute wholesale and never call the real body."""
-    from onrecord.rag.answer import answer as _answer  # pragma: no cover
+    module-level import would be a collection error in this worktree).
 
-    def _answer_fn(question: str) -> dict:  # pragma: no cover
-        return _answer(question)
+    Composes the documented `answer(question, chunks, generate_fn, *,
+    min_confidence=None, retrieval_scores=None)` contract (`tickets/T-023.md`,
+    frozen in `wt-T-023/tests/unit/rag/test_answer.py`) for real:
+    `chunks` are built from the same BM25 pipeline `_resolve_retrieve_fn`
+    already wires (`InvertedIndex` + `ranked_search`), converted to
+    `onrecord.rag.chunking.Chunk` identity chunks (`chunk_corpus(docs,
+    window=1)`, T-020's frozen entrypoint -- never reimplemented here) so
+    every field `answer()` reads off a chunk (`text`, `deep_link`, `date`,
+    `source_type`, ...) is real; `generate_fn` is T-023's documented
+    `default_generator()`, resolved via `_resolve_generate_fn`.
+    `retrieval_scores` are threaded through 1:1 with `chunks` (identity
+    chunking preserves a 1:1 doc-to-chunk mapping, so lengths always match)
+    so the retrieval-confidence refusal mechanism has real scores to compare
+    against, once a threshold is chosen (`min_confidence` stays unset here --
+    the ticket explicitly leaves the threshold VALUE as research-required,
+    T-025 territory, distinct from the frozen MECHANISM).
+
+    Most existing tests in this file monkeypatch this whole seam and never
+    reach the real body below; `test_resolve_answer_fn_real_composition_
+    matches_the_documented_answer_arity` instead `sys.modules`-injects fakes
+    for exactly what this body imports, so the real body -- including its
+    real call to `answer(...)` -- runs and is pinned."""
+    import onrecord.rag.answer as _answer_module  # pragma: no cover
+    from onrecord.index.inverted import InvertedIndex  # pragma: no cover
+    from onrecord.rag.chunking import chunk_corpus  # pragma: no cover
+    from onrecord.search.ranked import ranked_search  # pragma: no cover
+
+    index = InvertedIndex.load(_DEFAULT_INDEX_PATH)
+    generate_fn = _resolve_generate_fn(_answer_module)
+
+    def _answer_fn(question: str) -> dict:
+        results = ranked_search(index, question, k=_ANSWER_RETRIEVAL_K)
+        docs = [index.get_doc(result.doc_id) for result in results]
+        chunks = chunk_corpus(docs, window=1, overlap=0)
+        retrieval_scores = [result.score for result in results]
+        return _answer_module.answer(
+            question, chunks, generate_fn, retrieval_scores=retrieval_scores
+        )
 
     return _answer_fn
-
-
-_DEFAULT_INDEX_PATH = "artifacts/index"
 
 
 def _resolve_retrieve_fn(k: int = 10) -> Callable[[str], list[str]]:
