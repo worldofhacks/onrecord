@@ -224,14 +224,15 @@ index, so `/api/stats` reports `corpus_version: v2` either way.)
 
 ## Metrics report (reproducible)
 
-Judgment set: 15 queries, 255 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Session 1 (5 queries, 65 rows) was hand-labeled at the MVP checkpoint against corpus-v1; session 2 (q1–q5 re-pooled against corpus-v2 + 10 new queries, 190 rows) was labeled by an LLM judge (`gpt-5.2` — a different model family from the answer generator; provenance in `evalsets/judgment-session-2-provenance.json`) under the same protocol: criterion-first, pooled grep+BM25+random, shuffled, blind to source. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
+Judgment set: **100 queries, 1,360 blind pooled judgments** (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Session 1 (5 queries, 65 rows) was hand-labeled at the MVP checkpoint against corpus-v1; session 2 (q1–q5 re-pooled against corpus-v2 + 10 new queries, 190 rows) was labeled by `gpt-5.2`; session 3 (85 new criterion-first queries, 1,105 rows; owner-directed) was labeled by `gpt-5.6-sol` — both labelers a different model family from the answer generator, both under the same protocol: criterion-first (the session pack is committed before pooling runs), pooled grep+BM25+random, shuffled, blind to source. Provenance sidecars: `evalsets/judgment-session-{2,3}-provenance.json`. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
 
-| Retrieval (corpus-v2, 15 queries) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
+| Retrieval (corpus-v2) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
-| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 |
-| BM25 (k1=1.5, b=0.75) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
+| Boolean OR (unranked, Day-1 baseline, 15q) | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 |
+| BM25 (k1=1.5, b=0.75, 15-query set) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
+| BM25 (k1=1.5, b=0.75, **100-query set**) | 0.470 | 0.392 | 0.689 | 0.846 | 0.618 | 0.558 |
 
-The identical labels produce both rows — the delta is the ranking function, measured, not vibed. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
+The identical labels produce the boolean and BM25 rows — the delta is the ranking function, measured, not vibed. The 15q→100q drop is not a regression either: the 85 session-3 queries are deliberately narrower (single-ordinance, single-disclosure topics), so fewer pooled documents clear their grade-2 bars — the 100-query number is the more honest headline and still clears the ≥0.5 gate. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
 
 ## Defended k1/b
 
