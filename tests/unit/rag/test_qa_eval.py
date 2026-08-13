@@ -1338,6 +1338,29 @@ def test_resolve_answer_fn_real_composition_matches_the_documented_answer_arity(
     fake_answer_module.answer = fake_answer
     monkeypatch.setitem(sys.modules, "onrecord.rag.answer", fake_answer_module)
 
+    # T-029 deflake (order-dependency, .tdd-swarm reports/T-029 -- see
+    # tickets/T-029.md): the seam's real import form is `import
+    # onrecord.rag.answer as _answer_module` -- CPython compiles `import
+    # a.b.c as x` as an IMPORT_NAME (ensures `a.b.c` is loaded, a no-op once
+    # `sys.modules` already has an entry) FOLLOWED BY an attribute walk from
+    # the top-level package (`x = a.b.c`, i.e. `getattr(getattr(a, "b"),
+    # "c")`), never a direct `sys.modules["a.b.c"]` lookup. The
+    # `monkeypatch.setitem(sys.modules, ...)` above only swaps the registry
+    # entry; it never touches the `onrecord.rag` package object's own
+    # `.answer` attribute, which the real import machinery permanently
+    # (re)binds to the REAL module the first time `onrecord.rag.answer` is
+    # genuinely imported anywhere in this process -- e.g. by
+    # tests/unit/rag/test_answer.py, which sorts before this file and runs
+    # first in any shared-process full-suite collection, making this test
+    # pass in isolation but fail once collected alongside that file. Patch
+    # the parent-package attribute directly too, so the injection holds
+    # regardless of which other test files already ran first.
+    # `raising=False`: a fresh, isolated process that never imported
+    # `onrecord.rag.answer` at all has no such attribute yet to overwrite.
+    import onrecord.rag as _onrecord_rag_pkg
+
+    monkeypatch.setattr(_onrecord_rag_pkg, "answer", fake_answer_module, raising=False)
+
     # Defensive fakes for the retrieval modules the sibling `_resolve_retrieve_fn`
     # (same file, `--kind answer_recall` seam) already lazily imports -- the
     # natural reuse precedent for however `_resolve_answer_fn` ends up building
