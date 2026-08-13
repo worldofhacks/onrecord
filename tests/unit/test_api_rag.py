@@ -283,17 +283,32 @@ kept, not clamped" are both observable. The metadata spread (2 source types,
 2 venue types, 2 jurisdictions + nulls, 2 tickers + nulls) exercises all
 four filter dimensions independently and in AND-combination.
 
-EXPECTED FAILURE MODE AT FREEZE
---------------------------------
-Every test in this file is RED against `onrecord/api.py` as committed:
-`mode=semantic|hybrid` still returns the `available_wednesday` teaser and
-`POST /api/answer` still returns the `available_thursday` teaser, so the
-module has no `embeddings`/`answer_mod`/`retrieve` attributes at all — the
-seam helper `_seam()` turns that into a clean, actionable `pytest.fail`
-rather than an AttributeError traceback. See the Test Agent's report for the
-per-test RED table and for the satisfiability reference implementation
-(scratchpad-only, `sys.modules`-injected, never staged into the worktree)
-that proves all of these pins are simultaneously achievable.
+EXPECTED FAILURE MODE — PER ROUND
+----------------------------------
+**First freeze.** Every test here was RED against the pre-unlock
+`onrecord/api.py`: `mode=semantic|hybrid` still returned the
+`available_wednesday` teaser and `POST /api/answer` the `available_thursday`
+one, so the module had no `embeddings`/`answer_mod`/`retrieve` attributes at
+all — the seam helper `_seam()` turns that into a clean, actionable
+`pytest.fail` rather than an AttributeError traceback.
+
+**Pin round 2** (the unlock has since landed; this round's REDs are the code
+review's two Important findings). They fail loudly and specifically: the
+runtime-rung tests report `expected a 503 rung, got 500: Internal Server
+Error`; the liveness tests report `/health completed AFTER the 0.6s request`;
+the partition-robustness tests report one message naming several conditions
+at once. Two of the round's pins are deliberately GREEN and disclosed as
+such — `test_concurrent_cold_cache_requests_load_the_embedding_store_exactly
+_once` (a COUPLING pin: the store cache is thread-safe today only because
+`async def` handlers serialise on the loop, and it must STAY green once they
+move to the threadpool) and `test_answer_k_in_the_ordinary_range_still_works`
+(an over-rejection guard for the new upper bound).
+
+See the Test Agent's report for the per-round RED table and for the
+satisfiability reference (scratchpad-only, `sys.modules`-injected, never
+staged into the worktree — since the unlock landed it is the SHIPPED module
+plus the review's fixes, so every pin here is proven achievable by a small
+delta on real reviewed code rather than by a hand-rolled stand-in).
 """
 
 from __future__ import annotations
@@ -301,6 +316,9 @@ from __future__ import annotations
 import contextlib
 import inspect
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -313,7 +331,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from onrecord.index.inverted import InvertedIndex  # noqa: E402
 from onrecord.rag import answer as answer_module  # noqa: E402
 from onrecord.rag.chunking import Chunk, chunk_corpus  # noqa: E402
-from onrecord.rag.embeddings import EmbeddingStore  # noqa: E402
+from onrecord.rag.embeddings import EmbeddingRequestError, EmbeddingStore  # noqa: E402
 from onrecord.types import Doc  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -476,7 +494,7 @@ GENERATED = (
 # diagnosis a human ever sees).
 #
 # `index not loaded` is the existing frozen `_missing_index_response()`
-# wording, unchanged; the other six are contracted here. The words are
+# wording, unchanged; the rest are contracted here. The words are
 # deliberately ordinary -- an operator reading "stale" or "not embedded"
 # knows what to re-run -- and deliberately non-overlapping, so no message
 # can name two conditions at once.
@@ -489,6 +507,15 @@ LADDER_TOKENS = {
     "stale": "stale",
     "generator": "ANTHROPIC_API_KEY",
     "min_confidence": "ONRECORD_ANSWER_MIN_CONF",
+    # PIN ROUND 2 (code review I-2): the two RUNTIME rungs. Everything above
+    # is a CONFIGURATION fault, detectable before any paid call; these two are
+    # what happens when a correctly-configured provider or generator fails
+    # mid-request (429, 401, 5xx, transport timeout). They were measured
+    # escaping as uncaught `text/plain` 500s -- the single most likely runtime
+    # failure the moment keys are provisioned, and the one T-028 renders as
+    # its generic "not reachable" line instead of the real cause.
+    "embedding_request": "embedding request failed",
+    "generation": "generation failed",
 }
 
 # Every degradation rung below is pinned through BOTH endpoints and both
@@ -591,6 +618,64 @@ class TripwireProvider:
 
     def embed(self, texts: list[str]) -> np.ndarray:  # pragma: no cover - tripwire
         raise AssertionError("the lexical path must never embed anything")
+
+
+class FailingEmbedProvider:
+    """A CORRECTLY CONFIGURED provider whose request fails at call time --
+    T-021's `EmbeddingRequestError`, which is what a 429/401/5xx or a
+    transport failure after retries surfaces as.
+
+    Its `model`/`dim` deliberately MATCH the fixture store, so the identity
+    rung cannot fire first and mask this one: the store is healthy, the
+    provider is configured, and the failure is purely at runtime.
+    """
+
+    model = "scripted-embed-v1"
+    dim = 4
+
+    def __init__(self, message: str = "embedding request to OpenAI failed: HTTP 429"):
+        self.message = message
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        self.calls.append(list(texts))
+        raise EmbeddingRequestError(self.message)
+
+
+class SlowProvider(ScriptedProvider):
+    """A provider whose embed call takes real wall-clock time, standing in for
+    the seconds a real OpenAI round trip costs."""
+
+    def __init__(self, delay: float, entered: threading.Event):
+        super().__init__()
+        self.delay = delay
+        self.entered = entered
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        self.entered.set()
+        time.sleep(self.delay)
+        return super().embed(texts)
+
+
+def _raising_generator(exc: Exception):
+    """A generator seam that fails at CALL time (not at construction, which is
+    the already-pinned `GeneratorNotConfigured` rung)."""
+
+    def generate(prompt: str) -> str:
+        raise exc
+
+    generate.prompts = []
+    return generate
+
+
+def _slow_generator(delay: float, entered: threading.Event):
+    def generate(prompt: str) -> str:
+        entered.set()
+        time.sleep(delay)
+        return GENERATED
+
+    generate.prompts = []
+    return generate
 
 
 def _docs() -> list[Doc]:
@@ -732,6 +817,15 @@ def _record_answer_calls(monkeypatch, api_module) -> list[dict]:
 def _assert_flat_503(resp, *, contains: str | None = None) -> str:
     """Assert the frozen degradation-rung shape and return the message."""
     assert resp.status_code == 503, f"expected a 503 rung, got {resp.status_code}: {resp.text}"
+    # Never `text/plain` (pin round 2, code review I-2): an uncaught exception
+    # becomes a text/plain 500 whose body has no `.error` at all, which is
+    # exactly how T-028's Ask view loses the diagnosis and falls back to its
+    # generic "not reachable" line. Asserted on every rung, not just the new
+    # ones -- it costs nothing and it is the shape the UI parses.
+    content_type = resp.headers.get("content-type", "")
+    assert content_type.startswith("application/json"), (
+        f"rungs are JSON, never text/plain: content-type={content_type!r}, body={resp.text!r}"
+    )
     body = resp.json()
     assert set(body.keys()) == {"error"}, (
         f"503 rungs are a FLAT {{'error': ...}} JSONResponse, never HTTPException's "
@@ -1353,6 +1447,98 @@ def test_answer_without_a_configured_generator_names_the_env_var(tmp_path, monke
     _assert_rung(resp, "generator")
 
 
+# --- pin round 2: the RUNTIME rungs (code review I-2) ---------------------
+#
+# Everything above this line is a CONFIGURATION fault, detectable before any
+# paid call. The two rungs below are what a correctly-configured provider or
+# generator does when it fails MID-REQUEST -- measured escaping as uncaught
+# `text/plain` 500s on all four surfaces, which is a live break of T-028's
+# error-card contract (`ui/WIRING.md` §9.1 maps a flat `{"error": ...}` to the
+# card body verbatim; a text/plain 500 has no `.error`, so the UI shows its
+# generic "not reachable" line instead of "rate limited, retry shortly").
+# These are the MOST LIKELY runtime failures the moment keys are provisioned
+# -- which is the ticket's own next step (its eval item is a real keyed smoke).
+
+
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_a_failing_embedding_request_is_a_flat_503_on_both_endpoints(
+    tmp_path, monkeypatch, kind, mode
+):
+    # spec(T-024:AC-3) -- T-021's `EmbeddingRequestError` (a 429/401/5xx or a
+    # transport failure that survived the provider's own retries). The store
+    # is HEALTHY and the provider IS configured with a matching identity, so
+    # no earlier rung can fire: this is purely a runtime failure.
+    api_module = _api_module()
+    _build_store(tmp_path, ScriptedProvider())  # written by the matching model
+    failing = FailingEmbedProvider()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=tmp_path / "embeddings",
+        provider=failing,
+        generator=_fake_generator(),
+    ) as client:
+        resp = _ladder_request(client, kind, mode)
+
+    message = _assert_rung(resp, "embedding_request")
+    assert failing.calls, "the fixture is only meaningful if the provider was actually called"
+    assert "sk-" not in message, "a provider failure must never carry credentials into the body"
+
+
+@pytest.mark.parametrize(
+    ("label", "exc"),
+    [
+        ("typed GenerationError", answer_module.GenerationError("HTTP 529 overloaded")),
+        ("arbitrary runtime error", RuntimeError("connection reset by peer")),
+        ("timeout", TimeoutError("read timeout after 120s")),
+    ],
+)
+@pytest.mark.parametrize("mode", ["lexical", "hybrid"])
+def test_a_generator_runtime_failure_is_a_flat_503(tmp_path, monkeypatch, label, exc, mode):
+    # spec(T-024:AC-3) -- the generator resolved fine (a key IS present) and
+    # then FAILED when called: Anthropic overload, rate limit, timeout, or any
+    # bug in the transport path. T-023's typed `GenerationError` and an
+    # arbitrary exception are pinned to the same rung deliberately: from the
+    # caller's side both mean "generation failed, retry", and an implementation
+    # that catches only the typed one still 500s on the untyped case, which is
+    # what was measured.
+    api_module = _api_module()
+    provider = ScriptedProvider()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=_build_store(tmp_path, provider),
+        provider=provider,
+        generator=_raising_generator(exc),
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "mode": mode, "k": 3})
+
+    message = _assert_rung(resp, "generation")
+    assert "sk-ant-" not in message, "a generation failure must never carry credentials"
+
+
+def test_a_generator_failure_does_not_take_the_process_down(tmp_path, monkeypatch):
+    # spec(T-024:AC-3) -- the rung degrades this REQUEST, not the service:
+    # lexical search and /health keep serving on the same client afterwards.
+    api_module = _api_module()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_raising_generator(RuntimeError("boom")),
+    ) as client:
+        failed = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
+        health = client.get("/health")
+        lexical = client.get("/api/search", params={"q": QUERY, "mode": "lexical"})
+
+    _assert_rung(failed, "generation")
+    assert health.status_code == 200 and health.json().get("status") == "ok"
+    assert lexical.status_code == 200
+    assert _result_doc_ids(lexical) == LEXICAL_ORDER
+
+
 @pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
 def test_no_store_and_no_provider_still_names_exactly_one_condition(
     tmp_path, monkeypatch, kind, mode
@@ -1425,6 +1611,9 @@ def test_every_degradation_rung_says_something_different(tmp_path):
         ),
         ("missing_embeddings", index_dir, partial_store, provider),
         ("stale", index_dir, stale_store, provider),
+        # pin round 2: the runtime rung, alongside the configuration ones --
+        # its message must not collide with any of them either.
+        ("embedding_request", index_dir, healthy_store, FailingEmbedProvider()),
     ]
 
     messages: dict[tuple[str, str], str] = {}
@@ -1442,6 +1631,8 @@ def test_every_degradation_rung_says_something_different(tmp_path):
                     resp = _ladder_request(client, kind, "hybrid")
                 messages[(rung, kind)] = _assert_rung(resp, rung)
 
+    # answer-only rungs: no generator configured, and a generator that fails
+    # when called (pin round 2 -- two different conditions, two tokens).
     with pytest.MonkeyPatch.context() as mp:
         with _client(
             api_module, mp, index_dir=index_dir, store_dir=healthy_store, provider=provider
@@ -1449,10 +1640,42 @@ def test_every_degradation_rung_says_something_different(tmp_path):
             resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
         messages[("generator", "answer")] = _assert_rung(resp, "generator")
 
+    with pytest.MonkeyPatch.context() as mp:
+        with _client(
+            api_module,
+            mp,
+            index_dir=index_dir,
+            store_dir=healthy_store,
+            provider=provider,
+            generator=_raising_generator(answer_module.GenerationError("HTTP 529")),
+        ) as client:
+            resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
+        messages[("generation", "answer")] = _assert_rung(resp, "generation")
+
+    # min_confidence completes the vocabulary: all ten tokens, one message
+    # each, no overlaps anywhere.
+    with pytest.MonkeyPatch.context() as mp:
+        with _client(
+            api_module,
+            mp,
+            index_dir=index_dir,
+            store_dir=healthy_store,
+            provider=provider,
+            generator=_fake_generator(),
+            min_confidence="not-a-number",
+        ) as client:
+            resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
+        messages[("min_confidence", "answer")] = _assert_rung(resp, "min_confidence")
+
+    assert {rung for rung, _kind in messages} == set(LADDER_TOKENS), (
+        "the distinctness sweep must cover EVERY token in the frozen vocabulary -- a rung "
+        "added to LADDER_TOKENS without a state here would never have its overlaps checked"
+    )
+
     # 1. every rung's message is distinct from every OTHER rung's (the
     #    original pin), and
     # 2. `_assert_rung` above already proved each names its own condition
-    #    token and NONE of the other six -- so the vocabulary partitions the
+    #    token and NONE of the others -- so the vocabulary partitions the
     #    ladder rather than merely varying its wording (test review I-2).
     by_rung: dict[str, set[str]] = {}
     for (rung, _kind), message in messages.items():
@@ -1468,6 +1691,212 @@ def test_every_degradation_rung_says_something_different(tmp_path):
     for rung, msgs in by_rung.items():
         for message in msgs:
             assert _rung_tokens(message) == {rung}, (rung, message)
+
+
+# --------------------------------------------------------------------------
+# PIN ROUND 2 -- availability under concurrency (code review I-1)
+#
+# T-024 is what puts SECONDS of blocking work behind these two handlers:
+# `provider.embed()` is a blocking httpx round trip with retries, the cosine
+# pass sweeps the whole fp16 matrix, and `/api/answer` makes a blocking LLM
+# call. Measured at the real 289,536-doc scale: `POST /api/answer mode=hybrid
+# k=8` (exactly what T-028's Ask view sends) takes 3179 ms, and a filtered
+# `mode=semantic` search 2452 ms. Run on the ASGI event loop, each of those
+# stalls EVERY other request for its full duration -- measured: `/health`
+# went from 6 ms to 1968 ms behind one in-flight request. That is the same
+# platform-health-check starvation the T-015 lesson and this module's own
+# "never crash-loop the deploy" rule guard against, arriving through a
+# different door, and it is unauthenticated.
+#
+# Two pins, because the fix has two halves that MUST land together:
+#   (a) the blocking work leaves the event loop, and
+#   (b) once handlers actually run concurrently, the directory-keyed store
+#       cache stops being accidentally thread-safe.
+# --------------------------------------------------------------------------
+
+
+def test_search_and_answer_handlers_do_not_run_on_the_event_loop():
+    # spec(T-024:AC-7) -- the SHAPE half of the fix, pinned directly because
+    # it is deterministic and diagnoses the defect in one line.
+    #
+    # FastAPI dispatches a plain `def` path operation to its threadpool and
+    # runs an `async def` one INLINE on the event loop. Both of these handlers
+    # have fully synchronous bodies with no `await`, so `async def` is the
+    # defect: it is a promise of cooperative yielding that the body never
+    # keeps. `def` is therefore the frozen contract for these two handlers
+    # specifically (`/health`, `/api/metrics` and friends stay `async` --
+    # they are constant-time and belong on the loop).
+    #
+    # An `async def` that explicitly offloads (`run_in_threadpool`,
+    # `asyncio.to_thread`) would also be correct; it is NOT what this suite
+    # freezes, and a later ticket that wants it must re-pin here. The
+    # behavioural guarantee is pinned independently by the liveness test
+    # below, which passes under either shape.
+    api_module = _api_module()
+    for name in ("search", "answer"):
+        handler = getattr(api_module, name, None)
+        assert handler is not None, f"onrecord.api must expose the `{name}` path operation"
+        assert not inspect.iscoroutinefunction(handler), (
+            f"`{name}` must be a plain `def` so FastAPI runs it in the threadpool: its body is "
+            f"fully synchronous and now does seconds of blocking work (embedding requests, a "
+            f"full-matrix cosine pass, an LLM call), which on the event loop stalls every "
+            f"other request including /health"
+        )
+    # The constant-time handlers are deliberately NOT swept up in this: they
+    # belong on the loop, and moving them would cost a threadpool hop each.
+    assert inspect.iscoroutinefunction(api_module.health)
+
+
+# (kind, mode, where the wall-clock time is spent)
+LIVENESS_CASES = [
+    ("search", "hybrid", "retrieval"),
+    ("answer", "hybrid", "retrieval"),
+    ("answer", "lexical", "generation"),
+]
+
+
+@pytest.mark.parametrize(("kind", "mode", "slow_where"), LIVENESS_CASES)
+def test_a_slow_request_does_not_stall_a_concurrent_health_check(
+    tmp_path, monkeypatch, kind, mode, slow_where
+):
+    # spec(T-024:AC-7) -- the BEHAVIOURAL half: liveness under load, pinned
+    # through the real ASGI stack.
+    #
+    # Two threads share one TestClient (whose portal dispatches both onto the
+    # app's loop). A seam on the request path blocks for `SLOW` seconds; once
+    # it is provably in flight, the main thread issues `GET /health`.
+    #
+    # The load-bearing assertion is ORDERING, not a latency threshold:
+    # `/health` must COMPLETE BEFORE the slow request does. That is binary and
+    # immune to machine speed -- if the loop is blocked, `/health` cannot be
+    # served until the slow handler returns, so it necessarily finishes after
+    # it. (Verified both ways against a throwaway app before freezing: with an
+    # `async def` body, /health took 552 ms and finished LAST; with `def`,
+    # 1 ms and FIRST.) A generous wall-clock bound rides along only to make
+    # the failure message legible.
+    api_module = _api_module()
+    slow = 0.6
+    entered = threading.Event()
+    provider = ScriptedProvider()
+    generator = _fake_generator()
+
+    def _slow_retrieval(*args, **kwargs):
+        entered.set()
+        time.sleep(slow)
+        return []
+
+    if slow_where == "generation":
+        generator = _slow_generator(slow, entered)
+
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=_build_store(tmp_path, provider),
+        provider=provider,
+        generator=generator,
+    ) as client:
+        if slow_where == "retrieval":
+            for seam in ("semantic_search", "hybrid_search"):
+                monkeypatch.setattr(_seam(api_module, "retrieve"), seam, _slow_retrieval)
+
+        def _drive_slow():
+            resp = _ladder_request(client, kind, mode)
+            return resp.status_code, time.perf_counter()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = pool.submit(_drive_slow)
+            assert entered.wait(timeout=10), "the slow seam was never reached"
+            started = time.perf_counter()
+            health = client.get("/health")
+            health_done = time.perf_counter()
+            slow_status, slow_done = future.result(timeout=30)
+
+    assert health.status_code == 200
+    assert health.json().get("status") == "ok"
+    assert slow_status in (200, 503), f"the slow request itself must still complete: {slow_status}"
+    assert health_done < slow_done, (
+        f"/health completed AFTER the {slow:.1f}s {kind} request, i.e. it waited for it: the "
+        f"handler is running its blocking body on the ASGI event loop and stalls the whole "
+        f"process (health finished {health_done - slow_done:+.3f}s relative to the slow request)"
+    )
+    assert (health_done - started) < slow * 0.75, (
+        f"/health took {health_done - started:.3f}s while a {slow:.1f}s request was in flight"
+    )
+
+
+def test_concurrent_cold_cache_requests_load_the_embedding_store_exactly_once(
+    tmp_path, monkeypatch
+):
+    # spec(T-024:AC-3) -- the COUPLED half of the event-loop fix, and the
+    # reason the two must land together.
+    #
+    # The store cache is thread-safe TODAY only by accident: `async def`
+    # handlers never yield, so requests serialise on the loop thread and a
+    # cold-cache burst produces exactly one load. Move the handlers to the
+    # threadpool (which the pins above require) and that accident evaporates:
+    # N concurrent requests would each miss the cache and each start a
+    # multi-hundred-megabyte matrix read (848 MB at v2 scale) racing to fill
+    # one dict slot. This test is therefore GREEN against the current
+    # implementation and must STAY green after the handlers change -- it is a
+    # coupling pin, disclosed as such, not a new red.
+    #
+    # Cold cache is arranged honestly rather than incidentally: the store
+    # directory does not exist at ASGI startup, so the best-effort warm finds
+    # nothing to cache, and the store is built on disk afterwards. That also
+    # pins a real operational property -- a store created after boot is picked
+    # up without a restart, i.e. load FAILURES are never cached.
+    api_module = _api_module()
+    workers = 8
+    provider = ScriptedProvider()
+    store_dir = tmp_path / "late_store"
+    load_calls: list[str] = []
+    calls_lock = threading.Lock()
+    real_load = EmbeddingStore.load
+
+    def _counting_load(directory, **kwargs):
+        with calls_lock:
+            load_calls.append(str(directory))
+        # Widen the race window so a missing lock is caught deterministically
+        # rather than by luck: every worker is inside the loader at once.
+        time.sleep(0.05)
+        return real_load(directory, **kwargs)
+
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=store_dir,  # deliberately absent at startup
+        provider=provider,
+        generator=_fake_generator(),
+    ) as client:
+        assert not store_dir.exists(), "the cache must start genuinely cold"
+        _save_store(
+            store_dir,
+            [(chunk.chunk_id, chunk.text) for chunk in _fixture_chunks()],
+            provider,
+        )
+        monkeypatch.setattr(EmbeddingStore, "load", _counting_load)
+
+        barrier = threading.Barrier(workers)
+
+        def _fire():
+            barrier.wait(timeout=10)
+            return client.get("/api/search", params={"q": QUERY, "mode": "semantic"})
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            responses = [
+                future.result(timeout=30) for future in [pool.submit(_fire) for _ in range(workers)]
+            ]
+
+    for resp in responses:
+        assert resp.status_code == 200, resp.text
+        assert _result_doc_ids(resp) == SEMANTIC_ORDER
+    assert len(load_calls) == 1, (
+        f"{workers} concurrent cold-cache requests triggered {len(load_calls)} store loads "
+        f"({load_calls}) -- the load-and-insert must be serialised (a lock), or every "
+        f"threadpool worker pays a full multi-hundred-megabyte matrix read for the same store"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1567,6 +1996,54 @@ def test_answer_k_below_one_is_422(tmp_path, monkeypatch, k):
         resp = client.post("/api/answer", json={"question": QUESTION, "k": k})
 
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("k", [100_001, 1_000_000_000])
+def test_answer_k_is_bounded_above(tmp_path, monkeypatch, k):
+    # spec(T-024:AC-4) -- PIN ROUND 2, code review Minor-3. `/api/answer` is
+    # no longer a stub: `k` sizes the retrieved set and EVERY retrieved
+    # chunk's full text goes into the LLM prompt. Measured on a 405-doc index:
+    # k=8 -> a 30,589-char prompt; k=1000000000 -> 1,962,931 chars, HTTP 200.
+    # At 289K docs one unauthenticated request would assemble a prompt
+    # approaching the whole corpus and hand it to a paid generator.
+    #
+    # Only the SAFETY property is frozen, not a magic number: an unbounded k
+    # is rejected, and the ordinary range keeps working (below). The exact
+    # ceiling is the implementer's choice anywhere in [20, 100_001) -- the
+    # reviewer suggested 100. `/api/search`'s own unbounded `k` is frozen by
+    # T-013 and stays as it is; it spends CPU, not money, and re-pinning it
+    # is the wave-10 checklist's call, not this ticket's.
+    api_module = _api_module()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_fake_generator(),
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "k": k})
+
+    assert resp.status_code == 422, (
+        f"k={k} must be rejected: every retrieved chunk's full text is billed into the "
+        f"generator prompt, so an unbounded k is an unauthenticated spend amplifier"
+    )
+
+
+@pytest.mark.parametrize("k", [1, 8, 20])
+def test_answer_k_in_the_ordinary_range_still_works(tmp_path, monkeypatch, k):
+    # spec(T-024:AC-4) -- the guard above must not over-reject: k=8 is what
+    # T-028's Ask view sends, k=20 is /api/search's own default depth, k=1 is
+    # the boundary.
+    api_module = _api_module()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_fake_generator(),
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "k": k})
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["retrieved"]) == min(k, len(LEXICAL_ORDER))
 
 
 def test_answer_defaults_to_lexical_mode(tmp_path, monkeypatch):
@@ -1818,6 +2295,78 @@ def test_answer_unparseable_min_confidence_is_a_flat_503_naming_the_env_var(tmp_
         resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical", "k": 3})
 
     _assert_rung(resp, "min_confidence")
+
+
+# The two rungs that ECHO OPERATOR-CONTROLLED STRINGS back to an anonymous
+# caller -- the min-confidence rung echoes the raw env value, the store rung
+# echoes the resolved directory path. Both echoes are worth keeping (they turn
+# "your gate is misconfigured" into "...and here is the value you set"), and
+# no REQUEST input reaches either. But an operator string is still a string
+# the ladder's partition never accounted for: an env value or a directory name
+# containing another rung's token makes one message name two conditions,
+# which is the property every rung assertion in this file rests on. Measured
+# by the reviewer: `ONRECORD_ANSWER_MIN_CONF=not-a-float-sk-SEN` came back
+# verbatim. Pinned here rather than left to discipline (pin round 2, code
+# review Minor-5/Minor-6).
+
+_HOSTILE_ECHO = "stale identity mismatch not embedded ANTHROPIC_API_KEY index not loaded"
+
+
+def test_a_hostile_min_confidence_value_cannot_break_the_ladder_partition(tmp_path, monkeypatch):
+    # spec(T-024:AC-6)
+    api_module = _api_module()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_fake_generator(),
+        min_confidence=_HOSTILE_ECHO,
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical", "k": 3})
+
+    # Exactly ONE condition named, despite the echoed value naming four.
+    _assert_rung(resp, "min_confidence")
+
+
+def test_a_hostile_store_path_cannot_break_the_ladder_partition(tmp_path, monkeypatch):
+    # spec(T-024:AC-3) -- the same property for the store rung's path echo. A
+    # directory literally named after another rung is contrived; an operator
+    # path like `/srv/embeddings-stale-2025-01/` is not.
+    api_module = _api_module()
+    provider = ScriptedProvider()
+    hostile_dir = tmp_path / "stale-identity-mismatch-not-embedded"
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=hostile_dir,  # absent -> the store rung, which echoes the path
+        provider=provider,
+    ) as client:
+        resp = client.get("/api/search", params={"q": QUERY, "mode": "semantic"})
+
+    _assert_rung(resp, "store")
+
+
+def test_an_echoed_operator_value_is_length_bounded(tmp_path, monkeypatch):
+    # spec(T-024:AC-6) -- and the echo is BOUNDED: a 4 KB env value must not
+    # become a 4 KB error body handed to an anonymous caller. The bound is not
+    # pinned to an exact width (the reviewer suggested 32 chars); what is
+    # frozen is that the response does not grow with the operator's input.
+    api_module = _api_module()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_fake_generator(),
+        min_confidence="x" * 4096,
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical", "k": 3})
+
+    message = _assert_rung(resp, "min_confidence")
+    assert len(message) < 512, (
+        f"the rung echoed {len(message)} characters -- truncate the operator value rather than "
+        f"reflecting it whole"
+    )
 
 
 def test_min_confidence_without_scores_is_a_typed_422(tmp_path, monkeypatch):
