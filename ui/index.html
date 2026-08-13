@@ -545,7 +545,7 @@ const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo In
 //   GET  /api/stats          -> {documents, jurisdictions, tickers, sources, corpus_version} (T-017)
 // ---------------------------------------------------------------------------
 const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, ASK_MODE = 'hybrid', PRICE_RANGE = 365, JUR_PROBE_K = 150;
-const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 15000;
+const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 120000; // SLOW: /api/answer generation measured at 12-19s live (opus-5, hybrid); 120s matches the server-side generator timeout
 const JUR_PROBE_Q = 'data center county city water power substation zoning';
 
 const SOURCE_LABELS = { county_meeting: 'county meeting', filing: 'SEC filing', docket: 'regulatory docket', earnings_call: 'earnings call' };
