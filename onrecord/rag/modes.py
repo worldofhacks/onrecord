@@ -70,7 +70,7 @@ _METRIC_LABELS = ("P@5", "P@10", "R@10", "R@50", "MRR", "NDCG@10")
 _ROW_KEYS = {"timestamp", "git_sha", "corpus_version", "mode", "metrics"}
 
 DEFAULT_INDEX_PATH = "artifacts/index"
-DEFAULT_STORE_PATH = "artifacts/store"
+DEFAULT_STORE_PATH = "artifacts/embeddings"
 DEFAULT_JUDGMENTS_PATH = "evalsets/judgments.jsonl"
 DEFAULT_HISTORY_PATH = "artifacts/modes_scoreboard.jsonl"
 

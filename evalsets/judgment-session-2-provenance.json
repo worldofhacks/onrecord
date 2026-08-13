@@ -1,0 +1,142 @@
+{
+  "labeler_model": "gpt-5.2",
+  "protocol": "T-009 pooling, criterion-first, blind",
+  "date": "2026-08-12",
+  "queries": {
+    "q1": {
+      "phase": "topup",
+      "seed": 0,
+      "graded": 10,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 3,
+      "g2": 3
+    },
+    "q2": {
+      "phase": "topup",
+      "seed": 0,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 6,
+      "g2": 3
+    },
+    "q3": {
+      "phase": "topup",
+      "seed": 0,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 2,
+      "g2": 8
+    },
+    "q4": {
+      "phase": "topup",
+      "seed": 0,
+      "graded": 9,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 4,
+      "g2": 1
+    },
+    "q5": {
+      "phase": "topup",
+      "seed": 0,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 7,
+      "g2": 3
+    },
+    "q6": {
+      "phase": "new",
+      "seed": 6,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 8,
+      "g2": 2
+    },
+    "q7": {
+      "phase": "new",
+      "seed": 7,
+      "graded": 15,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 4,
+      "g2": 7
+    },
+    "q8": {
+      "phase": "new",
+      "seed": 8,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 7,
+      "g2": 1
+    },
+    "q9": {
+      "phase": "new",
+      "seed": 9,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 7,
+      "g2": 0
+    },
+    "q10": {
+      "phase": "new",
+      "seed": 10,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 4,
+      "g2": 0
+    },
+    "q11": {
+      "phase": "new",
+      "seed": 11,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 8,
+      "g2": 0
+    },
+    "q12": {
+      "phase": "new",
+      "seed": 12,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 7,
+      "g2": 3
+    },
+    "q13": {
+      "phase": "new",
+      "seed": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 6,
+      "g2": 1
+    },
+    "q14": {
+      "phase": "new",
+      "seed": 14,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 5,
+      "g2": 4
+    },
+    "q15": {
+      "phase": "new",
+      "seed": 15,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 1,
+      "g2": 2
+    }
+  }
+}

@@ -928,7 +928,7 @@ def _resolve_answers() -> list[dict]:
     from onrecord.rag.retrieve import hybrid_search
 
     index = InvertedIndex.load(os.environ.get("ONRECORD_INDEX", DEFAULT_INDEX_PATH))
-    docs = load_corpus_snapshot(os.environ.get("ONRECORD_CORPUS_SNAPSHOT", DEFAULT_CORPUS_SNAPSHOT))
+    docs = load_corpus_snapshot(os.environ.get("ONRECORD_CORPUS", DEFAULT_CORPUS_SNAPSHOT))
     chunks = chunk_corpus(docs)
     provider = get_provider()
     store = EmbeddingStore.load(

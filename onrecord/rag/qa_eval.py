@@ -369,7 +369,7 @@ def _resolve_answer_fn() -> Callable[[str], dict]:
 
     Composes the documented `answer(question, chunks, generate_fn, *,
     min_confidence=None, retrieval_scores=None)` contract (`tickets/T-023.md`,
-    frozen in `wt-T-023/tests/unit/rag/test_answer.py`) for real:
+    frozen in `tests/unit/rag/test_answer.py`) for real:
     `chunks` are built from the same BM25 pipeline `_resolve_retrieve_fn`
     already wires (`InvertedIndex` + `ranked_search`), converted to
     `onrecord.rag.chunking.Chunk` identity chunks (`chunk_corpus(docs,

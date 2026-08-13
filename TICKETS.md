@@ -92,3 +92,11 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 ### Blocked
 | id | reason | attempts | needs |
 (none)
+
+## Repairs & backlog (epic 2 close-out, 2026-08-13)
+| id | title | status | origin |
+|----|-------|--------|--------|
+| T-029 | qa_eval real-seam test full-suite order dependence | done (merged wave-9 repair) | wave-9 integration |
+| T-030 | embed input-limit guard (33 filing sections > 8K tokens) | done (merged wave-9 repair) | operational embed run 1 |
+| T-031 | token-aware embedding request packing + Retry-After honoring | backlog | operational embed runs 2–3 |
+| T-032 | /api/prices + /api/tickers async-def-sync-body (T-024 I-1 class) | backlog | T-024 fix round |

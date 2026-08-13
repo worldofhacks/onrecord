@@ -100,8 +100,10 @@ uncaught exception or a 500) rather than merely being assumed safe.
 
 **Real-index verification**: run against the fully-built corpus-v2 index
 (289,536 docs: 288,578 county-meeting segments + 958 filings) on
-2026-08-12 — **24/24 cases passed** (`.tdd-swarm/progress.md`, "CORPUS-V2
-OFFICIAL" entry: "Robustness on final index 24/24 PASS").
+2026-08-12 — **24/24 cases passed**. Reproduce anytime: the probe is the
+same case matrix as the frozen unit suites (empty / stopword-only /
+unicode / emoji / CJK / absent-term / very-long × boolean AND/OR + BM25)
+executed against the live `artifacts/index`.
 
 **Honest caveat**: county-meeting text is sourced from YouTube
 auto-captions, which are noisy by construction (misheard terms, missed
@@ -191,20 +193,31 @@ deferred items — so `corpus/v2/corpus.jsonl.gz` is gitignored; only
 in `onrecord/api.py`. To rebuild it and point a local `uvicorn` at it:
 
 ```sh
-make ingest V=2 RAW=<parsed-raw-dir>   # rebuilds corpus/v2/ + artifacts/index locally
+# Rebuilds corpus/v2/corpus.jsonl.gz + manifest AND writes the v2 index over
+# the default artifacts/index (the Makefile passes no --index-out). This is
+# the same invocation the official 2026-08-12 rebuild used. If you need to
+# keep a v1 index around, pass an explicit index dir via the module instead:
+#   uv run python -m onrecord.ingest.build_corpus --version 2 \
+#       --raw-dir <parsed-raw-dir> --index-out artifacts/index-v2
+make ingest V=2 RAW=<parsed-raw-dir>
 
 ONRECORD_CORPUS=corpus/v2/corpus.jsonl.gz \
-ONRECORD_INDEX=artifacts/index-v2 \
-ONRECORD_EMBED_STORE=artifacts/embeddings/<model> \
+ONRECORD_EMBED_STORE=artifacts/embeddings \
 ONRECORD_GENERATOR_MODEL=<generator-model-id> \
 ONRECORD_JUDGE_MODEL=<judge-model-id> \
 uv run uvicorn onrecord.api:app --reload
 ```
 
+(`ONRECORD_INDEX` is omitted above because `make ingest V=2` writes the
+default `artifacts/index`; set it only if you built the index into a
+non-default directory with `--index-out`. The manifest travels with the
+index, so `/api/stats` reports `corpus_version: v2` either way.)
+
 | Env var | Purpose |
 |---|---|
 | `ONRECORD_CORPUS` | Corpus snapshot path; point at `corpus/v2/corpus.jsonl.gz` to bootstrap/answer from v2 instead of the v1 default. |
-| `ONRECORD_INDEX` | Saved `InvertedIndex` directory; use a v2-specific path (e.g. `artifacts/index-v2`) so it never collides with the v1 index already saved at the default `artifacts/index`. |
+| `ONRECORD_INDEX` | Saved `InvertedIndex` directory (default `artifacts/index`). Only needed when the index was built into a non-default dir via `--index-out`. |
+| `ONRECORD_ANSWER_MIN_CONF` | Optional refusal gate for `/api/answer`: minimum top retrieval confidence below which the pipeline refuses *before* calling the generator. Unset = no gate. A malformed value surfaces as its own named 503 ladder condition rather than being echoed. |
 | `ONRECORD_EMBED_STORE` | Embedding-store directory backing `mode=semantic`/`hybrid`; must be built for the SAME corpus version being served — T-021's store/provider identity check `503`s on a mismatch rather than silently serving stale vectors. |
 | `ONRECORD_GENERATOR_MODEL` | Overrides the Claude generator model id `onrecord/rag/answer.py` resolves for `/api/answer` (its own pinned default otherwise). |
 | `ONRECORD_JUDGE_MODEL` | Overrides `onrecord/rag/judge.py`'s eval-harness judge model id (`DEFAULT_JUDGE_MODEL` otherwise). |
