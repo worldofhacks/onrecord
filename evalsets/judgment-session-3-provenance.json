@@ -1,0 +1,773 @@
+{
+  "labeler_model": "gpt-5.6-sol",
+  "protocol": "T-009 pooling, criterion-first (session-3 md committed pre-pooling), blind",
+  "date": "2026-08-13",
+  "workers": 6,
+  "queries": {
+    "q16": {
+      "seed": 16,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 0,
+      "g2": 4
+    },
+    "q17": {
+      "seed": 17,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 6,
+      "g2": 1
+    },
+    "q18": {
+      "seed": 18,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 0,
+      "g2": 3
+    },
+    "q19": {
+      "seed": 19,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 4,
+      "g2": 2
+    },
+    "q20": {
+      "seed": 20,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 3,
+      "g2": 1
+    },
+    "q21": {
+      "seed": 21,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 2,
+      "g2": 3
+    },
+    "q22": {
+      "seed": 22,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 1,
+      "g2": 5
+    },
+    "q23": {
+      "seed": 23,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 0,
+      "g2": 2
+    },
+    "q24": {
+      "seed": 24,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 3,
+      "g2": 5
+    },
+    "q25": {
+      "seed": 25,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 1,
+      "g2": 2
+    },
+    "q26": {
+      "seed": 26,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 2,
+      "g2": 5
+    },
+    "q27": {
+      "seed": 27,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 0,
+      "g2": 3
+    },
+    "q28": {
+      "seed": 28,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 0,
+      "g2": 6
+    },
+    "q29": {
+      "seed": 29,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 1,
+      "g2": 4
+    },
+    "q30": {
+      "seed": 30,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 0,
+      "g2": 5
+    },
+    "q31": {
+      "seed": 31,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 3,
+      "g2": 2
+    },
+    "q32": {
+      "seed": 32,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 3,
+      "g2": 3
+    },
+    "q33": {
+      "seed": 33,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 0,
+      "g2": 7
+    },
+    "q34": {
+      "seed": 34,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 0,
+      "g2": 2
+    },
+    "q35": {
+      "seed": 35,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 3,
+      "g2": 6
+    },
+    "q36": {
+      "seed": 36,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 1,
+      "g2": 7
+    },
+    "q37": {
+      "seed": 37,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 3,
+      "g2": 7
+    },
+    "q38": {
+      "seed": 38,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 3,
+      "g2": 2
+    },
+    "q39": {
+      "seed": 39,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 2,
+      "g2": 5
+    },
+    "q40": {
+      "seed": 40,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 1,
+      "g2": 9
+    },
+    "q41": {
+      "seed": 41,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 1,
+      "g2": 2
+    },
+    "q42": {
+      "seed": 42,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 1,
+      "g2": 5
+    },
+    "q43": {
+      "seed": 43,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 0,
+      "g2": 3
+    },
+    "q44": {
+      "seed": 44,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 5,
+      "g2": 2
+    },
+    "q45": {
+      "seed": 45,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 2,
+      "g2": 3
+    },
+    "q46": {
+      "seed": 46,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 1,
+      "g2": 8
+    },
+    "q47": {
+      "seed": 47,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q48": {
+      "seed": 48,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 4,
+      "g2": 5
+    },
+    "q49": {
+      "seed": 49,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 6,
+      "g2": 2
+    },
+    "q50": {
+      "seed": 50,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 0,
+      "g2": 5
+    },
+    "q51": {
+      "seed": 51,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 1,
+      "g2": 6
+    },
+    "q52": {
+      "seed": 52,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 2,
+      "g2": 8
+    },
+    "q53": {
+      "seed": 53,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 3,
+      "g2": 7
+    },
+    "q54": {
+      "seed": 54,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 3,
+      "g2": 5
+    },
+    "q55": {
+      "seed": 55,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 0,
+      "g2": 1
+    },
+    "q56": {
+      "seed": 56,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 2,
+      "g2": 2
+    },
+    "q57": {
+      "seed": 57,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 4,
+      "g2": 1
+    },
+    "q58": {
+      "seed": 58,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 3,
+      "g1": 9,
+      "g2": 1
+    },
+    "q59": {
+      "seed": 59,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 3,
+      "g2": 3
+    },
+    "q60": {
+      "seed": 60,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q61": {
+      "seed": 61,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 5,
+      "g2": 0
+    },
+    "q62": {
+      "seed": 62,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 2,
+      "g2": 0
+    },
+    "q63": {
+      "seed": 63,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 0,
+      "g2": 4
+    },
+    "q64": {
+      "seed": 64,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 2,
+      "g2": 2
+    },
+    "q65": {
+      "seed": 65,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q66": {
+      "seed": 66,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 1,
+      "g2": 1
+    },
+    "q67": {
+      "seed": 67,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q68": {
+      "seed": 68,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 5,
+      "g1": 7,
+      "g2": 1
+    },
+    "q69": {
+      "seed": 69,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 4,
+      "g1": 6,
+      "g2": 3
+    },
+    "q70": {
+      "seed": 70,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 6,
+      "g1": 5,
+      "g2": 2
+    },
+    "q71": {
+      "seed": 71,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q72": {
+      "seed": 72,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q73": {
+      "seed": 73,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 0,
+      "g2": 1
+    },
+    "q74": {
+      "seed": 74,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q75": {
+      "seed": 75,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q76": {
+      "seed": 76,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 3,
+      "g2": 2
+    },
+    "q77": {
+      "seed": 77,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q78": {
+      "seed": 78,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q79": {
+      "seed": 79,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 10,
+      "g1": 3,
+      "g2": 0
+    },
+    "q80": {
+      "seed": 80,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q81": {
+      "seed": 81,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q82": {
+      "seed": 82,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 1,
+      "g2": 1
+    },
+    "q83": {
+      "seed": 83,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q84": {
+      "seed": 84,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q85": {
+      "seed": 85,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q86": {
+      "seed": 86,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 13,
+      "g1": 0,
+      "g2": 0
+    },
+    "q87": {
+      "seed": 87,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q88": {
+      "seed": 88,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 11,
+      "g1": 2,
+      "g2": 0
+    },
+    "q89": {
+      "seed": 89,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q90": {
+      "seed": 90,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 4,
+      "g2": 1
+    },
+    "q91": {
+      "seed": 91,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 0,
+      "g2": 1
+    },
+    "q92": {
+      "seed": 92,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 0,
+      "g2": 4
+    },
+    "q93": {
+      "seed": 93,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q94": {
+      "seed": 94,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    },
+    "q95": {
+      "seed": 95,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 0,
+      "g2": 1
+    },
+    "q96": {
+      "seed": 96,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 3,
+      "g2": 1
+    },
+    "q97": {
+      "seed": 97,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 9,
+      "g1": 3,
+      "g2": 1
+    },
+    "q98": {
+      "seed": 98,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 7,
+      "g1": 1,
+      "g2": 5
+    },
+    "q99": {
+      "seed": 99,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 8,
+      "g1": 5,
+      "g2": 0
+    },
+    "q100": {
+      "seed": 100,
+      "pooled": 13,
+      "graded": 13,
+      "skipped": 0,
+      "g0": 12,
+      "g1": 1,
+      "g2": 0
+    }
+  }
+}

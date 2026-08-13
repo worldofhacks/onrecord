@@ -10,6 +10,7 @@
 | Corpus embedding (text-embedding-3-small, 289,536 chunks ≈ 74M tokens) | ~$1.47 at completion | MEASURED at $0.02/MTok from a 64-chunk sample, not estimated. The Day-1 "$3–8 for 24–40K chunks" guess was doubly wrong: the corpus grew 10.6× (v2) *and* the price-per-token guess was ~25× high. Includes the partial spend from three failed runs (input-limit 400, aggregate-cap 400, rate-limit 429 — see `tickets/T-030.md`/`T-031.md`); those died early, so waste was cents. |
 | Answer generation (claude-opus-5) | ~$0.10 to date | ~$0.03/grounded answer measured live (≈2.5K input + ≈600 output tokens at $5/$25 per MTok); 3 live answers during smoke + browser pass. |
 | Judgment labeling, session 2 (gpt-5.2, owner-directed) | ~$1–2 | 205 relevance calls (~1.2K input tokens each + reasoning output). Session 1 was hand-labeled ($0). Provenance: `evalsets/judgment-session-2-provenance.json`. |
+| Judgment labeling, session 3 (gpt-5.6-sol, owner-directed) | ~$1–2 | 1,105 relevance calls, MEASURED 386K prompt + 27K completion tokens (terse grader, zero parse failures) — the 100-query expansion. Provenance: `evalsets/judgment-session-3-provenance.json`. |
 | Faithfulness judge (gpt-5-mini) | <$0.01 | wire smoke only; real judged-eval runs pending owner hand labels (validation gate). |
 | Data acquisition | $0.00 | EDGAR public domain; yt-dlp captions free; FMP free tier; stooq free |
 | Hosting/infra | $0.00 | Railway free-tier service; local-first by design |
