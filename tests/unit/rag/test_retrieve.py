@@ -114,6 +114,9 @@ FROZEN CONTRACT — onrecord/rag/retrieve.py
   * `SearchResult(doc_id=chunk.chunk_id, score=<cosine float>,
     snippet=chunk.text[:160])`; `score` is a builtin `float`, not a numpy
     scalar (T-024 serializes these to JSON).
+  * `k <= 0` returns `[]` (ask for nothing, get nothing) — deliberately NOT
+    an error, unlike `hybrid_search`; see "PIN ROUND 2" below.
+  * Receipt construction scales with `k`, never with the corpus.
 
 `rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]`
   * `score(id) = sum over rankings containing id of 1/(k + rank)`, rank
@@ -135,6 +138,9 @@ FROZEN CONTRACT — onrecord/rag/retrieve.py
   * Fuse, truncate to `k`, `score=<RRF score>`; snippet from the LEXICAL hit
     when the id appeared lexically (positions-based snippets are strictly
     better) else `chunk.text[:160]`.
+  * `k <= 0` and `rrf_k <= 0` raise `ValueError` — see "PIN ROUND 2".
+  * The semantic side is consumed as an ID SEQUENCE. Receipt construction
+    scales with `k`, never with `len(chunks)`.
 
 ===========================================================================
 FROZEN CONTRACT — onrecord/rag/modes.py
@@ -160,7 +166,62 @@ history_path="artifacts/modes_scoreboard.jsonl") -> list[dict]`
     `eval/run.py::_corpus_version` does: the `ONRECORD_INDEX` env var,
     falling back to `artifacts/index`, falling back to `"unversioned"`
     (see "Test Agent decisions" 3).
-  * Also exposes a CLI `main`, mirroring `eval.run`'s pattern.
+  * Also exposes a CLI `main`, mirroring `eval.run`'s pattern, reading
+    `--index` / `--store` / `--judgments` off `sys.argv`. **`main --index X`
+    stamps X's `corpus_version`** — the artifact must name the index that was
+    actually scored, not whatever `ONRECORD_INDEX` or the `artifacts/index`
+    fallback happens to point at (see "PIN ROUND 2").
+
+===========================================================================
+PIN ROUND 2 — after the implementation code review
+===========================================================================
+`.tdd-swarm/reports/T-022-review.md` (CHANGES REQUESTED, 2 Important)
+measured two consequences that the frozen suite did not constrain. Both are
+now pinned; the tests were RED against the reviewed implementation.
+
+**Provenance (review I-2).** `main --index X` loads X, scores X, and stamped
+`corpus_version` from `ONRECORD_INDEX`/`artifacts/index` instead — measured
+producing `v1-STALE-DEFAULT` rows for a run over an index whose manifest said
+`v3-REAL-INDEX-SCORED`. Wrong receipts in the one artifact this ticket ships.
+`test_modes_main_stamps_the_corpus_version_of_the_index_it_scored` pins the
+stamp to the scored index. (The fix is one line, and Test Agent decision 3
+named it verbatim before the code existed.)
+
+**Bounded materialization (review I-1).** `hybrid_search` runs its semantic
+side at `k=len(chunks)` and needs only an id sequence plus the
+every-chunk-verified guarantee from it — but it built a full `SearchResult`
+(dataclass + 160-char snippet slice) per chunk, read `.doc_id` off each, and
+discarded all but `k`. Measured at 265K chunks: 108 ms of dataclass
+construction + 31 ms of snippet slicing per hybrid query, on the path T-024
+wires as `/api/answer`'s DEFAULT mode. Pinned as a BUDGET on `SearchResult`
+constructions (`_materialization_budget(k) = 4k + 10`), measured through
+`onrecord.rag.retrieve`'s own module-level `SearchResult` binding so
+`ranked_search`'s constructions are not counted.
+
+  What the budget does NOT constrain: the algorithm (any design whose
+  receipt-building scales with `k` passes, including one that still calls
+  `semantic_search` at a small `k`), and the VERIFICATION cost. Verification
+  is contract-mandated by the result-scoped ruling, and the only cheaper
+  route measured by the reviewer — bypassing T-021's public `entry_for` for
+  `store._entries` — would force a private-attribute reach that no frozen
+  test should mandate. That saving belongs to a T-021 accessor, not here.
+
+**`k <= 0` hygiene (review MINOR-5), previously on the not-pinned list.**
+The three functions were measured behaving three different ways;
+incidental behavior is now contract:
+  * `semantic_search(k <= 0)` -> `[]`. Already what ships and already sane;
+    pinned GREEN so a later `results[:k]` refactor cannot drift into a
+    negative slice.
+  * `hybrid_search(k <= 0)` / `hybrid_search(rrf_k <= 0)` -> `ValueError`.
+    `fused[:k]` at `k=-1` returned 4 of 5 results and at `k=-3` returned 2 —
+    a receipt of the wrong LENGTH with no error, the one shape here with a
+    silent-wrong-answer failure mode.
+  * `rrf_fuse(k <= 0)` -> `ValueError`. `k` is RRF's smoothing constant, not
+    a count: `k=0` silently degrades the formula to `1/rank`, and any
+    negative `k` raises a bare `ZeroDivisionError` from inside the fusion.
+The asymmetry is deliberate and is about failure SHAPE, not consistency for
+its own sake: returning nothing when nothing was asked for is honest;
+returning four things when negative-one was asked for is not.
 
 ===========================================================================
 TEST AGENT DECISIONS (NOT in the ticket — inventions this suite freezes)
@@ -230,10 +291,12 @@ DELIBERATELY NOT PINNED (documented gaps, not oversights)
 * **Which depth strategy `semantic_search` uses** (full scan vs grow-k
   retry) — no observable separates two correct implementations; see
   decision 1.
-* `k <= 0` on any of the three functions (the ticket is silent, and
-  `report_modes` never produces it).
+* **The COST of verification**, as opposed to the cost of materialization.
+  Hashing every served row is what the result-scoped ruling buys; the
+  measured saving beyond it needs a T-021 accessor, not a private-attribute
+  reach mandated from here (see PIN ROUND 2).
 * A repeated id **within one** ranking handed to `rrf_fuse` (first
-  occurrence? last? summed? — all defensible), and `rrf_fuse` at `k <= 0`.
+  occurrence? last? summed? — all defensible).
 * `NonIdentityChunking`'s message text (the ticket asks only for the type;
   the other two messages ARE pinned because the ticket says "naming …").
 * Whether the identity guard runs before or after the provider call.
@@ -269,6 +332,7 @@ import importlib.util
 import inspect
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -587,6 +651,25 @@ def _merged_fixture():
     return index, store, chunks, provider, merged_chunk
 
 
+# Bulk fixture: many identity chunks, all covered, all lexical candidates.
+# Exists so "work proportional to the corpus" is separable from "work
+# proportional to k" (pin round 2 / review I-1).
+BULK_CHUNKS = 96
+
+
+def _bulk_fixture(count: int = BULK_CHUNKS):
+    texts = {f"yt:0Ij8OxBcnFc:seg{i:03d}": _filler(20, f"bulk{i:03d}", (5,)) for i in range(count)}
+    docs = [_doc(doc_id, text) for doc_id, text in texts.items()]
+    index = InvertedIndex.build(docs)
+    chunks_by_id = _chunk_map(docs)
+    chunks = [chunks_by_id[doc_id] for doc_id in texts]
+    vectors = dict.fromkeys(texts.values(), V_COS_050)
+    vectors[QUERY] = QUERY_VEC
+    provider = ScriptedProvider(vectors)
+    store = _store_from(tuple(texts.items()), provider)
+    return index, store, chunks, provider
+
+
 # Deep-uncovered-field fixture: three chunks buried under 24 rows from prior
 # embed runs, every one of which outranks them. Exists to harden decision 1's
 # observable without pinning a depth strategy (test review I-3).
@@ -822,6 +905,66 @@ def _integer_tokens(text: str) -> list[str]:
     return re.findall(r"\d+", text)
 
 
+def _materialization_budget(k: int) -> int:
+    """How many `SearchResult` objects a retrieval call may construct.
+
+    `4 * k + 10` — deliberately loose. A call must produce `min(k, ...)`
+    receipts; the slack allows an implementation to build a provisional
+    receipt per returned row in more than one place, or a few extra during a
+    grow-k round, without anyone tuning against the number. What it forbids
+    is the only shape that matters: work proportional to the CORPUS. At the
+    96-chunk fixture below the budget is 30 while a receipt-per-chunk
+    implementation spends 101, so the pin is not knife-edge.
+    """
+    return 4 * k + 10
+
+
+def _count_search_results(monkeypatch) -> list:
+    """Count `SearchResult` constructions made BY `onrecord.rag.retrieve`.
+
+    The seam is the module-level `SearchResult` name that `retrieve.py`
+    binds at import (`from onrecord.types import SearchResult`, the same
+    idiom `search/ranked.py` and `search/boolean.py` use). Patching it here
+    leaves `ranked_search`'s own construction — bound in a different module —
+    uncounted, so the number isolates this ticket's materialization.
+    """
+    module = _retrieve_module()
+    if not hasattr(module, "SearchResult"):
+        pytest.fail(
+            "onrecord.rag.retrieve must bind SearchResult as a module-level name "
+            "(`from onrecord.types import SearchResult`) — that binding is the seam "
+            "the materialization budget is measured through"
+        )
+    real = module.SearchResult
+    built: list = []
+
+    def counting(*args, **kwargs):
+        built.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "SearchResult", counting)
+    return built
+
+
+def _install_scripted_provider(monkeypatch, vectors) -> None:
+    """Make T-021's `get_provider()` hand back a `ScriptedProvider`, keylessly.
+
+    Patches the PROVIDERS REGISTRY rather than `get_provider` itself:
+    `get_provider` resolves `PROVIDERS` as a module global at CALL time, so
+    this works no matter how the consuming module imported the factory
+    (`onrecord/rag/modes.py` binds it at import, which would defeat patching
+    `onrecord.rag.embeddings.get_provider`). `ONRECORD_EMBED_MODEL` is
+    deleted rather than assumed absent.
+    """
+    from onrecord.rag import embeddings
+
+    monkeypatch.setitem(
+        embeddings.PROVIDERS, "scripted", lambda **kwargs: ScriptedProvider(vectors)
+    )
+    monkeypatch.setenv("ONRECORD_EMBED_PROVIDER", "scripted")
+    monkeypatch.delenv("ONRECORD_EMBED_MODEL", raising=False)
+
+
 def _assert_metrics(actual: dict, expected: dict) -> None:
     """Compare a `{"per_query", "mean"}` block value by value (pytest.approx
     does not recurse into nested mappings)."""
@@ -948,6 +1091,18 @@ def test_rrf_fuse_absence_from_a_ranking_costs_nothing():
 def test_rrf_fuse_of_no_rankings_is_empty():
     # spec(T-022:AC-1)
     assert _retrieve_attr("rrf_fuse")([]) == []
+
+
+@pytest.mark.parametrize("bad_k", [0, -1, -60, -61])
+def test_rrf_fuse_rejects_a_non_positive_k(bad_k):
+    # spec(T-022:AC-1) — pin round 2. `k` here is RRF's smoothing constant,
+    # not a result count, and it is only meaningful above zero: `k=0` degrades
+    # the formula to 1/rank (it "works", by luck, because ranks are 1-based),
+    # while any negative k makes `k + rank` hit exactly zero at some rank and
+    # raises a bare ZeroDivisionError from inside the fusion. Neither is a
+    # sane receipt, so the argument is rejected at the boundary instead.
+    with pytest.raises(ValueError):
+        _retrieve_attr("rrf_fuse")([[C_A, C_B]], k=bad_k)
 
 
 def test_rrf_fuse_ignores_empty_rankings():
@@ -1212,6 +1367,35 @@ def test_semantic_search_k_beyond_the_chunk_count_returns_every_chunk():
     results = _retrieve_attr("semantic_search")(store, chunks, QUERY, provider, k=500)
 
     assert len(results) == len(chunks)
+
+
+@pytest.mark.parametrize("non_positive_k", [0, -1, -3, -100])
+def test_semantic_search_returns_nothing_for_a_non_positive_k(non_positive_k):
+    # spec(T-022:AC-2) — pin round 2, GREEN regression pin. "Ask for nothing,
+    # get nothing" is the sane reading here and is what ships today; the pin
+    # exists so a later refactor cannot drift into `results[:k]`, whose
+    # negative slice would drop rows off the TAIL and return a
+    # wrong-LENGTH answer with no error. Deliberately asymmetric with
+    # `hybrid_search`, which raises — see that test for why.
+    _index, store, chunks, provider = _fixture()
+
+    results = _retrieve_attr("semantic_search")(store, chunks, QUERY, provider, k=non_positive_k)
+
+    assert results == []
+
+
+def test_semantic_search_materializes_only_the_receipts_it_returns(monkeypatch):
+    # spec(T-022:AC-2) — pin round 2 / review I-1, GREEN regression pin.
+    # 96 covered chunks, k=5: the work that produces RECEIPTS must scale with
+    # k, not with the corpus. Verification itself is contract-mandated and is
+    # NOT budgeted here.
+    _index, store, chunks, provider = _bulk_fixture()
+    built = _count_search_results(monkeypatch)
+
+    results = _retrieve_attr("semantic_search")(store, chunks, QUERY, provider, k=5)
+
+    assert len(results) == 5  # liveness: the call really did the work
+    assert len(built) <= _materialization_budget(5)
 
 
 def test_semantic_search_embeds_only_the_query():
@@ -1556,6 +1740,56 @@ def test_hybrid_search_fuses_the_full_depth_lexical_ranking():
     assert [r.score for r in results] == pytest.approx([R_1_PLUS_1, R_2_PLUS_12], rel=1e-12)
 
 
+def test_hybrid_search_does_not_build_a_receipt_for_every_chunk(monkeypatch):
+    # spec(T-022:AC-3) — pin round 2 / review I-1, the measured defect.
+    # hybrid's semantic side runs at k=len(chunks), and it needs exactly two
+    # things from it: an id sequence in cosine order, and the guarantee that
+    # every chunk was verified. Building a full SearchResult — dataclass plus
+    # a 160-char snippet slice — for every chunk and then reading `.doc_id`
+    # off it, discarding all but k, is pure overhead: measured at 265K chunks,
+    # 108 ms of dataclass construction plus 31 ms of snippet slicing per
+    # hybrid query, on the path T-024 wires as /api/answer's DEFAULT mode.
+    #
+    # The pin is deliberately on the SHAPE, not the algorithm: any design that
+    # keeps receipt-building proportional to k passes, including one that
+    # still calls semantic_search for a small k. Verification cost is NOT
+    # budgeted — the ruling mandates it, and the only cheaper route (bypassing
+    # T-021's public `entry_for`) would force a private-attribute reach that
+    # no frozen test should mandate.
+    index, store, chunks, provider = _bulk_fixture()
+    built = _count_search_results(monkeypatch)
+
+    results = _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider, k=5)
+
+    assert len(results) == 5  # liveness: the call really did the work
+    assert len(built) <= _materialization_budget(5), (
+        f"hybrid_search built {len(built)} SearchResults for {len(chunks)} chunks at k=5 — "
+        f"receipt construction must scale with k, not with the corpus"
+    )
+
+
+@pytest.mark.parametrize("non_positive_k", [0, -1, -3])
+def test_hybrid_search_rejects_a_non_positive_k(non_positive_k):
+    # spec(T-022:AC-3) — pin round 2. Unlike semantic_search's clamp-to-empty,
+    # hybrid truncates with `fused[:k]`, so a negative k is a NEGATIVE SLICE:
+    # k=-1 over a 5-id fusion returns 4 results, k=-3 returns 2. That is the
+    # silent-wrong-answer shape — a receipt of the wrong LENGTH, no error —
+    # which is exactly what this ticket refuses to ship. Fail loud instead.
+    index, store, chunks, provider = _fixture()
+
+    with pytest.raises(ValueError):
+        _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider, k=non_positive_k)
+
+
+def test_hybrid_search_rejects_a_non_positive_rrf_k():
+    # spec(T-022:AC-3) — pin round 2. `rrf_k` is threaded straight into
+    # `rrf_fuse`, so the same boundary holds at the outer call.
+    index, store, chunks, provider = _fixture()
+
+    with pytest.raises(ValueError):
+        _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider, rrf_k=0)
+
+
 def test_hybrid_search_raises_non_identity_chunking_for_a_merged_window_chunk():
     # spec(T-022:AC-4) — plan-review I-11: fail loud, never degenerate into a
     # no-overlap concatenation. The merged chunk IS embedded here, so
@@ -1871,6 +2105,66 @@ def test_report_modes_signature_is_frozen():
 def test_modes_exposes_a_cli_main():
     # spec(T-022:AC-5) — mirroring eval.run's pattern.
     assert callable(_modes_attr("main"))
+
+
+# The two manifests the provenance pin plays off each other. The names are
+# assertions in themselves: whichever one lands in the artifact says out loud
+# whether the stamp tracked the scored index or the ambient default.
+STALE_DEFAULT_VERSION = "v1-STALE-DEFAULT"
+SCORED_INDEX_VERSION = "v3-REAL-INDEX-SCORED"
+
+
+def _write_manifest(directory: Path, version: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(
+        json.dumps({"corpus_version": version}), encoding="utf-8"
+    )
+
+
+def test_modes_main_stamps_the_corpus_version_of_the_index_it_scored(tmp_path, monkeypatch):
+    # spec(T-022:AC-5) — pin round 2 / review I-2. `main --index X` loads X,
+    # scores X, and must stamp X's corpus_version. Today it stamps whatever
+    # `ONRECORD_INDEX` (or the `artifacts/index` fallback) happens to name,
+    # because `main` never threads `args.index` into the provenance lookup —
+    # so all three scoreboard rows claim a corpus version that was never
+    # scored. That is a wrong receipt in the one artifact this ticket ships,
+    # and the kind of number that gets copied into a README months later with
+    # no way to tell it was mislabeled. Test Agent decision 3 named the fix
+    # verbatim before the implementation existed.
+    _isolate_environment(monkeypatch, tmp_path)
+    modes = _modes_module()
+
+    # The ambient default the stamp must NOT come from.
+    _write_manifest(tmp_path / "artifacts" / "index", STALE_DEFAULT_VERSION)
+
+    index, store, _chunks, _provider = _modes_fixture()
+    scored_index = tmp_path / "scored-index"
+    index.save(scored_index)
+    _write_manifest(scored_index, SCORED_INDEX_VERSION)
+    store_dir = tmp_path / "scored-store"
+    store.save(store_dir)
+    judgments = _write_judgments(tmp_path)
+
+    _install_scripted_provider(monkeypatch, M_VECTORS)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "onrecord.rag.modes",
+            "--index",
+            str(scored_index),
+            "--store",
+            str(store_dir),
+            "--judgments",
+            str(judgments),
+        ],
+    )
+
+    modes.main()
+
+    rows = _rows_in(tmp_path / "artifacts" / "modes_scoreboard.jsonl")
+    assert len(rows) == 3  # liveness: the CLI really produced the report
+    assert {row["corpus_version"] for row in rows} == {SCORED_INDEX_VERSION}
 
 
 def _module_ast(module) -> ast.Module:
