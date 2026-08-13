@@ -92,6 +92,38 @@ wording, read as reusing `onrecord/api.py`'s existing
 (always 200, `{"status": "ok"}`), proven in the same test by hitting both
 routes against the same missing-index client.
 
+Extension — the T-024 unlock (transitional re-pin #3)
+--------------------------------------------------------
+Trigger: the `corpus_version` decision recorded above ("No corpus-version
+manifest exists anywhere in this repo yet, so the ticket's literal example
+is read as a stable constant this ticket introduces") was TRANSITIONAL by
+construction — it pinned a hard-coded `"v1"` only because T-018 had not yet
+shipped a manifest. T-018 since landed `onrecord.ingest.build_corpus
+.read_manifest` + a `manifest.json` written into BOTH the snapshot and the
+index dir, and corpus-v2 exists. `.tdd-swarm/LESSONS.md`'s wave-4 rule
+makes T-024, the unlocking merge, the place to re-pin it; this file is
+otherwise frozen and no other test in it changed.
+
+**Re-pin #3 — `corpus_version`** (`test_stats_returns_exact_counts_and
+_corpus_version`, the `== "v1"` literal). SUPERSEDES the `corpus_version`
+bullet above:
+
+- `corpus_version` is `read_manifest(<the index dir>)["corpus_version"]`.
+  The index dir is the same `ONRECORD_INDEX` the stats themselves come
+  from, so the number and the version on the UI's hero strip always
+  describe the SAME artifact.
+- Any failure — no manifest, a manifest that is not readable/parseable, or
+  a manifest without the `corpus_version` key — is the literal
+  `"unversioned"`, NEVER a fabricated `"v1"` (orchestrator adjudication of
+  plan-review I-12: `/api/stats` and the scoreboard must agree on the
+  fallback, and a wrong-but-confident version string on the hero strip is
+  worse than an honest "unversioned"). This is exactly the contract
+  `onrecord/eval/run.py::_corpus_version` and `tests/unit/test_sweep.py`'s
+  frozen `"unversioned"` trio already hold, so the three agree by
+  construction rather than by coincidence.
+- Read at ASGI startup alongside the counts and cached with them (AC-2's
+  no-recount pin is unchanged and still covers the whole payload).
+
 Confirmed RED against the current implementation (throwaway verification
 patch added `/api/stats` returning the pinned shape + the
 `InvertedIndex.get_doc`-counting cache seam, all three tests went GREEN,
@@ -103,6 +135,7 @@ with a 404 from the SPA catch-all route, not a collection error).
 from __future__ import annotations
 
 import contextlib
+import json
 from pathlib import Path
 
 import pytest
@@ -112,6 +145,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from onrecord.index.inverted import InvertedIndex  # noqa: E402
+from onrecord.ingest.build_corpus import MANIFEST_FILENAME  # noqa: E402
 from onrecord.types import Doc  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -133,6 +167,20 @@ def _build_index(tmp_path: Path, docs: list[Doc], name: str = "index") -> Path:
     index_dir = tmp_path / name
     index.save(index_dir)
     return index_dir
+
+
+def _write_manifest(index_dir: Path, payload) -> None:
+    """Write a corpus-version manifest into an index dir, exactly where
+    T-018's `build_corpus` writes one (`MANIFEST_FILENAME`, imported rather
+    than re-spelled so a rename cannot silently decouple the two).
+
+    `payload` is written verbatim, so a test can hand it a dict, a
+    non-object JSON value, or (as raw `str`) deliberately corrupt bytes --
+    the three shapes `read_manifest`'s tolerant contract collapses to
+    `None`. Re-pin #3, see the module docstring's Extension section."""
+    index_dir.mkdir(parents=True, exist_ok=True)
+    text = payload if isinstance(payload, str) else json.dumps(payload)
+    (index_dir / MANIFEST_FILENAME).write_text(text, encoding="utf-8")
 
 
 @contextlib.contextmanager
@@ -224,9 +272,32 @@ def _make_stats_docs() -> list[Doc]:
 
 
 def test_stats_returns_exact_counts_and_corpus_version(tmp_path, monkeypatch):
-    # spec(T-017:AC-1)
+    # spec(T-017:AC-1) + spec(T-024:AC-8) -- TRANSITIONAL RE-PIN #3, landed
+    # at the T-024 unlocking merge per .tdd-swarm/LESSONS.md's wave-4 rule
+    # and the T-013R/T-014R precedent (the Test Agent edits this otherwise
+    # frozen file, for this pin only; no other test here changed).
+    #
+    # WAS: `assert body["corpus_version"] == "v1"` -- a hard-coded literal,
+    # pinned that way only because no corpus-version manifest existed
+    # anywhere in the repo at T-017's freeze.
+    #
+    # NOW: T-018 shipped `read_manifest` + a manifest.json in every index
+    # dir, and corpus-v2 exists, so the value is READ from the manifest in
+    # the same index dir the counts come from. The fixture below writes a
+    # "v2" manifest and asserts it is reflected; the "v1" literal is gone
+    # (the old assertion is REMOVED, not kept alongside the new one), and
+    # the fallback lives in its own tests directly below.
     api_module = _api_module()
     index_dir = _build_index(tmp_path, _make_stats_docs())
+    _write_manifest(
+        index_dir,
+        {
+            "corpus_version": "v2",
+            "created_at": "2026-08-12T00:00:00+00:00",
+            "doc_count": EXPECTED_DOCUMENTS,
+            "source_counts": EXPECTED_SOURCES,
+        },
+    )
 
     with _client(api_module, monkeypatch, index_dir=index_dir) as client:
         resp = client.get("/api/stats")
@@ -252,7 +323,44 @@ def test_stats_returns_exact_counts_and_corpus_version(tmp_path, monkeypatch):
     )
     assert body["sources"] == EXPECTED_SOURCES
     assert sum(body["sources"].values()) == EXPECTED_DOCUMENTS
-    assert body["corpus_version"] == "v1"
+    assert body["corpus_version"] == "v2", (
+        "corpus_version comes from T-018's read_manifest on the INDEX dir -- the same artifact "
+        "the counts above describe -- never a hard-coded literal"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "payload"),
+    [
+        ("missing-manifest", None),
+        ("manifest-without-the-key", {"doc_count": 20, "created_at": "2026-08-12T00:00:00+00:00"}),
+        ("corrupt-json", "{not valid json at all"),
+        ("json-that-is-not-an-object", "[1, 2, 3]"),
+    ],
+)
+def test_stats_corpus_version_falls_back_to_unversioned(tmp_path, monkeypatch, label, payload):
+    # spec(T-024:AC-8) -- the honest fallback, in every shape read_manifest's
+    # tolerant contract collapses to None (plus the readable-but-keyless
+    # manifest T-018's own IMPORTANT-1 calls out). NEVER a fabricated "v1":
+    # a wrong-but-confident version string on the hero strip is worse than
+    # an honest "unversioned" (orchestrator adjudication of plan-review
+    # I-12), and this is the literal onrecord/eval/run.py::_corpus_version
+    # and tests/unit/test_sweep.py's frozen trio already use, so /api/stats
+    # and the scoreboard agree by construction.
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, _make_stats_docs())
+    if payload is not None:
+        _write_manifest(index_dir, payload)
+
+    with _client(api_module, monkeypatch, index_dir=index_dir) as client:
+        resp = client.get("/api/stats")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["corpus_version"] == "unversioned", label
+    # the rest of the payload is unaffected by a missing/unusable manifest
+    assert body["documents"] == EXPECTED_DOCUMENTS
+    assert body["sources"] == EXPECTED_SOURCES
 
 
 # --------------------------------------------------------------------------
