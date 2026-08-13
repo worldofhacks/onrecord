@@ -23,6 +23,28 @@ Summary of what's implemented here:
   `sha256(f"{model}\\n{dim}\\n{text}")` hexdigest. `dim` is part of the key
   so a model whose `dimensions` parameter changes cannot poison the cache
   at the same model name (plan-review M-9).
+- `EMBED_INPUT_MAX_CHARS = 24000` (T-030, embed input-limit guard): OpenAI's
+  `/v1/embeddings` 400s on any single input above the model's per-input
+  token cap (~8,192 for text-embedding-3-small); the first full-corpus
+  embed run hit this on 33 filing-section chunks (longest 163,817 chars,
+  ~41K tokens). Deterministic TRUNCATION-FOR-EMBEDDING (orchestrator
+  adjudication): `embed_corpus` sends a provider only the first
+  `EMBED_INPUT_MAX_CHARS` characters of an over-limit text — a
+  byte-deterministic slice, no tokenizer, no re-chunking. 24000 chars is a
+  conservative ~6K-token budget at 4 chars/token, leaving headroom under
+  the real per-input cap for token-dense legal text. The slice bounds only
+  the VECTOR's input; the stored entry's `content_hash` and the store's
+  identity/staleness semantics stay keyed on the FULL text (hashing the
+  truncated input would silently merge distinct documents that share a
+  24000-char prefix). Truncated chunk_ids are never silent: they are
+  logged via the module logger at WARNING+ and returned from
+  `embed_corpus` as `{"truncated_chunk_ids": [...], "truncated_count":
+  int}` on every path, including both no-work early returns — the store
+  itself cannot carry this receipt (`entries.json` values are frozen to
+  exactly `{"row", "content_hash"}`), so a post-load attribute would read
+  as 0 for a run that truncated 33 chunks. Sub-document splitting is
+  explicitly out of scope (it would mint new chunk ids and collide with
+  the identity invariant).
 - `EmbeddingStore`: the on-disk cache + packed matrix.
   * Storage is PER-CHUNK (orchestrator ruling on test-review C-1): one
     matrix row per `chunk_id`, `entries.json` maps
@@ -65,7 +87,13 @@ Summary of what's implemented here:
     after every batch (including a trailing partial one), so a crash or
     provider outage resumes from cache instead of forcing a paid
     re-embed. A non-finite (NaN/inf) provider vector is rejected rather
-    than persisted (pin round M-6).
+    than persisted (pin round M-6). `embed_corpus` returns (never `None`,
+    T-030) a `{"truncated_chunk_ids": [...], "truncated_count": int}`
+    summary on every path — see `EMBED_INPUT_MAX_CHARS` above. A provider
+    failure raised mid-checkpoint is re-raised naming the 0-based
+    checkpoint-batch index and the first chunk_id of that batch (T-030),
+    so an operator is never left bisecting a ~289K-chunk corpus to find
+    which one a bare "HTTP 400" was about.
 - `cosine_top_k(store, query_vec, k, block_rows=8192)`: blocked fp16->fp32
   dot product (query is normalized too), top-k selected with
   `np.argpartition` rather than a full Python sort (re-review I-C),
@@ -156,7 +184,13 @@ class ProviderNotConfigured(Exception):
 class EmbeddingRequestError(RuntimeError):
     """A provider request failed (transport error, exhausted retries, or a
     response whose vector width disagrees with the provider's own `dim`).
-    Deliberately credential-free — see the module's secret-hygiene note."""
+    Deliberately credential-free — see the module's secret-hygiene note.
+
+    Names the 0-based index of the failing batch (T-030): the adapter's own
+    HTTP sub-batch index when raised directly from `embed`/`_embed_batch`,
+    or `embed_corpus`'s own checkpoint-batch index plus the first chunk_id
+    of that batch when raised through `embed_corpus` — operators must not
+    have to bisect a ~289K-chunk corpus to find the offending input."""
 
 
 _OPENAI_URL = "https://api.openai.com/v1/embeddings"
@@ -239,10 +273,17 @@ class OpenAIEmbeddingProvider:
             texts[i : i + _OPENAI_BATCH_SIZE] for i in range(0, len(texts), _OPENAI_BATCH_SIZE)
         ]
         with httpx.Client(transport=self._transport) as client:
-            rows = [self._embed_batch(client, batch) for batch in batches]
+            rows = [
+                self._embed_batch(client, batch, batch_index)
+                for batch_index, batch in enumerate(batches)
+            ]
         return np.concatenate(rows, axis=0)
 
-    def _embed_batch(self, client: httpx.Client, batch: list[str]) -> np.ndarray:
+    def _embed_batch(self, client: httpx.Client, batch: list[str], batch_index: int) -> np.ndarray:
+        # `batch_index` (T-030, AC-3) is the 0-based index of this HTTP
+        # sub-batch within THIS `embed()` call — named in every
+        # `EmbeddingRequestError` this method raises, so a 400 among 289K
+        # chunks does not force an operator to bisect the whole corpus.
         headers = {"Authorization": f"Bearer {self._api_key}"}
         body = {"model": self.model, "input": batch}
 
@@ -259,7 +300,7 @@ class OpenAIEmbeddingProvider:
                         time.sleep(_OPENAI_BACKOFF_BASE * (2**attempt))
                         continue
                     raise EmbeddingRequestError(
-                        "embedding request to OpenAI failed: transport error"
+                        f"embedding request to OpenAI failed (batch {batch_index}): transport error"
                     ) from None
 
                 if response.status_code == 200:
@@ -274,7 +315,7 @@ class OpenAIEmbeddingProvider:
                         width = vectors.shape[1] if vectors.ndim == 2 else vectors.shape
                         raise EmbeddingRequestError(
                             f"embedding response width {width} does not match provider "
-                            f"dim {self.dim}"
+                            f"dim {self.dim} (batch {batch_index})"
                         )
                     return vectors
 
@@ -285,11 +326,14 @@ class OpenAIEmbeddingProvider:
                     continue
 
                 raise EmbeddingRequestError(
-                    f"embedding request to OpenAI failed: HTTP {response.status_code}"
+                    f"embedding request to OpenAI failed (batch {batch_index}): "
+                    f"HTTP {response.status_code}"
                 )
 
         # Unreachable: the loop above always returns or raises.
-        raise EmbeddingRequestError("embedding request to OpenAI failed: retries exhausted")
+        raise EmbeddingRequestError(
+            f"embedding request to OpenAI failed (batch {batch_index}): retries exhausted"
+        )
 
 
 PROVIDERS: dict[str, type] = {"openai": OpenAIEmbeddingProvider}
@@ -329,6 +373,28 @@ def content_hash(model: str, dim: int, text: str) -> str:
     model name (plan-review M-9).
     """
     return hashlib.sha256(f"{model}\n{dim}\n{text}".encode()).hexdigest()
+
+
+# --------------------------------------------------------------------------
+# Embed input-limit guard (T-030)
+# --------------------------------------------------------------------------
+
+# OpenAI's /v1/embeddings 400s on any single input above the model's
+# per-input token cap (~8,192 for text-embedding-3-small); corpus/v2 has 33
+# filing-section chunks up to 163,817 chars (~41K tokens) that exceed it.
+# 24000 chars is a conservative ~6K-token budget at 4 chars/token — headroom
+# under the real per-input cap for token-dense legal text. This bounds only
+# the text handed to a provider's `embed()`; the stored entry's
+# `content_hash` stays over the FULL text (module docstring, "EMBED_INPUT_
+# MAX_CHARS"). Deliberately a plain module constant, not per-provider: the
+# guard is provider-agnostic (module docstring decision T1) so a future
+# non-OpenAI adapter inherits it for free.
+EMBED_INPUT_MAX_CHARS = 24000
+
+# Module logger (T-030): truncation is silent data loss from the vector's
+# point of view, so it is reported at WARNING or above — never at the
+# default INFO level, where it would disappear.
+_logger = logging.getLogger(__name__)
 
 
 class NonFiniteEmbedding(ValueError):
@@ -583,7 +649,7 @@ class EmbeddingStore:
         *,
         checkpoint_dir: str | Path | None = None,
         checkpoint_every: int = 4096,
-    ) -> None:
+    ) -> dict[str, list[str] | int]:
         """Embed `(chunk_id, text)` pairs, appending only chunks not already
         in the store. A text whose `content_hash` already has a vector
         (earlier in this run, or already in the store) is COPIED into the
@@ -592,15 +658,26 @@ class EmbeddingStore:
         repeated within `pairs` itself raises `DuplicateChunkId` before any
         provider call.
 
+        A text over `EMBED_INPUT_MAX_CHARS` (T-030) is sent to the provider
+        truncated to that many characters; the entry's `content_hash` stays
+        over the FULL text, so dedupe/identity/staleness are unaffected —
+        only the vector's input is bounded. Returns (never `None`, on every
+        path including both no-work early returns) a
+        `{"truncated_chunk_ids": [...], "truncated_count": int}` summary,
+        ids in first-appearance order over `pairs`; truncation is also
+        logged via the module logger at WARNING or above.
+
         With `checkpoint_dir` set, embeds in batches of at most
         `checkpoint_every` newly-needed texts — further clamped by the
         provider's own `batch_size`, if it declares one, so a failure never
         discards an already-billed sub-batch — and saves after every batch
         (including a trailing partial one), so a crash mid-run resumes from
-        cache instead of re-paying for already-embedded text.
+        cache instead of re-paying for already-embedded text. A provider
+        failure is re-raised naming the 0-based checkpoint-batch index and
+        the first chunk_id of that batch (T-030 AC-3).
         """
         if not pairs:
-            return
+            return {"truncated_chunk_ids": [], "truncated_count": 0}
 
         seen_ids: set[str] = set()
         for chunk_id, _text in pairs:
@@ -621,13 +698,42 @@ class EmbeddingStore:
                 f"(model={self.model!r}, dim={self.dim})"
             )
 
-        work_items = [
-            (chunk_id, text, content_hash(self.model, self.dim, text))
-            for chunk_id, text in pairs
-            if chunk_id not in self._entries
-        ]
+        # Truncation (T-030): the WORK ITEM's text is bounded to
+        # EMBED_INPUT_MAX_CHARS — that bounded text is all `_embed_group`
+        # ever sees, so it reaches the provider truncated with no further
+        # change there. The hash is computed from the FULL (pre-slice)
+        # text, so identity/dedupe are keyed on what the chunk actually IS,
+        # never on what was sent over the wire.
+        work_items: list[tuple[str, str, str]] = []
+        truncated_chunk_ids: list[str] = []
+        for chunk_id, text in pairs:
+            if chunk_id in self._entries:
+                continue
+            if len(text) > EMBED_INPUT_MAX_CHARS:
+                truncated_chunk_ids.append(chunk_id)
+            work_items.append(
+                (chunk_id, text[:EMBED_INPUT_MAX_CHARS], content_hash(self.model, self.dim, text))
+            )
+
+        summary: dict[str, list[str] | int] = {
+            "truncated_chunk_ids": truncated_chunk_ids,
+            "truncated_count": len(truncated_chunk_ids),
+        }
+        if truncated_chunk_ids:
+            shown = truncated_chunk_ids[:10]
+            omitted = len(truncated_chunk_ids) - len(shown)
+            suffix = f", +{omitted} more" if omitted else ""
+            _logger.warning(
+                "embed_corpus truncated %d chunk(s) to EMBED_INPUT_MAX_CHARS=%d chars "
+                "for the provider (content_hash stays over the full text): %s%s",
+                len(truncated_chunk_ids),
+                EMBED_INPUT_MAX_CHARS,
+                ", ".join(shown),
+                suffix,
+            )
+
         if not work_items:
-            return
+            return summary
 
         checkpoint_path = Path(checkpoint_dir) if checkpoint_dir is not None else None
         group_size = checkpoint_every if checkpoint_path is not None else len(work_items)
@@ -637,16 +743,30 @@ class EmbeddingStore:
         if group_size <= 0:
             group_size = len(work_items) or 1
 
-        for start in range(0, len(work_items), group_size):
+        for batch_index, start in enumerate(range(0, len(work_items), group_size)):
             group = work_items[start : start + group_size]
-            self._embed_group(group, provider)
+            try:
+                self._embed_group(group, provider)
+            except EmbeddingRequestError as exc:
+                raise EmbeddingRequestError(
+                    f"embed_corpus checkpoint batch {batch_index} failed (first chunk_id "
+                    f"{group[0][0]!r} of {len(group)} in this batch): {exc}"
+                ) from exc
             if checkpoint_path is not None:
                 self.save(checkpoint_path)
+
+        return summary
 
     def _embed_group(self, group: list[tuple[str, str, str]], provider: EmbeddingProvider) -> None:
         """Resolve one group of work items: dedupe novel hashes at the
         API-call level, embed only what's genuinely new, then commit one
         row per chunk in the group's original order.
+
+        `group` items are `(chunk_id, provider_text, content_hash)` — the
+        caller (`embed_corpus`, T-030) already bounds `provider_text` to
+        `EMBED_INPUT_MAX_CHARS`, while `content_hash` was computed from the
+        chunk's FULL, untruncated text, so this method needs no truncation
+        logic of its own: it just sends whatever text it was handed.
 
         Nothing on the store is mutated until every vector in the group is
         known and valid — a provider failure or a non-finite vector (M-6)
