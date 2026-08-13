@@ -77,10 +77,12 @@ Anthropic model catalog at implementation time, not from memory):
 classifies as `anthropic` under the orchestrator's canonical family map
 (`claude*`), which T-026's fail-closed `classify_family` requires — an id it
 cannot classify is "unknown" and silently disables faithfulness scoring at eval
-time. Operators may override with `ONRECORD_GENERATOR_MODEL`; the override is
-passed through VERBATIM (a Bedrock/gateway-shaped `us.anthropic.claude-...` id
-is `anthropic` under the same map and is a legitimate override — rewriting it
-would hand T-026 an id the operator never configured).
+time. Operators may override with `ONRECORD_GENERATOR_MODEL`; the override's id
+is passed through VERBATIM (a Bedrock/gateway-shaped `us.anthropic.claude-...`
+id is `anthropic` under the same map and is a legitimate override — rewriting it
+would hand T-026 an id the operator never configured), while surrounding
+whitespace is trimmed as the noise it is (code-review I-1 — a padded
+` claude-opus-5` classifies as `unknown` and fails T-026's gate closed).
 
 Request shape: the raw Messages API over httpx. Raw HTTP rather than the
 `anthropic` SDK because the SDK is not a project dependency and this ticket's
@@ -597,13 +599,20 @@ def resolved_generator_model() -> str:
     T-026's cross-family gate consumes this value as an explicit parameter
     wired at eval time; there is no second env lookup anywhere in the epic.
     Both sources are read on EVERY call (never cached at import), because T-026
-    may set or change the override in-process. An operator's override is passed
-    through verbatim -- no normalisation, no stripping of a region prefix.
+    may set or change the override in-process.
+
+    The override's ID is passed through verbatim -- no normalisation, and never
+    any stripping of a region prefix, so a Bedrock/gateway-shaped
+    `us.anthropic.claude-...` reaches T-026 exactly as the operator configured
+    it. SURROUNDING WHITESPACE is a different thing and is trimmed (code-review
+    I-1): a dashboard- or `.env`-sourced value routinely carries a stray leading
+    space or tab, and ` claude-opus-5` classifies as `unknown` under the
+    canonical family map -- T-026's gate then fails CLOSED and faithfulness
+    scoring is silently disabled at eval time, the exact failure this function
+    exists to prevent. Trimming noise around an id is not rewriting the id.
     """
-    override = os.environ.get(_MODEL_ENV_VAR)
-    if override and override.strip():
-        return override
-    return DEFAULT_GENERATOR_MODEL
+    override = (os.environ.get(_MODEL_ENV_VAR) or "").strip()
+    return override or DEFAULT_GENERATOR_MODEL
 
 
 @contextlib.contextmanager
