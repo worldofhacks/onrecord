@@ -117,21 +117,65 @@ convention.
 - `/api/answer` becomes a DATA endpoint at the unlock: a missing index is a
   503 (transitional re-pin #2 in `test_api.py`), no longer an
   index-independent stub.
+- **Two 422 body shapes now coexist on this endpoint, deliberately** (test
+  review M-2). Pydantic request validation (`question` missing, unknown
+  `mode`, `k < 1`) keeps FastAPI's own `{"detail": [...]}` envelope — T-013
+  froze "only the status code is pinned" for that mechanism, and nothing
+  here narrows it. The typed `MinConfidenceWithoutScores` 422 (decision 3)
+  uses the flat `{"error": <str>}` shape instead, matching the 503 rungs it
+  is a sibling of: it is a SERVER-side wiring fault reported to the caller,
+  not a complaint about the request body. T-028's `askSend` handles both
+  (it falls to its error branch on any non-`ok` response and renders
+  `body.error` when that is a string), so the asymmetry is safe — but it is
+  a real asymmetry and is recorded here rather than discovered later.
 
 **The degradation ladder** — every rung is a flat `{"error": <str>}`
 `JSONResponse` with status 503, exact key set `{"error"}`, NEVER an
-`HTTPException`-wrapped `{"detail": ...}` and never an uncaught 500. Rungs:
-missing index; missing store; `CorruptStore` at startup (behaves as
-store-missing — a corrupt store must degrade, never crash-loop ASGI
-startup); `ProviderNotConfigured` (names `OPENAI_API_KEY`);
-`StoreIdentityMismatch` (T-021, store identity vs. the resolved provider);
-`MissingEmbeddings` (T-022, partially-embedded store); `StoreMismatch`
-(T-022, stale store text); `GeneratorNotConfigured` (T-023, names
-`ANTHROPIC_API_KEY`). The last three arrived as an AMENDMENT (T-022 test
-review I-2) precisely because they were on track to escape as uncaught
-500s. The rungs are pinned individually AND pairwise-distinguishably: an
-operator must be able to tell WHICH condition fired from the message alone,
-which a single shared "embeddings unavailable" string would not satisfy.
+`HTTPException`-wrapped `{"detail": ...}` and never an uncaught 500. The
+last three of the embedding-side rungs arrived as an AMENDMENT (T-022 test
+review I-2) precisely because they were on track to escape as uncaught 500s.
+
+**Every rung is pinned through BOTH endpoints** — `GET /api/search` and
+`POST /api/answer`, in both `mode=semantic` and `mode=hybrid` (see
+`_ladder_request` and `LADDER_ENDPOINTS`). The amendment that created the
+integrity rungs is written about the ANSWER wiring, and T-028's Ask view
+calls `POST /api/answer` with `mode: "hybrid"`; a suite that pinned only
+the search handler would be satisfied by a search-handler-only try/except
+that still 500s on the endpoint a user actually hits.
+
+**The message vocabulary is CONTRACTED, not merely varied** — the
+amendment's wording is "flat 503s **naming the condition**", and this
+string is the only diagnosis a human ever sees (T-028 renders it verbatim
+in the Ask view's "NOT AVAILABLE YET" card and the search pane's "Not
+provisioned yet." card). `LADDER_TOKENS` below freezes one
+condition-naming token per rung; `_assert_rung` requires each message to
+contain ITS token and NONE of the others, so the vocabulary partitions the
+ladder. Mere pairwise distinctness would be satisfied by "embeddings
+unavailable (E3)" / "(E4)", which names nothing.
+
+    rung                | condition                              | frozen token
+    --------------------+----------------------------------------+--------------------------
+    index               | index missing/unloadable               | `index not loaded`
+                        |   (the existing frozen wording)        |
+    store               | store missing, OR `CorruptStore` at    | `no embedding store`
+                        |   startup — a corrupt store degrades,  |
+                        |   it never crash-loops ASGI startup    |
+    provider            | T-021 `ProviderNotConfigured`          | `OPENAI_API_KEY`
+    identity            | T-021 `StoreIdentityMismatch` — store  | `identity mismatch`
+                        |   identity vs. the resolved provider   |
+    missing_embeddings  | T-022 `MissingEmbeddings` —            | `not embedded`
+                        |   partially-embedded store             |
+    stale               | T-022 `StoreMismatch` — stale text     | `stale`
+    generator           | T-023 `GeneratorNotConfigured`         | `ANTHROPIC_API_KEY`
+    min_confidence      | unparseable `ONRECORD_ANSWER_MIN_CONF` | `ONRECORD_ANSWER_MIN_CONF`
+                        |   (see design decision 2)              |
+
+Note "embeddings" is deliberately NOT a token: the store-missing rung
+satisfies it too, so it distinguishes nothing. The rung ORDER is left
+unfrozen where two conditions hold at once (no store AND no key), because
+with `ONRECORD_EMBED_STORE` unset the default store location cannot be
+computed without a provider; what is pinned there is that exactly ONE
+condition is named.
 
 **The keyless-lexical guarantee** (AC-5) — `mode=lexical` search AND
 `mode=lexical` answer work with NO embedding store on disk and EVERY key
@@ -140,8 +184,11 @@ deterministic test in this repo depend on it. It is pinned with a TRIPWIRE
 provider seam installed AFTER ASGI startup (so the test constrains the
 REQUEST path, not the startup path — an implementation is free to resolve
 the provider at startup while computing the default store location, as long
-as it degrades on failure): any `embeddings.get_provider()` call during a
-lexical request fails the test.
+as it degrades on failure): `TripwireProvider` raises from its
+CONSTRUCTOR, so any `embeddings.get_provider()` call during a lexical
+request fails the test — resolving a provider is the violation, not just
+embedding with one (test review M-1: an `embed`-only tripwire would not
+actually pin the stated property).
 
 ENV VARS THIS SURFACE CONSUMES
 -------------------------------
@@ -291,10 +338,28 @@ TEXTS = {
     D5: "substation capacity capacity questions dominated the county meeting",
 }
 
-# The text a STALE store row was embedded from -- differs from the doc text
-# above, so T-022's result-scoped content_hash verification must fire
-# `StoreMismatch` for D5 (module docstring: the stale-store ladder rung).
-STALE_TEXT = "substation capacity questions dominated an EARLIER draft of the minutes"
+# The text the STALE store row was embedded from. Two properties matter, and
+# both are load-bearing:
+#
+# 1. It differs from `TEXTS[STALE_DOC]`, so the recorded `content_hash` no
+#    longer matches the chunk's current text and T-022's verification fires
+#    `StoreMismatch`.
+# 2. It is scripted to the SAME vector as `TEXTS[STALE_DOC]` (below), so the
+#    staling does not move the doc in any ranking. That matters because
+#    T-022's hash verification is RESULT-SCOPED by orchestrator ruling
+#    ("no wrong receipt ever RETURNED is the guarantee; per-query
+#    corpus-wide hashing buys nothing"): a stale row that never enters the
+#    returned top-k is DELIBERATELY harmless, so the rung is only reachable
+#    on a chunk that is actually served. `STALE_DOC` is therefore D1 --
+#    rank 1 in BOTH the semantic and the hybrid ranking, hence inside the
+#    returned set for every endpoint/mode/k combination the ladder tests
+#    drive (including `POST /api/answer` at k=3, where a stale D5 at rank 5
+#    correctly does NOT fire, as this fixture originally proved the hard
+#    way).
+STALE_DOC = D1
+STALE_TEXT = (
+    "substation capacity was approved by the board last night, per an EARLIER draft of the minutes"
+)
 
 VECTORS = {
     QUERY: (1.0, 0.0, 0.0, 0.0),
@@ -309,7 +374,9 @@ VECTORS = {
     TEXTS[D3]: (3.0, 4.0, 0.0, 0.0),
     TEXTS[D4]: (0.0, 1.0, 0.0, 0.0),
     TEXTS[D5]: (-4.0, 3.0, 0.0, 0.0),
-    STALE_TEXT: (-4.0, 3.0, 0.0, 0.0),
+    # Same vector as TEXTS[STALE_DOC] -- staling must not perturb any
+    # ranking (see STALE_TEXT's note above).
+    STALE_TEXT: (1.0, 0.0, 0.0, 0.0),
 }
 
 # (source_type, venue_type, jurisdiction, ticker, date)
@@ -401,6 +468,38 @@ GENERATED = (
     "Loudoun approved the buildout. [2]"
 )
 
+# The FROZEN degradation vocabulary: one condition-naming token per rung,
+# case-insensitive containment. Each rung's message must contain ITS token
+# and NONE of the others -- see `_assert_rung`, and the module docstring's
+# ladder section for why the strings themselves are a contract rather than
+# an implementation detail (T-028 renders them verbatim as the only
+# diagnosis a human ever sees).
+#
+# `index not loaded` is the existing frozen `_missing_index_response()`
+# wording, unchanged; the other six are contracted here. The words are
+# deliberately ordinary -- an operator reading "stale" or "not embedded"
+# knows what to re-run -- and deliberately non-overlapping, so no message
+# can name two conditions at once.
+LADDER_TOKENS = {
+    "index": "index not loaded",
+    "store": "no embedding store",
+    "provider": "OPENAI_API_KEY",
+    "identity": "identity mismatch",
+    "missing_embeddings": "not embedded",
+    "stale": "stale",
+    "generator": "ANTHROPIC_API_KEY",
+    "min_confidence": "ONRECORD_ANSWER_MIN_CONF",
+}
+
+# Every degradation rung below is pinned through BOTH endpoints and both
+# embedding-backed modes (test review I-1).
+LADDER_ENDPOINTS = [
+    ("search", "semantic"),
+    ("search", "hybrid"),
+    ("answer", "semantic"),
+    ("answer", "hybrid"),
+]
+
 # Env vars that must never reach a test from a developer's shell. Everything
 # a test needs is set explicitly by `_client` (delenv hygiene, house rule).
 _ISOLATED_ENV = (
@@ -472,12 +571,23 @@ class ScriptedProvider:
 
 
 class TripwireProvider:
-    """A provider seam that must never be reached (keyless-lexical
-    guarantee). Structurally a provider so nothing fails for the wrong
-    reason before the tripwire itself fires."""
+    """A provider seam that must never be REACHED at all on a lexical
+    request -- not merely never asked to embed.
+
+    Construction itself is the tripwire (test review M-1: an `embed`-only
+    tripwire would let a lexical request RESOLVE a provider and still pass,
+    which is not the property the keyless guarantee is about). `embed` stays
+    armed too, for the same reason a belt keeps its braces.
+    """
 
     model = "tripwire-must-not-be-resolved"
     dim = 4
+
+    def __init__(self):
+        raise AssertionError(
+            "the lexical path must never resolve an embedding provider -- "
+            "embeddings.get_provider() was called during a mode=lexical request"
+        )
 
     def embed(self, texts: list[str]) -> np.ndarray:  # pragma: no cover - tripwire
         raise AssertionError("the lexical path must never embed anything")
@@ -633,6 +743,51 @@ def _assert_flat_503(resp, *, contains: str | None = None) -> str:
             f"the rung must name its condition; {body['error']!r} does not mention {contains!r}"
         )
     return body["error"]
+
+
+def _rung_tokens(message: str) -> set[str]:
+    """Which ladder conditions this message names (see LADDER_TOKENS)."""
+    lowered = message.lower()
+    return {rung for rung, token in LADDER_TOKENS.items() if token.lower() in lowered}
+
+
+def _assert_rung(resp, *allowed: str) -> str:
+    """Assert the flat-503 shape AND that the message names EXACTLY ONE
+    ladder condition, drawn from `allowed`.
+
+    This is the enforcement of the amendment's "naming the condition" (test
+    review I-2). Pairwise-distinct messages are strictly weaker: two rungs
+    reading "embeddings unavailable (E3)" / "(E4)" would satisfy mere
+    distinctness while telling an operator nothing, and this string is the
+    ONLY diagnosis T-028's Ask view and search pane render. "Exactly one"
+    (rather than "at least one") is what makes the vocabulary a partition:
+    a message carrying two condition tokens names neither.
+    """
+    message = _assert_flat_503(resp)
+    named = _rung_tokens(message)
+    expected = set(allowed)
+    assert named == expected or (len(named) == 1 and named <= expected), (
+        f"expected a message naming exactly one of {sorted(expected)} via LADDER_TOKENS "
+        f"{ {rung: LADDER_TOKENS[rung] for rung in sorted(expected)} }; it named "
+        f"{sorted(named) or 'nothing'} -- message: {message!r}"
+    )
+    return message
+
+
+def _ladder_request(client, kind: str, mode: str):
+    """Drive the same degradation state through either endpoint.
+
+    Both matter, and only one used to be pinned (test review I-1): the
+    amendment that created the MissingEmbeddings/StoreMismatch rungs is
+    written about the ANSWER wiring, and `POST /api/answer` with
+    `mode: "hybrid"` is what T-028's Ask view actually calls -- an
+    implementation that wraps only the `/api/search` handler in the ladder
+    would satisfy a search-only suite and still ship uncaught 500s from the
+    endpoint a user hits.
+    """
+    if kind == "search":
+        return client.get("/api/search", params={"q": QUERY, "mode": mode})
+    return client.post("/api/answer", json={"question": QUESTION, "mode": mode, "k": 3})
 
 
 def _result_doc_ids(resp) -> list[str]:
@@ -995,10 +1150,8 @@ def test_search_filter_then_truncate_holds_across_every_k_and_filter_combination
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_without_an_embedding_store_is_a_flat_503_naming_embeddings(
-    tmp_path, monkeypatch, mode
-):
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_without_an_embedding_store_both_endpoints_flat_503(tmp_path, monkeypatch, kind, mode):
     # spec(T-024:AC-3)
     api_module = _api_module()
     provider = ScriptedProvider()
@@ -1008,10 +1161,11 @@ def test_search_without_an_embedding_store_is_a_flat_503_naming_embeddings(
         index_dir=_build_index(tmp_path),
         store_dir=tmp_path / "no_such_store",
         provider=provider,
+        generator=_fake_generator(),
     ) as client:
-        resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
+        resp = _ladder_request(client, kind, mode)
 
-    message = _assert_flat_503(resp, contains="embedding")
+    message = _assert_rung(resp, "store")
     assert any(hint in message for hint in ("build", "ONRECORD_EMBED_STORE")), (
         f"the store-missing rung must tell the operator how to get one (build it, or point "
         f"ONRECORD_EMBED_STORE at it): {message!r}"
@@ -1043,11 +1197,13 @@ def test_a_corrupt_store_degrades_like_a_missing_one_and_never_crashes_startup(
     assert health.json().get("status") == "ok"
     assert lexical.status_code == 200
     assert _result_doc_ids(lexical) == LEXICAL_ORDER
-    _assert_flat_503(semantic, contains="embedding")
+    _assert_rung(semantic, "store")
 
 
-@pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_with_an_unconfigured_provider_names_the_env_var(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_with_an_unconfigured_provider_both_endpoints_name_the_env_var(
+    tmp_path, monkeypatch, kind, mode
+):
     # spec(T-024:AC-3) -- store present, provider NOT resolvable (every key
     # delenv'd, plan-review I-5). The rung must name OPENAI_API_KEY, which is
     # only possible if the provider is resolved PER REQUEST rather than
@@ -1061,15 +1217,16 @@ def test_search_with_an_unconfigured_provider_names_the_env_var(tmp_path, monkey
         index_dir=_build_index(tmp_path),
         store_dir=store_dir,
         provider=None,  # the REAL embeddings.get_provider, with no key in env
+        generator=_fake_generator(),
     ) as client:
-        resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
+        resp = _ladder_request(client, kind, mode)
 
-    _assert_flat_503(resp, contains="OPENAI_API_KEY")
+    _assert_rung(resp, "provider")
 
 
-@pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_with_a_store_identity_mismatch_is_a_flat_503_naming_both_models(
-    tmp_path, monkeypatch, mode
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_a_store_identity_mismatch_is_a_flat_503_naming_both_models(
+    tmp_path, monkeypatch, kind, mode
 ):
     # spec(T-024:AC-3) -- T-021's typed StoreIdentityMismatch rung. Cosines
     # between one model's query vector and another model's rows are
@@ -1084,10 +1241,11 @@ def test_search_with_a_store_identity_mismatch_is_a_flat_503_naming_both_models(
         index_dir=_build_index(tmp_path),
         store_dir=store_dir,
         provider=other_provider,
+        generator=_fake_generator(),
     ) as client:
-        resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
+        resp = _ladder_request(client, kind, mode)
 
-    message = _assert_flat_503(resp)
+    message = _assert_rung(resp, "identity")
     assert "scripted-embed-v1" in message and "some-other-embed-model-v9" in message, (
         f"the identity rung must name BOTH the store's model and the resolved provider's, "
         f"so an operator can see which side to fix: {message!r}"
@@ -1095,8 +1253,10 @@ def test_search_with_a_store_identity_mismatch_is_a_flat_503_naming_both_models(
     assert other_provider.calls == [], "a known-mismatched store is never queried (no spend)"
 
 
-@pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_over_a_partially_embedded_store_is_a_flat_503(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_a_partially_embedded_store_is_a_flat_503_on_both_endpoints(
+    tmp_path, monkeypatch, kind, mode
+):
     # spec(T-024:AC-3) -- T-022's MissingEmbeddings (AMENDMENT per the T-022
     # test review's I-2: this MUST be a rung, never an uncaught 500). The
     # store below is missing exactly one chunk's row.
@@ -1113,21 +1273,30 @@ def test_search_over_a_partially_embedded_store_is_a_flat_503(tmp_path, monkeypa
         index_dir=_build_index(tmp_path),
         store_dir=partial,
         provider=provider,
+        generator=_fake_generator(),
     ) as client:
-        resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
+        resp = _ladder_request(client, kind, mode)
 
-    _assert_flat_503(resp, contains="embed")
+    # NOT the shared noun "embed"/"embeddings" -- the store-MISSING rung
+    # satisfies that too, so it names nothing (test review I-2).
+    _assert_rung(resp, "missing_embeddings")
 
 
-@pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_over_a_stale_store_is_a_flat_503(tmp_path, monkeypatch, mode):
-    # spec(T-024:AC-3) -- T-022's StoreMismatch (same AMENDMENT). The store
-    # row for D5 was embedded from text that no longer matches the corpus
-    # doc, so T-022's result-scoped content_hash verification fires.
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_a_stale_store_is_a_flat_503_on_both_endpoints(tmp_path, monkeypatch, kind, mode):
+    # spec(T-024:AC-3) -- T-022's StoreMismatch (same AMENDMENT). STALE_DOC's
+    # store row was embedded from text that no longer matches the corpus doc,
+    # so T-022's result-scoped content_hash verification fires -- on both
+    # endpoints, because STALE_DOC ranks 1st in both embedding-backed modes
+    # and is therefore inside the RETURNED set even at the answer path's
+    # k=3 (see STALE_TEXT's note: result-scoped verification means a stale
+    # row that never surfaces is deliberately harmless, and this rung must
+    # NOT be pinned in a way that demands corpus-wide per-query hashing --
+    # the orchestrator ruling T-022 was fixed to).
     api_module = _api_module()
     provider = ScriptedProvider()
     pairs = [
-        (chunk.chunk_id, STALE_TEXT if chunk.chunk_id == D5 else chunk.text)
+        (chunk.chunk_id, STALE_TEXT if chunk.chunk_id == STALE_DOC else chunk.text)
         for chunk in _fixture_chunks()
     ]
     with _client(
@@ -1136,10 +1305,14 @@ def test_search_over_a_stale_store_is_a_flat_503(tmp_path, monkeypatch, mode):
         index_dir=_build_index(tmp_path),
         store_dir=_save_store(tmp_path / "stale_store", pairs, provider),
         provider=provider,
+        generator=_fake_generator(),
     ) as client:
-        resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
+        resp = _ladder_request(client, kind, mode)
 
-    _assert_flat_503(resp)
+    # The stale rung was entirely uncontracted at first freeze (test review
+    # I-2): a bare flat-503 assertion cannot tell an operator to re-embed
+    # the changed chunks rather than to go looking for a missing store.
+    _assert_rung(resp, "stale")
 
 
 @pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
@@ -1157,17 +1330,55 @@ def test_search_with_a_missing_index_is_the_unchanged_index_rung(tmp_path, monke
     ) as client:
         resp = client.get("/api/search", params={"q": QUERY, "mode": mode})
 
-    _assert_flat_503(resp, contains="index")
+    _assert_rung(resp, "index")
 
 
-def test_answer_without_a_configured_generator_names_the_env_var(tmp_path, monkeypatch):
-    # spec(T-024:AC-3) -- T-023's GeneratorNotConfigured rung. The real
+@pytest.mark.parametrize("mode", ["lexical", "semantic", "hybrid"])
+def test_answer_without_a_configured_generator_names_the_env_var(tmp_path, monkeypatch, mode):
+    # spec(T-024:AC-3) -- T-023's GeneratorNotConfigured rung, on every mode
+    # (the embedding-backed modes must reach it too once retrieval is
+    # healthy -- an answer is not an answer without a generator). The real
     # `default_generator` is left in place with ANTHROPIC_API_KEY delenv'd.
     api_module = _api_module()
-    with _client(api_module, monkeypatch, index_dir=_build_index(tmp_path)) as client:
-        resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical", "k": 3})
+    provider = ScriptedProvider()
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        store_dir=_build_store(tmp_path, provider),
+        provider=provider,
+    ) as client:
+        resp = client.post("/api/answer", json={"question": QUESTION, "mode": mode, "k": 3})
 
-    _assert_flat_503(resp, contains="ANTHROPIC_API_KEY")
+    _assert_rung(resp, "generator")
+
+
+@pytest.mark.parametrize(("kind", "mode"), LADDER_ENDPOINTS)
+def test_no_store_and_no_provider_still_names_exactly_one_condition(
+    tmp_path, monkeypatch, kind, mode
+):
+    # spec(T-024:AC-3) -- the doubly-degraded state (no store on disk AND no
+    # key), which is precisely what test_api.py's re-pin #1 exercises. The
+    # ORDER of the two checks is deliberately NOT frozen: with
+    # ONRECORD_EMBED_STORE unset the default store location cannot even be
+    # computed without a provider, so a provider-first implementation is
+    # legitimate -- and so is a store-first one when the var IS set. What is
+    # frozen is that the operator gets exactly ONE named condition and not a
+    # generic "unavailable" (test review M-3 records that re-pin #1's own
+    # comment names the store rung where the provider rung is the likelier
+    # one; that file is out of scope for this fix round, and its assertions
+    # are rung-agnostic, so this test is where the state is contracted).
+    api_module = _api_module()
+    monkeypatch.chdir(tmp_path)
+    with _client(
+        api_module,
+        monkeypatch,
+        index_dir=_build_index(tmp_path),
+        generator=_fake_generator(),
+    ) as client:
+        resp = _ladder_request(client, kind, mode)
+
+    _assert_rung(resp, "store", "provider")
 
 
 def test_every_degradation_rung_says_something_different(tmp_path):
@@ -1193,49 +1404,70 @@ def test_every_degradation_rung_says_something_different(tmp_path):
     stale_store = _save_store(
         tmp_path / "stale_for_ladder",
         [
-            (chunk.chunk_id, STALE_TEXT if chunk.chunk_id == D5 else chunk.text)
+            (chunk.chunk_id, STALE_TEXT if chunk.chunk_id == STALE_DOC else chunk.text)
             for chunk in _fixture_chunks()
         ],
         provider,
     )
 
-    # (label, index_dir, store_dir, provider, request)
-    rungs = [
-        ("index", tmp_path / "gone", healthy_store, provider, "search"),
-        ("store", index_dir, tmp_path / "gone_store", provider, "search"),
-        ("provider", index_dir, healthy_store, None, "search"),
+    # (rung, index_dir, store_dir, provider) -- every embedding-side rung is
+    # collected through BOTH endpoints (test review I-1); the index rung
+    # likewise; the generator rung is answer-only by nature.
+    states = [
+        ("index", tmp_path / "gone", healthy_store, provider),
+        ("store", index_dir, tmp_path / "gone_store", provider),
+        ("provider", index_dir, healthy_store, None),
         (
             "identity",
             index_dir,
             healthy_store,
             ScriptedProvider(model="some-other-embed-model-v9"),
-            "search",
         ),
-        ("missing_embeddings", index_dir, partial_store, provider, "search"),
-        ("stale_store", index_dir, stale_store, provider, "search"),
-        ("generator", index_dir, healthy_store, provider, "answer"),
+        ("missing_embeddings", index_dir, partial_store, provider),
+        ("stale", index_dir, stale_store, provider),
     ]
 
-    messages: dict[str, str] = {}
-    for label, index_arg, store_arg, provider_arg, kind in rungs:
-        with pytest.MonkeyPatch.context() as mp:
-            with _client(
-                api_module,
-                mp,
-                index_dir=index_arg,
-                store_dir=store_arg,
-                provider=provider_arg,
-            ) as client:
-                resp = (
-                    client.get("/api/search", params={"q": QUERY, "mode": "semantic"})
-                    if kind == "search"
-                    else client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
-                )
-            messages[label] = _assert_flat_503(resp)
+    messages: dict[tuple[str, str], str] = {}
+    for rung, index_arg, store_arg, provider_arg in states:
+        for kind in ("search", "answer"):
+            with pytest.MonkeyPatch.context() as mp:
+                with _client(
+                    api_module,
+                    mp,
+                    index_dir=index_arg,
+                    store_dir=store_arg,
+                    provider=provider_arg,
+                    generator=_fake_generator(),
+                ) as client:
+                    resp = _ladder_request(client, kind, "hybrid")
+                messages[(rung, kind)] = _assert_rung(resp, rung)
 
-    assert len(set(messages.values())) == len(messages), (
-        f"every rung must be distinguishable from the message alone: {messages}"
+    with pytest.MonkeyPatch.context() as mp:
+        with _client(
+            api_module, mp, index_dir=index_dir, store_dir=healthy_store, provider=provider
+        ) as client:
+            resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical"})
+        messages[("generator", "answer")] = _assert_rung(resp, "generator")
+
+    # 1. every rung's message is distinct from every OTHER rung's (the
+    #    original pin), and
+    # 2. `_assert_rung` above already proved each names its own condition
+    #    token and NONE of the other six -- so the vocabulary partitions the
+    #    ladder rather than merely varying its wording (test review I-2).
+    by_rung: dict[str, set[str]] = {}
+    for (rung, _kind), message in messages.items():
+        by_rung.setdefault(rung, set()).add(message)
+    representative = {rung: sorted(msgs)[0] for rung, msgs in by_rung.items()}
+    assert len(set(representative.values())) == len(representative), (
+        f"every rung must be distinguishable from the message alone: {representative}"
     )
+
+    # 3. and the SAME condition reports the SAME token through both
+    #    endpoints -- an operator must not have to learn two vocabularies
+    #    depending on which surface tripped.
+    for rung, msgs in by_rung.items():
+        for message in msgs:
+            assert _rung_tokens(message) == {rung}, (rung, message)
 
 
 # --------------------------------------------------------------------------
@@ -1515,7 +1747,7 @@ def test_keyless_semantic_answer_degrades_to_a_flat_503(tmp_path, monkeypatch, m
     ) as client:
         resp = client.post("/api/answer", json={"question": QUESTION, "mode": mode, "k": 3})
 
-    _assert_flat_503(resp)
+    _assert_rung(resp, "store", "provider")
 
 
 # --------------------------------------------------------------------------
@@ -1585,7 +1817,7 @@ def test_answer_unparseable_min_confidence_is_a_flat_503_naming_the_env_var(tmp_
     ) as client:
         resp = client.post("/api/answer", json={"question": QUESTION, "mode": "lexical", "k": 3})
 
-    _assert_flat_503(resp, contains="ONRECORD_ANSWER_MIN_CONF")
+    _assert_rung(resp, "min_confidence")
 
 
 def test_min_confidence_without_scores_is_a_typed_422(tmp_path, monkeypatch):
@@ -1716,7 +1948,7 @@ def test_embed_store_env_var_wins_over_the_default_location(tmp_path, monkeypatc
     ) as client:
         resp = client.get("/api/search", params={"q": QUERY, "mode": "semantic"})
 
-    _assert_flat_503(resp, contains="embedding")
+    _assert_rung(resp, "store")
 
 
 def test_default_embed_store_location_is_artifacts_embeddings_resolved_model(tmp_path, monkeypatch):
@@ -1875,3 +2107,14 @@ def test_fixture_orders_are_three_distinct_rankings():
     assert D4 not in LEXICAL_ORDER, "D4 is the deliberate lexical miss"
     assert SEMANTIC_SCORES[D5] < 0, "D5 is the deliberate negative-cosine tail"
     assert json.dumps(SEMANTIC_SCORES)  # every pinned score is JSON-representable
+
+    # The shipped chunking is IDENTITY for every doc (T-020's locked
+    # invariant `len(doc_ids) == 1 <=> chunk_id == doc_ids[0]`). Asserted
+    # here rather than left as prose because two claims elsewhere rest on
+    # it: the `chunk.doc_ids[0]` projection is unobservable-by-value through
+    # the shipped path (the disclosed equivalent mutant M03), and
+    # `hybrid_search`'s `NonIdentityChunking` guard is consequently
+    # unreachable from this surface (test review M-4) -- if a future change
+    # made either false, it would show up HERE first.
+    for chunk in _fixture_chunks():
+        assert len(chunk.doc_ids) == 1 and chunk.chunk_id == chunk.doc_ids[0], chunk.chunk_id
