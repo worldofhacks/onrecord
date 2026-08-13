@@ -57,6 +57,30 @@ halves statically, over the module AST rather than its text, so prose in a
 docstring can never trip it).
 
 ===========================================================================
+ORCHESTRATOR RULING — hash verification is RESULT-SCOPED (locked)
+===========================================================================
+Test review C-1 established that `tickets/T-022.md:19`'s "for every resolved
+row" admits two implementations that both passed the first freeze while
+behaving oppositely on this suite's own fixture: **corpus-wide** (hash every
+chunk before ranking) and **result-scoped** (hash only the rows that end up
+in the returned top-k). The orchestrator ruled **result-scoped**, and this
+suite freezes it:
+
+* the guarantee is that **no stale row is ever RETURNED**;
+* rows that do not surface in the top-k are **not** verified on that query;
+* global store integrity remains T-021's job — `EmbeddingStore.load`
+  validates row counts, dtype/width, and row-index defects at load time.
+
+The measured stakes behind the ruling: corpus-wide hashing costs ~211 ms per
+query at 265K chunks x ~526 chars, on a request path T-021 tuned to
+50-150 ms. Result-scoped costs ten hashes.
+
+Consequence worth knowing: `hybrid_search` calls
+`semantic_search(..., k=len(chunks))`, so under hybrid EVERY chunk is a
+result and therefore every chunk IS verified
+(`test_hybrid_search_verifies_every_chunk_because_all_of_them_are_results`).
+
+===========================================================================
 FROZEN CONTRACT — onrecord/rag/retrieve.py
 ===========================================================================
 
@@ -67,11 +91,23 @@ FROZEN CONTRACT — onrecord/rag/retrieve.py
   * Scores via `cosine_top_k` over the store, maps rows to chunks
     **CHUNK_ID-KEYED, never positionally** (`store.rows_for(chunk_ids)` ->
     row->chunk map).
-  * VERIFIES every resolved row's recorded `content_hash` against the
-    chunk's text; a disagreement (stale text) raises typed `StoreMismatch`.
+  * VERIFIES the recorded `content_hash` of every row it is about to RETURN
+    against that chunk's text; a disagreement (stale text) raises typed
+    `StoreMismatch`. **Verification is RESULT-SCOPED — orchestrator ruling,
+    locked** (see "ORCHESTRATOR RULING" below): the guarantee is that no
+    stale row is ever *served*, not that the whole chunk set is audited on
+    every query. Both sides are pinned at small `k`
+    (`test_semantic_search_raises_store_mismatch_when_a_stale_row_is_inside_the_cut`
+    / `..._returns_cleanly_when_the_stale_row_is_below_the_cut`).
   * A chunk with no store row raises typed `MissingEmbeddings` naming the
-    COUNT — never a silent skip, at any `k` (a wrong receipt is the
-    product's worst failure).
+    COUNT — this one IS corpus-wide, and fires at any `k` including `k=1`
+    (a wrong receipt is the product's worst failure). The asymmetry with
+    `StoreMismatch` is deliberate and is the ruling's whole point: coverage
+    is one dict lookup per chunk, hashing is a sha256 over every chunk's
+    text, and only the latter is unaffordable per query at 265K chunks.
+  * The three error types are DISTINCT classes, none a subclass of another,
+    and none a subclass of T-021's `StoreIdentityMismatch`/`CorruptStore` —
+    T-024's degradation ladder branches on them by name.
   * Store rows not covered by `chunks` (prior embed runs, other corpus
     versions) are never surfaced AND never consume a result slot — see
     "Test Agent decisions" 1 below.
@@ -137,6 +173,26 @@ TEST AGENT DECISIONS (NOT in the ticket — inventions this suite freezes)
    exists to prevent. Frozen here as: `semantic_search(..., k=n)` returns
    `min(n, len(chunks))` results whenever every chunk is covered, however
    many uncovered rows outrank them.
+
+   **This pins the OBSERVABLE, never the strategy** (test review I-3). A
+   full-depth `cosine_top_k(store, q, <all rows>)` satisfies it, and so does
+   a **bounded grow-k retry** — score at `k`, redo at `2k`, `4k`, … while
+   fewer than `k` covered rows are in hand — and so does anything else that
+   produces the pinned results. Nothing in this file forces full depth, and
+   the implementer should know that full depth is the EXPENSIVE choice:
+   *(measured, 265K rows)* the selection step alone is 2.7 ms at `k=10`
+   versus 64.9 ms at `k=265000`, which reinstates the full-candidate sort
+   T-021's re-review I-C removed after measuring it at 189 ms of a 220 ms
+   query. The suite's own satisfiability reference deliberately implements
+   the grow-k retry, not full depth, so "the tests permit it" is a measured
+   fact rather than a claim.
+
+   The retry must be a genuine loop, not a single doubling:
+   `test_semantic_search_fills_k_past_a_deep_field_of_uncovered_rows` puts 24
+   uncovered rows above every chunk, so a fixed one- or two-step widening
+   still returns short. That is the one cheap pin available here — there is
+   no observable that separates a correct grow-k retry from a correct
+   full-depth scan, so *which* strategy is used stays deliberately unpinned.
 2. **`StoreMismatch`'s message names the chunk_id and BOTH content hashes.**
    The ticket says "naming both ids"; under the per-chunk ruling the entry's
    key IS the chunk_id, so the two things being compared are the recorded
@@ -145,8 +201,13 @@ TEST AGENT DECISIONS (NOT in the ticket — inventions this suite freezes)
 3. **`report_modes` resolves `corpus_version` from `ONRECORD_INDEX`.** The
    ticket freezes the signature, which takes an `index` OBJECT and no index
    path, so `read_manifest` has exactly one available source — the same env
-   var `eval/run.py::_corpus_version` already reads. Same `"unversioned"`
-   fallback.
+   var `eval/run.py::_corpus_version` already reads (as do `onrecord/api.py`
+   and `eval/run.py` today, for the same meaning). Same `"unversioned"`
+   fallback. **`corpus_version` is therefore PROVENANCE FROM THE
+   ENVIRONMENT, not a property of the `index` object that was scored** — the
+   two can disagree, and nothing here detects it (test review M-4). A CLI
+   `--index` flag would have to export `ONRECORD_INDEX` for the stamp to
+   track the index it loaded.
 4. **`semantic_search` does NOT guard identity chunking.** The ticket
    attaches that guard to `hybrid_search` specifically ("hybrid_search
    therefore GUARDS"), because only FUSION needs one id space; a
@@ -154,8 +215,32 @@ TEST AGENT DECISIONS (NOT in the ticket — inventions this suite freezes)
    windowing sweep is headed. Pinned by
    `test_semantic_search_accepts_a_merged_chunk`.
 5. **Retrieval depth inside `report_modes` is NOT pinned.** The fixture
-   corpus is 4 docs, so every depth >= the corpus size produces identical
-   numbers; only the metric VALUES are frozen.
+   corpus is 4 docs and *(measured)* every depth **>= 3** reproduces the
+   frozen numbers exactly — depth 2 does not, so the freedom granted is
+   "anything from 3 up", not merely "at least the corpus size". Only the
+   metric VALUES are frozen.
+
+DELIBERATELY NOT PINNED (documented gaps, not oversights)
+---------------------------------------------------------
+* **A stale row that never reaches the top-k.** Direct consequence of the
+  result-scoped ruling, and pinned as such: at `k=2` over this fixture the
+  stale chunk sits at rank 3 and the call returns cleanly. A corpus-wide
+  audit belongs to a maintenance path (or T-021's `load`), not the request
+  path.
+* **Which depth strategy `semantic_search` uses** (full scan vs grow-k
+  retry) — no observable separates two correct implementations; see
+  decision 1.
+* `k <= 0` on any of the three functions (the ticket is silent, and
+  `report_modes` never produces it).
+* A repeated id **within one** ranking handed to `rrf_fuse` (first
+  occurrence? last? summed? — all defensible), and `rrf_fuse` at `k <= 0`.
+* `NonIdentityChunking`'s message text (the ticket asks only for the type;
+  the other two messages ARE pinned because the ticket says "naming …").
+* Whether the identity guard runs before or after the provider call.
+* `hybrid_search`'s BM25 `k1`/`b` — it is pinned to `ranked_search`'s
+  behaviour only through this fixture's resulting ORDER, and the ticket
+  mentions neither parameter.
+* `modes.main`'s argv contract — only that a callable `main` exists.
 
 FIXTURE STANDARDS
 -----------------
@@ -193,7 +278,12 @@ from hypothesis import strategies as st
 
 from onrecord.index.inverted import InvertedIndex
 from onrecord.rag.chunking import chunk_corpus
-from onrecord.rag.embeddings import EmbeddingStore, content_hash
+from onrecord.rag.embeddings import (
+    CorruptStore,
+    EmbeddingStore,
+    StoreIdentityMismatch,
+    content_hash,
+)
 from onrecord.search.ranked import ranked_search
 from onrecord.types import Doc, SearchResult
 
@@ -495,6 +585,38 @@ def _merged_fixture():
         provider,
     )
     return index, store, chunks, provider, merged_chunk
+
+
+# Deep-uncovered-field fixture: three chunks buried under 24 rows from prior
+# embed runs, every one of which outranks them. Exists to harden decision 1's
+# observable without pinning a depth strategy (test review I-3).
+DF_CHUNKS = ("yt:0Ij8OxBcnFc:seg000", "yt:dQw4w9WgXcQ:seg000", "edgar:0000320193-24-000123:item1a")
+DF_UNCOVERED = tuple(f"yt:821DuF--3dY:seg{i:03d}" for i in range(100, 124))
+
+
+def _deep_field_fixture():
+    chunk_texts = {
+        DF_CHUNKS[0]: _filler(30, "sierra"),
+        DF_CHUNKS[1]: _filler(30, "tango"),
+        DF_CHUNKS[2]: _filler(30, "uniform"),
+    }
+    uncovered = {chunk_id: _filler(14, f"prior{i:02d}") for i, chunk_id in enumerate(DF_UNCOVERED)}
+    docs = [_doc(doc_id, text) for doc_id, text in chunk_texts.items()]
+    index = InvertedIndex.build(docs)
+    chunks_by_id = _chunk_map(docs)
+    chunks = [chunks_by_id[chunk_id] for chunk_id in DF_CHUNKS]
+    vectors = {
+        chunk_texts[DF_CHUNKS[0]]: V_COS_075,
+        chunk_texts[DF_CHUNKS[1]]: V_COS_050,
+        chunk_texts[DF_CHUNKS[2]]: V_COS_025,
+        QUERY: QUERY_VEC,
+    }
+    vectors.update(dict.fromkeys(uncovered.values(), V_COS_100))
+    provider = ScriptedProvider(vectors)
+    # Uncovered rows are written FIRST, so they occupy rows 0..23 and win
+    # every tie as well as every score comparison.
+    store = _store_from(tuple(uncovered.items()) + tuple(chunk_texts.items()), provider)
+    return index, store, chunks, provider
 
 
 # Full-depth fixture: 12 lexical candidates, only 2 of them chunks. The
@@ -1003,6 +1125,25 @@ def test_semantic_search_uncovered_rows_do_not_consume_result_slots():
     ]
 
 
+def test_semantic_search_fills_k_past_a_deep_field_of_uncovered_rows():
+    # spec(T-022:AC-2) — decision 1's observable, hardened (test review I-3).
+    # 24 rows from prior embed runs all outscore every chunk, so a widening
+    # strategy that gives up after one or two doublings (k=3 -> 6 -> 12)
+    # still returns ZERO covered results. Only a genuine loop — or a
+    # full-depth scan — fills k. This pins the RESULT, so both designs pass;
+    # nothing here forces full depth.
+    index, store, chunks, provider = _deep_field_fixture()
+    del index
+
+    results = _retrieve_attr("semantic_search")(store, chunks, QUERY, provider, k=3)
+
+    assert [(r.doc_id, r.score) for r in results] == [
+        (DF_CHUNKS[0], 0.75),
+        (DF_CHUNKS[1], 0.5),
+        (DF_CHUNKS[2], 0.25),
+    ]
+
+
 def test_semantic_search_doc_id_is_the_chunk_id():
     # spec(T-022:AC-2)
     _index, store, chunks, provider = _fixture()
@@ -1083,30 +1224,72 @@ def test_semantic_search_embeds_only_the_query():
     assert provider.calls == [[QUERY]]
 
 
-def test_semantic_search_raises_store_mismatch_when_the_chunk_text_is_stale():
-    # spec(T-022:AC-2) — embed_corpus skips chunk_ids already present, so an
-    # edited corpus leaves a stale row behind; this verification is the
-    # documented safety net for it (T-021's "deliberately not pinned").
-    _index, store, chunks, provider = _fixture()
-    stale = [
-        dataclasses.replace(chunk, text=chunk.text + " (amended)")
-        if chunk.chunk_id == C_A
+def _stale_chunks(chunks, stale_id=C_A, suffix=" (amended)"):
+    """`chunks` with one member's TEXT edited — the operational path
+    `embed_corpus` leaves behind, since it skips chunk_ids already present
+    (`onrecord/rag/embeddings.py`), so the store keeps the pre-edit vector
+    and the pre-edit content_hash."""
+    return [
+        dataclasses.replace(chunk, text=chunk.text + suffix)
+        if chunk.chunk_id == stale_id
         else chunk
         for chunk in chunks
     ]
 
+
+def test_semantic_search_raises_store_mismatch_when_the_chunk_text_is_stale():
+    # spec(T-022:AC-2) — the default k=10 covers all five chunks, so the
+    # stale one is served and must be caught.
+    _index, store, chunks, provider = _fixture()
+
     with pytest.raises(_retrieve_attr("StoreMismatch")):
-        _retrieve_attr("semantic_search")(store, stale, QUERY, provider)
+        _retrieve_attr("semantic_search")(store, _stale_chunks(chunks), QUERY, provider)
+
+
+def test_semantic_search_raises_store_mismatch_when_a_stale_row_is_inside_the_cut():
+    # spec(T-022:AC-2) — ORCHESTRATOR RULING, side one. C_A is the THIRD
+    # chunk by cosine (1.0, 0.75, 0.5), so k=3 is the tightest cut that still
+    # serves it. Pinned at the boundary rather than at the default k, so an
+    # implementation that verifies only the first hit is caught too.
+    _index, store, chunks, provider = _fixture()
+
+    with pytest.raises(_retrieve_attr("StoreMismatch")):
+        _retrieve_attr("semantic_search")(store, _stale_chunks(chunks), QUERY, provider, k=3)
+
+
+def test_semantic_search_verifies_the_single_top_hit_at_k_one():
+    # spec(T-022:AC-2) — ORCHESTRATOR RULING, the tightest case: C_C is the
+    # cosine-1.0 chunk, so at k=1 it is the ONLY row served. Result-scoped
+    # verification must still hash it. Without this, an implementation that
+    # verifies every result EXCEPT the first passes the whole suite while
+    # serving a stale rank-1 receipt — the highest-stakes row there is.
+    _index, store, chunks, provider = _fixture()
+
+    with pytest.raises(_retrieve_attr("StoreMismatch")):
+        _retrieve_attr("semantic_search")(
+            store, _stale_chunks(chunks, stale_id=C_C), QUERY, provider, k=1
+        )
+
+
+def test_semantic_search_returns_cleanly_when_the_stale_row_is_below_the_cut():
+    # spec(T-022:AC-2) — ORCHESTRATOR RULING, side two, and the reason this
+    # ruling is a RULING: at k=2 the stale C_A never reaches the results, so
+    # it is never hashed and the call succeeds. Verification is
+    # RESULT-SCOPED — no *served* receipt is ever wrong, and the whole chunk
+    # set is not audited per query (T-021's load-time checks own that). A
+    # corpus-wide implementation raises here and is wrong under the ruling.
+    _index, store, chunks, provider = _fixture()
+
+    results = _retrieve_attr("semantic_search")(store, _stale_chunks(chunks), QUERY, provider, k=2)
+
+    assert [(r.doc_id, r.score) for r in results] == [(C_C, 1.0), (C_E, 0.75)]
 
 
 def test_store_mismatch_names_the_chunk_and_both_content_hashes():
     # spec(T-022:AC-2) — Test Agent decision 2.
     _index, store, chunks, provider = _fixture()
     amended = TEXT_A + " (amended)"
-    stale = [
-        dataclasses.replace(chunk, text=amended) if chunk.chunk_id == C_A else chunk
-        for chunk in chunks
-    ]
+    stale = _stale_chunks(chunks)
 
     with pytest.raises(_retrieve_attr("StoreMismatch")) as excinfo:
         _retrieve_attr("semantic_search")(store, stale, QUERY, provider)
@@ -1115,6 +1298,48 @@ def test_store_mismatch_names_the_chunk_and_both_content_hashes():
     assert C_A in message
     assert content_hash(store.model, store.dim, TEXT_A) in message
     assert content_hash(store.model, store.dim, amended) in message
+
+
+def test_the_three_retrieval_errors_are_three_distinct_types():
+    # spec(T-022:AC-2) — test review I-1: "typed" is not satisfied by three
+    # names bound to ONE class. Aliasing all three to a single Exception
+    # subclass passed the first freeze, because every `pytest.raises(X)` is
+    # an isinstance check that an alias satisfies. T-024's degradation ladder
+    # branches on these by name, so a merge would route a stale-text defect
+    # into the wrong rung.
+    module = _retrieve_module()
+    errors = [
+        _attr(module, "StoreMismatch"),
+        _attr(module, "MissingEmbeddings"),
+        _attr(module, "NonIdentityChunking"),
+    ]
+
+    assert len({id(error) for error in errors}) == 3, "the three error names are aliases"
+    for error in errors:
+        for other in errors:
+            if error is not other:
+                assert not issubclass(error, other), (
+                    f"{error.__name__} is a subclass of {other.__name__}; catching one "
+                    f"would swallow the other"
+                )
+
+
+def test_retrieval_errors_are_disjoint_from_t021s_store_error_hierarchy():
+    # spec(T-022:AC-2) — test review I-1, second half. T-024 already branches
+    # on T-021's StoreIdentityMismatch ("wrong store" -> 503); a
+    # StoreMismatch that subclassed it would report a stale-text defect as a
+    # wrong-store one. CorruptStore carries its own rung for the same reason.
+    module = _retrieve_module()
+    t021_errors = (StoreIdentityMismatch, CorruptStore)
+
+    for name in ("StoreMismatch", "MissingEmbeddings", "NonIdentityChunking"):
+        error = _attr(module, name)
+        for t021_error in t021_errors:
+            assert error is not t021_error
+            assert not issubclass(error, t021_error), (
+                f"onrecord.rag.retrieve.{name} must not subclass T-021's "
+                f"{t021_error.__name__} — T-024's ladder branches on them separately"
+            )
 
 
 def test_semantic_search_raises_missing_embeddings_for_an_unembedded_chunk():
@@ -1203,6 +1428,9 @@ def test_hybrid_search_fused_order_matches_the_hand_computed_rrf():
     # 1/61 tie is broken toward C_C ("edgar:..."), which is the SEMANTIC-only
     # doc, while LEXONLY leads the lexical ranking.
     index, store, chunks, provider = _fixture()
+    # In-test precondition (test review N-1): a T-011 BM25 change surfaces
+    # HERE, named, instead of as a bare order mismatch blamed on T-022.
+    assert [r.doc_id for r in _lexical_results(index)] == EXPECTED_LEXICAL_ORDER
 
     results = _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider)
 
@@ -1212,10 +1440,32 @@ def test_hybrid_search_fused_order_matches_the_hand_computed_rrf():
 def test_hybrid_search_scores_are_the_rrf_scores():
     # spec(T-022:AC-3)
     index, store, chunks, provider = _fixture()
+    assert [r.doc_id for r in _lexical_results(index)] == EXPECTED_LEXICAL_ORDER
 
     results = _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider)
 
     assert [r.score for r in results] == pytest.approx(EXPECTED_HYBRID_SCORES, rel=1e-12)
+
+
+def test_hybrid_search_returns_search_result_objects():
+    # spec(T-022:AC-3) — test review M-2: `semantic_search` had this pin and
+    # hybrid did not, the same asymmetry class as the score types.
+    index, store, chunks, provider = _fixture()
+
+    results = _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider)
+
+    assert all(isinstance(result, SearchResult) for result in results)
+
+
+def test_hybrid_search_verifies_every_chunk_because_all_of_them_are_results():
+    # spec(T-022:AC-3) — the reach of the result-scoped ruling under fusion:
+    # hybrid calls semantic_search at k=len(chunks), so EVERY chunk is a
+    # result and therefore every chunk is hashed. C_A is stale and would slip
+    # past a k=2 semantic call (see the AC-2 pair), but never past hybrid.
+    index, store, chunks, provider = _fixture()
+
+    with pytest.raises(_retrieve_attr("StoreMismatch")):
+        _retrieve_attr("hybrid_search")(index, store, _stale_chunks(chunks), QUERY, provider, k=1)
 
 
 def test_hybrid_search_scores_are_builtin_floats():
@@ -1315,6 +1565,24 @@ def test_hybrid_search_raises_non_identity_chunking_for_a_merged_window_chunk():
 
     with pytest.raises(_retrieve_attr("NonIdentityChunking")):
         _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider)
+
+
+def test_hybrid_search_raises_non_identity_chunking_for_a_chunk_covering_two_docs():
+    # spec(T-022:AC-4) — test review M-1: the `len(chunk.doc_ids) == 1`
+    # conjunct on its own. This chunk's id DOES equal doc_ids[0], so a guard
+    # written as `chunk_id != doc_ids[0]` alone passes it through and fuses a
+    # two-doc chunk into a single-doc id space. Unreachable from
+    # `chunk_corpus` (T-020 pins the equivalence) but reachable from any
+    # caller, which hybrid_search accepts.
+    index, store, chunks, provider = _fixture()
+    forged = [
+        dataclasses.replace(chunk, doc_ids=[C_A, C_B]) if chunk.chunk_id == C_A else chunk
+        for chunk in chunks
+    ]
+    assert forged[0].chunk_id == forged[0].doc_ids[0]  # liveness: only `len` is wrong
+
+    with pytest.raises(_retrieve_attr("NonIdentityChunking")):
+        _retrieve_attr("hybrid_search")(index, store, forged, QUERY, provider)
 
 
 def test_hybrid_search_raises_non_identity_chunking_when_chunk_id_disagrees_with_its_doc_id():
@@ -1543,53 +1811,60 @@ def test_report_modes_writes_only_its_own_artifact(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 
 
+# Test review M-3: `kind` is part of the frozen signature. Without it,
+# `def semantic_search(*, store, chunks, ...)` produces an identical
+# (name, default) list while breaking the positional calls T-024 makes.
+POS_OR_KW = inspect.Parameter.POSITIONAL_OR_KEYWORD
+
+
 def _signature(func):
     return [
-        (name, parameter.default) for name, parameter in inspect.signature(func).parameters.items()
+        (name, parameter.kind, parameter.default)
+        for name, parameter in inspect.signature(func).parameters.items()
     ]
 
 
 def test_semantic_search_signature_is_frozen():
     # spec(T-022:AC-2) — T-024 calls these positionally and by keyword.
     assert _signature(_retrieve_attr("semantic_search")) == [
-        ("store", inspect.Parameter.empty),
-        ("chunks", inspect.Parameter.empty),
-        ("query", inspect.Parameter.empty),
-        ("provider", inspect.Parameter.empty),
-        ("k", 10),
+        ("store", POS_OR_KW, inspect.Parameter.empty),
+        ("chunks", POS_OR_KW, inspect.Parameter.empty),
+        ("query", POS_OR_KW, inspect.Parameter.empty),
+        ("provider", POS_OR_KW, inspect.Parameter.empty),
+        ("k", POS_OR_KW, 10),
     ]
 
 
 def test_rrf_fuse_signature_is_frozen():
     # spec(T-022:AC-1)
     assert _signature(_retrieve_attr("rrf_fuse")) == [
-        ("rankings", inspect.Parameter.empty),
-        ("k", 60),
+        ("rankings", POS_OR_KW, inspect.Parameter.empty),
+        ("k", POS_OR_KW, 60),
     ]
 
 
 def test_hybrid_search_signature_is_frozen():
     # spec(T-022:AC-3)
     assert _signature(_retrieve_attr("hybrid_search")) == [
-        ("index", inspect.Parameter.empty),
-        ("store", inspect.Parameter.empty),
-        ("chunks", inspect.Parameter.empty),
-        ("query", inspect.Parameter.empty),
-        ("provider", inspect.Parameter.empty),
-        ("k", 10),
-        ("rrf_k", 60),
+        ("index", POS_OR_KW, inspect.Parameter.empty),
+        ("store", POS_OR_KW, inspect.Parameter.empty),
+        ("chunks", POS_OR_KW, inspect.Parameter.empty),
+        ("query", POS_OR_KW, inspect.Parameter.empty),
+        ("provider", POS_OR_KW, inspect.Parameter.empty),
+        ("k", POS_OR_KW, 10),
+        ("rrf_k", POS_OR_KW, 60),
     ]
 
 
 def test_report_modes_signature_is_frozen():
     # spec(T-022:AC-5) — including the sidecar's default artifact path.
     assert _signature(_modes_attr("report_modes")) == [
-        ("index", inspect.Parameter.empty),
-        ("store", inspect.Parameter.empty),
-        ("chunks", inspect.Parameter.empty),
-        ("judgments_path", inspect.Parameter.empty),
-        ("provider", inspect.Parameter.empty),
-        ("history_path", "artifacts/modes_scoreboard.jsonl"),
+        ("index", POS_OR_KW, inspect.Parameter.empty),
+        ("store", POS_OR_KW, inspect.Parameter.empty),
+        ("chunks", POS_OR_KW, inspect.Parameter.empty),
+        ("judgments_path", POS_OR_KW, inspect.Parameter.empty),
+        ("provider", POS_OR_KW, inspect.Parameter.empty),
+        ("history_path", POS_OR_KW, "artifacts/modes_scoreboard.jsonl"),
     ]
 
 
