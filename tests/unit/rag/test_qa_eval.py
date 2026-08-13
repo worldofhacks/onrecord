@@ -185,12 +185,45 @@ shapes (e.g. `yt:MiXeDcAsE:seg007`) rather than placeholder-canonical ids --
 T-020's C-1 finding (a re-minting/re-casing implementation bug was
 observationally invisible against canonical-looking fixtures) is the
 cautionary precedent for every ADS-4 byte-identity test below.
+
+--------------------------------------------------------------------------
+Pin rounds (post-freeze amendments, additive only -- see git history for
+the commit each round landed in)
+--------------------------------------------------------------------------
+
+1. **Review finding C-1** (`.tdd-swarm/reports/T-025-review.md`) --
+   `--kind answer_recall` silently ignored `--k` because `main()` called
+   `_resolve_retrieve_fn()` with no arguments, so the real retrieval depth
+   stayed hardcoded while the artifact stamped whatever `k` was requested.
+   `test_cli_answer_recall_kind_threads_k_into_resolve_retrieve_fn_seam`
+   pins that `main()` threads `--k` into the `_resolve_retrieve_fn` seam.
+
+2. **T-026 review's "Adjacent" finding** (`.tdd-swarm/reports/T-026-review.md`,
+   final section) -- `_resolve_answer_fn`'s real body calls
+   `answer(question)` with ONE positional argument, but the documented
+   contract (`tickets/T-023.md:21`, frozen in `wt-T-023/tests/unit/rag/
+   test_answer.py`'s `test_answer_signature_matches_the_frozen_contract`)
+   is `answer(question, chunks, generate_fn, *, min_confidence=None,
+   retrieval_scores=None)` -- three required positional-or-keyword params.
+   A guaranteed `TypeError` the moment the seam is exercised for real,
+   masked because the line is `# pragma: no cover` and every existing test
+   in this file monkeypatches `_resolve_answer_fn` WHOLESALE (the
+   sanctioned seam-level contract, never reaching its real body).
+   `test_resolve_answer_fn_real_composition_matches_the_documented_answer_arity`
+   goes one level deeper: it leaves `_resolve_answer_fn` itself untouched
+   and instead `sys.modules`-injects fake `onrecord.rag.answer` (arity-
+   enforcing) and retrieval modules, so the REAL body -- including its real
+   call to `answer(...)` -- runs. **Contract coupling is preserved**: the
+   injected module is a plain `types.ModuleType`, never the real
+   `onrecord.rag.answer`; this file still never imports T-023 code.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import sys
+import types
 from datetime import datetime
 from pathlib import Path
 
@@ -1256,6 +1289,86 @@ def test_cli_answer_recall_kind_threads_k_into_resolve_retrieve_fn_seam(tmp_path
         "stale default depth of 10 would score 0.0 here while the artifact "
         "still (falsely) reports k=50"
     )
+
+
+def test_resolve_answer_fn_real_composition_matches_the_documented_answer_arity(monkeypatch):
+    # spec(T-025:AC-5) -- T-026 review's "Adjacent" finding
+    # (.tdd-swarm/reports/T-026-review.md, final section): `_resolve_answer_fn`'s
+    # REAL body calls `answer(question)` with ONE positional argument, but the
+    # documented contract (tickets/T-023.md:21; frozen in wt-T-023/tests/unit/
+    # rag/test_answer.py's test_answer_signature_matches_the_frozen_contract) is
+    # `answer(question, chunks, generate_fn, *, min_confidence=None,
+    # retrieval_scores=None)` -- three required positional-or-keyword params.
+    # A guaranteed TypeError the moment the seam is exercised for real; masked
+    # today because the call is `# pragma: no cover` and every OTHER test in
+    # this file monkeypatches `_resolve_answer_fn` wholesale, never reaching
+    # its real body.
+    #
+    # This test goes one level deeper: it does NOT monkeypatch
+    # `_resolve_answer_fn` itself. Instead it `sys.modules`-injects fake
+    # modules for exactly the things `_resolve_answer_fn` lazily imports, so
+    # its REAL body -- including its real call to `answer(...)` -- executes.
+    # CONTRACT COUPLING IS PRESERVED: the injected `onrecord.rag.answer` is a
+    # plain `types.ModuleType`, never the real T-023 module or any import of
+    # it; `monkeypatch.setitem(sys.modules, ...)` auto-reverts after the test.
+    qa_eval = _import_qa_eval_module()
+
+    received_calls: list[tuple] = []
+
+    def fake_answer(
+        question: str,
+        chunks: list,
+        generate_fn,
+        *,
+        min_confidence=None,
+        retrieval_scores=None,
+    ) -> dict:
+        # The arity/kwargs pin IS this signature: Python's own argument
+        # binding already rejects a call missing `chunks`/`generate_fn`
+        # (today's exact `_answer(question)` one-positional call) before this
+        # body ever runs. Once bound, also assert the documented TYPES, so a
+        # "right arg count, wrong shape" regression is equally caught.
+        assert isinstance(question, str) and question, "question must be a non-empty str"
+        assert isinstance(chunks, list), f"chunks must be a list; got {type(chunks)!r}"
+        assert callable(generate_fn), "generate_fn must be callable"
+        received_calls.append((question, chunks, generate_fn, min_confidence, retrieval_scores))
+        return _pinned_answer(refusal=None)
+
+    fake_answer_module = types.ModuleType("onrecord.rag.answer")
+    fake_answer_module.answer = fake_answer
+    monkeypatch.setitem(sys.modules, "onrecord.rag.answer", fake_answer_module)
+
+    # Defensive fakes for the retrieval modules the sibling `_resolve_retrieve_fn`
+    # (same file, `--kind answer_recall` seam) already lazily imports -- the
+    # natural reuse precedent for however `_resolve_answer_fn` ends up building
+    # `chunks`. Keeps this test hermetic (no real index/network) regardless of
+    # which of these the eventual fix actually calls; an unused fake is harmless.
+    fake_index_module = types.ModuleType("onrecord.index.inverted")
+
+    class _FakeInvertedIndex:
+        @staticmethod
+        def load(path):
+            return _FakeInvertedIndex()
+
+    fake_index_module.InvertedIndex = _FakeInvertedIndex
+    monkeypatch.setitem(sys.modules, "onrecord.index.inverted", fake_index_module)
+
+    fake_ranked_module = types.ModuleType("onrecord.search.ranked")
+
+    def _fake_ranked_search(index, query, k=10):
+        return []
+
+    fake_ranked_module.ranked_search = _fake_ranked_search
+    monkeypatch.setitem(sys.modules, "onrecord.search.ranked", fake_ranked_module)
+
+    answer_fn = qa_eval._resolve_answer_fn()
+    result = answer_fn("what happened at the meeting")
+
+    assert received_calls, (
+        "the fake answer() was never invoked -- _resolve_answer_fn's real body "
+        "did not call through to onrecord.rag.answer.answer at all"
+    )
+    assert result == _pinned_answer(refusal=None)
 
 
 # --------------------------------------------------------------------------
