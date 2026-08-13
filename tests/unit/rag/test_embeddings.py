@@ -2731,3 +2731,394 @@ def test_a_reader_that_lands_mid_publish_re_reads_instead_of_raising(tmp_path, m
         "load re-reads the pair once and returns the completed generation"
     )
     assert loaded.rows_for(_ids(_pairs(5))) == [0, 1, 2, 3, 4]
+
+
+# ==========================================================================
+# ==========================================================================
+# T-030 (wave-9-repair) — embed input-limit guard.
+#
+# The first full-corpus embed run 400'd: OpenAI /v1/embeddings rejects any
+# single input above the model's per-input token cap (~8,192 for
+# text-embedding-3-small), and corpus/v2 holds 33 filing sections above
+# ~32K chars (longest 163,817 chars ~= 41K tokens). The 64-chunk smoke
+# sample was yt-only and never hit one. The store forwarded raw text with
+# no guard, and `EmbeddingRequestError` named neither the batch nor the
+# offending chunk, so an operator had no way to locate the failure short of
+# bisecting 289K chunks.
+#
+# ADJUDICATED DESIGN (orchestrator, tickets/T-030.md): deterministic
+# TRUNCATION-FOR-EMBEDDING. The vector for an over-limit text derives from
+# its first `EMBED_INPUT_MAX_CHARS` characters; the store's entries and
+# `content_hash` stay over the FULL text, so identity and staleness
+# semantics are untouched — only the vector INPUT is bounded. Truncated
+# chunk_ids are counted and logged, never silent. Sub-document splitting is
+# out of scope (it would mint new chunk ids and collide with the identity
+# invariant).
+#
+# All tests below are RED against the implementation at ca1c038. The 89
+# tests above are untouched and stay green (AC-4, additive-only).
+#
+# TEST-AGENT DECISIONS (the ticket left these open; AC-2 explicitly
+# delegates the exposure mechanism)
+# ------------------------------------------------------------------------
+# T1. **Truncation lives in `embed_corpus`, not in the provider.** Only the
+#     store knows chunk_ids, and AC-2 requires truncated chunk_ids to be
+#     counted and logged; a provider sees bare texts. This also keeps the
+#     guard provider-agnostic — a future Voyage adapter inherits it.
+# T2. **`embed_corpus` RETURNS the summary** — a dict with exactly
+#     `{"truncated_chunk_ids": [...], "truncated_count": int}`, on EVERY
+#     path including the two no-work early returns. AC-2 offers "returned
+#     or queryable"; returned is the contract-true one, because the store
+#     **cannot** persist truncation: `entries.json` values are frozen to
+#     exactly `{"row", "content_hash"}` by three tests above
+#     (`test_entry_for_records_the_content_hash_per_chunk_id`,
+#     `test_entries_json_on_disk_carries_identity_and_chunk_keyed_entries`,
+#     `test_save_load_round_trip_preserves_dtype_shape_and_entries`), so a
+#     `store.truncated_*` attribute would read as 0 after `load()` on a
+#     store whose original run truncated 33 chunks — a wrong receipt, which
+#     this product treats as its worst failure mode. A return value is
+#     scoped to the call that did the work and cannot make that claim.
+#     `truncated_count == len(truncated_chunk_ids)` is asserted as an
+#     invariant so the redundancy cannot drift.
+# T3. **Ids are reported in first-appearance order** over `pairs` — the
+#     same ordering rule the store already uses for rows.
+# T4. **The log record is at WARNING or above**, on the module logger
+#     `onrecord.rag.embeddings` (which does not exist yet — the module has
+#     no `getLogger(__name__)` today). Truncation is silent data loss from
+#     the vector's point of view; INFO would let it disappear under the
+#     default level. The count and the first truncated chunk_id must appear
+#     in the captured text; implementations may cap a long id list.
+# T5. **Batch indices are 0-BASED.** Both AC-3 tests pin the second batch
+#     as "batch 1".
+# T6. **"First offending chunk_id" = the first chunk_id of the failing
+#     batch.** A 400 does not identify which input offended, so the
+#     deterministic, operator-actionable fact is where the failing request
+#     started. Assertions use containment, so an implementation that also
+#     names the longest input still passes.
+# ==========================================================================
+# ==========================================================================
+
+
+_BOUNDARY_MARKER = "<<<CAP-BOUNDARY>>>"
+
+
+def _cap() -> int:
+    """The pinned input cap, read from the implementation's own constant."""
+    return _attr("EMBED_INPUT_MAX_CHARS")
+
+
+def _over_limit_text(tail: str) -> tuple[str, str]:
+    """An over-cap text plus the exact slice the provider must receive.
+
+    The head ends in a distinctive marker so an off-by-one slice is visible
+    rather than hidden in a run of identical filler characters.
+    """
+    cap = _cap()
+    head = "a" * (cap - len(_BOUNDARY_MARKER)) + _BOUNDARY_MARKER
+    assert len(head) == cap
+    return head + " " + tail + "z" * 4000, head
+
+
+def _over_limit_pair(chunk_id: str, tail: str) -> tuple[tuple[str, str], str]:
+    """An over-cap `(chunk_id, text)` pair plus the slice the provider must get."""
+    text, expected_input = _over_limit_text(tail)
+    return (chunk_id, text), expected_input
+
+
+def _openai_store_provider(transport: httpx.MockTransport):
+    """The real adapter over a mock wire, for end-to-end store->wire pins."""
+    return _openai_provider(SENTINEL_KEY, transport)
+
+
+# --------------------------------------------------------------------------
+# AC-1 — an over-limit text is embedded from its first EMBED_INPUT_MAX_CHARS
+# characters, while its identity stays over the full text.
+# --------------------------------------------------------------------------
+
+
+def test_embed_input_max_chars_is_the_pinned_module_constant():
+    # spec(T-030:AC-1)
+    cap = _attr("EMBED_INPUT_MAX_CHARS")
+
+    assert cap == 24000, (
+        f"the adjudicated cap is 24000 chars (~6K tokens at 4 chars/token, headroom "
+        f"under the model's ~8,192-token per-input limit for token-dense legal text); "
+        f"got {cap!r}"
+    )
+
+
+def test_over_limit_text_is_truncated_to_the_cap_for_the_provider():
+    # spec(T-030:AC-1)
+    (chunk_id, text), expected_input = _over_limit_pair("c-long", "one")
+    provider = FakeProvider()
+    store = _new_store()
+
+    store.embed_corpus([(chunk_id, text)], provider)
+
+    assert provider.texts_seen == [expected_input], (
+        f"the provider must receive exactly the first {_cap()} characters — a "
+        f"byte-deterministic slice, no tokenizer and no re-chunking. Sent "
+        f"{len(provider.texts_seen[0]) if provider.texts_seen else 0} chars"
+    )
+
+
+def test_over_limit_text_reaches_the_wire_truncated():
+    # spec(T-030:AC-1)
+    # The end-to-end proof: what the HTTP request body actually carries is
+    # what the 400 was about.
+    (chunk_id, text), expected_input = _over_limit_pair("c-long", "wire")
+    dim = _openai_dim()
+    requests: list[httpx.Request] = []
+    provider = _openai_store_provider(httpx.MockTransport(_openai_handler(dim, requests)))
+    store = _new_store()
+
+    store.embed_corpus([(chunk_id, text)], provider)
+
+    assert len(requests) == 1
+    body = json.loads(requests[0].content)
+    assert body["input"] == [expected_input], (
+        f"the request body must carry the truncated input; it carried "
+        f"{len(body['input'][0])} chars against a {_cap()}-char cap"
+    )
+
+
+def test_truncation_does_not_move_the_stored_identity():
+    # spec(T-030:AC-1)
+    # The whole point of the adjudicated split: the VECTOR comes from the
+    # truncated input, the IDENTITY stays over the full text, so re-freezes
+    # and staleness detection behave exactly as before.
+    (chunk_id, text), expected_input = _over_limit_pair("c-long", "identity")
+    provider = FakeProvider()
+    store = _new_store()
+
+    store.embed_corpus([(chunk_id, text)], provider)
+
+    assert provider.texts_seen == [expected_input], (
+        "precondition: truncation must actually have happened, otherwise the "
+        "identity assertions below are vacuous"
+    )
+    recorded = store.entry_for(chunk_id)["content_hash"]
+    assert recorded == _content_hash(FAKE_MODEL, 4, text), (
+        "the entry's content_hash is over the FULL text — identity and staleness "
+        "semantics are unchanged by an input-side truncation"
+    )
+    assert recorded != _content_hash(FAKE_MODEL, 4, expected_input), (
+        "and it is specifically NOT the hash of the truncated input: hashing what "
+        "was sent would silently merge two documents that share a 24000-char prefix"
+    )
+
+
+def test_a_store_holding_a_truncated_chunk_round_trips_load(tmp_path):
+    # spec(T-030:AC-1)
+    (chunk_id, text), expected_input = _over_limit_pair("c-long", "roundtrip")
+    provider = FakeProvider()
+    store = _new_store()
+    store.embed_corpus([(chunk_id, text)], provider)
+    assert provider.texts_seen == [expected_input], "precondition: truncation happened"
+
+    store.save(tmp_path / "store")
+    reloaded = _load_store(tmp_path / "store")
+
+    assert reloaded.rows_for([chunk_id]) == [0]
+    assert reloaded.entry_for(chunk_id) == {
+        "row": 0,
+        "content_hash": _content_hash(FAKE_MODEL, 4, text),
+    }
+    assert reloaded.matrix.shape == (1, 4)
+
+
+# --------------------------------------------------------------------------
+# AC-2 — mixed batches, dedupe on the FULL-text hash, and an exposed
+# truncation summary.
+# --------------------------------------------------------------------------
+
+
+def test_a_mixed_batch_writes_every_row_and_truncates_only_the_over_limit_text():
+    # spec(T-030:AC-2)
+    (long_id, long_text), expected_input = _over_limit_pair("c-long", "mixed")
+    pairs = [("c-short", "a short filing section"), (long_id, long_text), ("c-tiny", "tiny")]
+    provider = FakeProvider()
+    store = _new_store()
+
+    store.embed_corpus(pairs, provider)
+
+    assert provider.texts_seen == ["a short filing section", expected_input, "tiny"], (
+        "only the over-limit text is truncated; short texts pass through byte-identical"
+    )
+    assert store.rows_for(["c-short", long_id, "c-tiny"]) == [0, 1, 2], (
+        "every chunk in a mixed batch still gets its own row, in pair order"
+    )
+    assert store.matrix.shape[0] == 3
+
+
+def test_dedupe_keys_on_the_full_text_hash_not_the_truncated_input():
+    # spec(T-030:AC-2)
+    # Two documents sharing a 24000-char prefix but diverging after it are
+    # DIFFERENT documents: their content_hashes differ, so both are embedded
+    # and both get rows. An implementation that hashed the text it SENT
+    # would collapse them into one row and silently drop a document.
+    cap = _cap()
+    shared_head = "a" * (cap - len(_BOUNDARY_MARKER)) + _BOUNDARY_MARKER
+    first = shared_head + " diverging tail ONE" + "z" * 2000
+    second = shared_head + " diverging tail TWO" + "z" * 2000
+    provider = FakeProvider()
+    store = _new_store()
+
+    store.embed_corpus([("DOC-A", first), ("DOC-B", second)], provider)
+
+    assert provider.texts_seen == [shared_head, shared_head], (
+        f"both are embedded from the same truncated input (that is inherent to "
+        f"truncation), but they are billed separately because dedupe keys on the "
+        f"FULL-text hash; provider saw {len(provider.texts_seen)} text(s)"
+    )
+    assert store.rows_for(["DOC-A", "DOC-B"]) == [0, 1], "both documents keep their own row"
+    assert store.entry_for("DOC-A")["content_hash"] != store.entry_for("DOC-B")["content_hash"], (
+        "their identities differ because their full texts differ — collapsing them "
+        "would lose a document from the index"
+    )
+
+
+def test_embed_corpus_returns_the_truncated_chunk_id_summary():
+    # spec(T-030:AC-2)
+    first_text, _ = _over_limit_text("summary one")
+    second_text, _ = _over_limit_text("summary two")
+    pairs = [
+        ("c-short", "short"),
+        ("c-long-1", first_text),
+        ("c-mid", "also short"),
+        ("c-long-2", second_text),
+    ]
+    store = _new_store()
+
+    summary = store.embed_corpus(pairs, FakeProvider())
+
+    assert summary == {
+        "truncated_chunk_ids": ["c-long-1", "c-long-2"],
+        "truncated_count": 2,
+    }, (
+        f"embed_corpus returns the truncation summary — exactly these two keys, ids "
+        f"in first-appearance order over `pairs`. The store cannot persist this "
+        f"(entries.json is frozen to row+content_hash), so a post-load attribute "
+        f"would report 0 for a run that truncated 33 chunks. Got {summary!r}"
+    )
+    assert summary["truncated_count"] == len(summary["truncated_chunk_ids"])
+
+
+def test_truncation_is_logged_via_the_module_logger(caplog):
+    # spec(T-030:AC-2)
+    # Digit-free chunk ids and a count of 3, so the only "3" the record can
+    # contain is the COUNT itself (the cap, 24000, has no 3 either) — with
+    # ids like "c-long-2" a count assertion would pass on the id alone.
+    first_text, _ = _over_limit_text("logged one")
+    second_text, _ = _over_limit_text("logged two")
+    third_text, _ = _over_limit_text("logged three")
+    pairs = [
+        ("c-short", "short"),
+        ("c-alpha", first_text),
+        ("c-beta", second_text),
+        ("c-gamma", third_text),
+    ]
+    store = _new_store()
+
+    with caplog.at_level(logging.INFO, logger="onrecord.rag.embeddings"):
+        store.embed_corpus(pairs, FakeProvider())
+
+    own = [r for r in caplog.records if r.name == "onrecord.rag.embeddings"]
+    loud = [r for r in own if r.levelno >= logging.WARNING]
+    assert loud, (
+        f"truncation must never be silent: the module logger "
+        f"('onrecord.rag.embeddings', which the module does not create today) must "
+        f"emit at WARNING or above, or the record disappears under the default "
+        f"level. Records seen: {[(r.name, r.levelname, r.getMessage()) for r in own]}"
+    )
+    text = " ".join(r.getMessage() for r in loud)
+    assert "3" in text, f"the record must carry the COUNT of truncated chunks: {text!r}"
+    assert "c-alpha" in text, (
+        f"and name the truncated chunk(s) so an operator can find them without "
+        f"bisecting 289K chunks (a long list may be capped): {text!r}"
+    )
+
+
+def test_a_run_with_nothing_over_the_cap_reports_no_truncation(caplog):
+    # spec(T-030:AC-2)
+    store = _new_store()
+
+    with caplog.at_level(logging.INFO, logger="onrecord.rag.embeddings"):
+        summary = store.embed_corpus(_pairs(3), FakeProvider())
+
+    assert summary == {"truncated_chunk_ids": [], "truncated_count": 0}
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == [], (
+        "and a clean run must not cry wolf — no warning when nothing was truncated"
+    )
+
+
+def test_every_embed_corpus_path_returns_a_summary():
+    # spec(T-030:AC-2)
+    # The two no-work early returns must not hand back None: a caller that
+    # reads `summary["truncated_count"]` would crash on a fully-cached
+    # re-run, which is the common case on a resumed multi-hour run.
+    store = _new_store()
+    store.embed_corpus(_pairs(3), FakeProvider())
+
+    cached_rerun = store.embed_corpus(_pairs(3), FakeProvider())
+    empty_input = store.embed_corpus([], FakeProvider())
+
+    assert cached_rerun == {"truncated_chunk_ids": [], "truncated_count": 0}, (
+        f"a fully-cached re-run still returns a summary; got {cached_rerun!r}"
+    )
+    assert empty_input == {"truncated_chunk_ids": [], "truncated_count": 0}, (
+        f"and so does an empty pair list; got {empty_input!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# AC-3 — a 400 must say WHERE. "operators must not have to bisect 289K
+# chunks" — the failure that started this ticket reported only
+# "HTTP 400", with no batch and no chunk_id.
+# --------------------------------------------------------------------------
+
+
+def test_a_400_names_the_batch_index_at_the_adapter():
+    # spec(T-030:AC-3)
+    dim = _openai_dim()
+    requests: list[httpx.Request] = []
+    # First sub-batch succeeds, second 400s (400 is non-retryable).
+    transport = httpx.MockTransport(_openai_handler(dim, requests, statuses=[200, 400]))
+    provider = _openai_provider(SENTINEL_KEY, transport)
+
+    with pytest.raises(_attr("EmbeddingRequestError")) as excinfo:
+        provider.embed([f"doc-{i}" for i in range(513)])
+
+    message = str(excinfo.value)
+    assert "batch 1" in message, (
+        f"the second of two sub-batches failed; the error must name the 0-based "
+        f"batch index so an operator knows which request died. Got {message!r}"
+    )
+    assert "400" in message, f"and keep the status code: {message!r}"
+
+
+def test_a_400_names_the_batch_index_and_first_chunk_id_through_embed_corpus(tmp_path):
+    # spec(T-030:AC-3)
+    dim = _openai_dim()
+    requests: list[httpx.Request] = []
+    transport = httpx.MockTransport(_openai_handler(dim, requests, statuses=[200, 400]))
+    provider = _openai_provider(SENTINEL_KEY, transport)
+    pairs = [(f"c{i}", f"doc-{i + 1}") for i in range(4)]
+    store = _new_store()
+
+    with pytest.raises(_attr("EmbeddingRequestError")) as excinfo:
+        store.embed_corpus(pairs, provider, checkpoint_dir=tmp_path / "ckpt", checkpoint_every=2)
+
+    message = str(excinfo.value)
+    assert len(requests) == 2, (
+        f"precondition: batch 0 (c0,c1) must have succeeded and batch 1 (c2,c3) "
+        f"must have been attempted; {len(requests)} request(s) were made"
+    )
+    assert "batch 1" in message, (
+        f"the error must name the 0-based index of the failing batch: {message!r}"
+    )
+    assert "c2" in message, (
+        f"and the first chunk_id of that batch — without it an operator is left "
+        f"bisecting 289K chunks, which is the failure this ticket exists to fix. "
+        f"Got {message!r}"
+    )
