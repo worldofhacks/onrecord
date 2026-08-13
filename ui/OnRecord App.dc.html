@@ -506,27 +506,10 @@ const VENUES = {
   coached: { label: 'COACHED', style: { color: '#8A6D1F', background: '#F5EEDA', borderRadius: '4px', padding: '3px 8px' } },
   candid: { label: 'CANDID', style: { color: '#9C3A24', background: '#F7E4DE', borderRadius: '4px', padding: '3px 8px' } },
 };
-// DEMO DATA — the studio's sample corpus. Per T-016 wiring map item 7 this
-// survives ONLY as the api-down fallback: it is used exclusively when
-// `state.apiDown` is true, and every surface that shows it is labeled "demo
-// data" (header engine chip + the results list label). It is never rendered
-// while the API is reachable.
-const CORPUS = [
-  { id: 'yt:5w_AQQ:s06', text: 'Staff testimony confirms the applicant is requesting substation upgrades to serve 240 megawatts of new capacity east of Ashburn, phased across three interconnection windows.', source: 'county_meeting', venue: 'sworn', date: '2026-08-06', link: 'https://youtube.com/watch?v=5w_AQQ-bk30&t=2732s', ts: '45:32', ticker: null, jur: 'Loudoun County, VA', line: 'Board of Supervisors · Public Hearing, Item 7' },
-  { id: 'ed:ceg:8k', text: 'Constellation executed a twenty-year interconnection agreement securing 835 megawatts of capacity at the Calvert Cliffs site, with commercial operations contingent on substation energization.', source: 'filing', venue: 'sworn', date: '2026-08-05', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'CEG', jur: null, line: 'Constellation Energy · 8-K, Item 8.01' },
-  { id: 'dk:gapsc:44280', text: 'Georgia Power\u2019s IRP amendment identifies 6,600 megawatts of pending data-center substation requests, of which 2,100 hold executed service agreements; the remainder are speculative and duplicative.', source: 'docket', venue: 'sworn', date: '2026-08-04', link: 'https://psc.ga.gov/search/facts-docket/?docketId=44280', ts: null, ticker: null, jur: 'Bartow County, GA', line: 'GA PSC 44280 · direct testimony, load forecast' },
-  { id: 'yt:bartow:pc', text: 'I have lived on Pine Log Road for forty years and nobody told us a substation and a data center campus were coming in behind the elementary school until the trees came down.', source: 'county_meeting', venue: 'candid', date: '2026-08-03', link: 'https://youtube.com/watch?v=Jq8rN2xVd1M&t=4328s', ts: '1:12:08', ticker: null, jur: 'Bartow County, GA', line: 'Public comment · rezoning hearing' },
-  { id: 'yt:pwc:rez14', text: 'Staff recommends approval of the rezoning contingent on the substation screening plan and a 300-foot buffer; the applicant\u2019s proffer caps on-site diesel generation at 40 megawatts.', source: 'county_meeting', venue: 'sworn', date: '2026-07-29', link: 'https://youtube.com/watch?v=k2XbJqp0Y1c&t=1427s', ts: '23:47', ticker: null, jur: 'Prince William County, VA', line: 'Planning Commission · REZ-2026-014' },
-  { id: 'ed:vst:q2', text: 'We now have signed letters of intent for 4.2 gigawatts of data-center load, and we are confident in converting the majority to executed agreements by 2028.', source: 'filing', venue: 'coached', date: '2026-07-31', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'VST', jur: null, line: 'Vistra · Q2 2026 earnings call, 8-K exhibit' },
-  { id: 'ed:oklo:10q', text: 'Non-binding letters of intent for up to 750 megawatts of capacity; no substation or interconnection agreements have been executed as of the filing date.', source: 'filing', venue: 'sworn', date: '2026-07-24', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'OKLO', jur: null, line: 'Oklo Inc. · 10-Q, MD&A' },
-  { id: 'dk:puco:24508', text: 'The settlement requires data-center customers over 25 megawatts to make minimum demand payments of 85 percent of contracted capacity for a twelve-year term, citing risk of stranded distribution investment.', source: 'docket', venue: 'sworn', date: '2026-07-17', link: 'https://dis.puc.state.oh.us/CaseRecord.aspx?CaseNo=24-508', ts: null, ticker: null, jur: 'Franklin County, OH', line: 'PUCO 24-508-EL-ATA · tariff settlement' },
-  { id: 'yt:loudoun:water', text: 'The water usage numbers in the application are averages; peak-day cooling demand is three times that, and the Broad Run treatment plant is already at 80 percent of rated capacity.', source: 'county_meeting', venue: 'candid', date: '2026-07-15', link: 'https://youtube.com/watch?v=8xTe0PqLmC4&t=3491s', ts: '58:11', ticker: null, jur: 'Loudoun County, VA', line: 'Service Authority briefing · Board work session' },
-  { id: 'yt:maricopa:water', text: 'The applicant\u2019s water balance shows 1.1 million gallons per day of reclaimed water for cooling, with zero groundwater draw under the drought contingency plan.', source: 'county_meeting', venue: 'sworn', date: '2026-07-09', link: 'https://youtube.com/watch?v=Nv3QwLp8sYE&t=1864s', ts: '31:04', ticker: null, jur: 'Maricopa County, AZ', line: 'Board of Supervisors · zoning case Z-2026-071' },
-  { id: 'ed:crwv:10q', text: 'The company has contracted 1.9 gigawatts of capacity across 14 sites; approximately 620 megawatts is energized and billing as of quarter end.', source: 'filing', venue: 'sworn', date: '2026-06-30', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'CRWV', jur: null, line: 'CoreWeave · 10-Q, results of operations' },
-  { id: 'dk:vascc:0087', text: 'Dominion petitions for a 500 kV transmission line to serve 962 megawatts of contracted data-center capacity in the eastern Loudoun load area.', source: 'docket', venue: 'sworn', date: '2026-06-24', link: 'https://scc.virginia.gov/docketsearch', ts: null, ticker: null, jur: 'Loudoun County, VA', line: 'VA SCC PUR-2026-00087 · petition' },
-  { id: 'ed:iren:q4', text: 'We expect our Sweetwater campus to reach 300 megawatts of IT capacity in the first half of 2027, subject to transformer deliveries staying on schedule.', source: 'filing', venue: 'coached', date: '2026-06-12', link: 'https://www.sec.gov/cgi-bin/browse-edgar', ts: null, ticker: 'IREN', jur: null, line: 'IREN · FY earnings call, 8-K exhibit' },
-  { id: 'yt:pwc:corridor', text: 'If the county approves one more data center by-right, the transmission corridor will run through the battlefield \u2014 and nobody at Dominion will say the words eminent domain out loud.', source: 'county_meeting', venue: 'candid', date: '2026-05-27', link: 'https://youtube.com/watch?v=Wm5tRkE2hQo&t=6116s', ts: '1:41:56', ticker: null, jur: 'Prince William County, VA', line: 'Public comment · comprehensive plan hearing' },
-];
+// T-035 (owner directive 2026-08-13): the studio's sample corpus is GONE.
+// A receipts platform must never render fabricated receipts; when the
+// engine is unreachable the Search view now shows the truth (no results,
+// 'engine unreachable' status, retry in the header) instead of fake rows.
 // Company display names — kept as a DISPLAY FALLBACK only (T-016 wiring map
 // item 3): /api/tickers carries symbol/receipt_count/last_receipt, no name.
 const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo Inc.', CRWV: 'CoreWeave', IREN: 'IREN Ltd.', MSFT: 'Microsoft', GOOGL: 'Alphabet', AMZN: 'Amazon', DLR: 'Digital Realty', VRT: 'Vertiv', GEV: 'GE Vernova', AEP: 'American Electric Power', SO: 'Southern Company' };
@@ -810,10 +793,9 @@ class Component extends DCLogic {
   go(v) { if (location.hash !== '#' + v) location.hash = v; this.setState({ view: v, detSym: null, openFilter: null }); }
 
   // Rows for the results list. Live /api/search normally; the studio's sample
-  // CORPUS only while the API is unreachable (labeled "demo data" in the UI).
   currentResults() {
     const s = this.state;
-    if (s.apiDown) return this.demoResults();
+    if (s.apiDown) return [];
     const terms = String(s.q || '').toLowerCase().split(/\s+/).filter(Boolean);
     return (s.hits || []).map(h => {
       const ts = tsOf(h.deep_link);
@@ -825,24 +807,6 @@ class Component extends DCLogic {
         line: [h.jurisdiction || h.ticker, srcLabel(h.source_type), h.date].filter(Boolean).join(' · '),
       };
     });
-  }
-  demoResults() {
-    const s = this.state;
-    const terms = String(s.q || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = CORPUS.filter(d =>
-      (s.fSource === 'All' || d.source === s.fSource) &&
-      (s.fVenue === 'All' || d.venue === s.fVenue) &&
-      (s.fTicker === 'All' || d.ticker === s.fTicker) &&
-      (s.fJur === 'All' || d.jur === s.fJur));
-    const shape = (d, matched, score) => ({
-      id: d.id, date: d.date, source: d.source, venue: d.venue, ticker: d.ticker, jur: d.jur,
-      link: d.link, ts: d.ts, score, segs: segsFromSnippet(d.text, matched), line: d.line,
-    });
-    if (!terms.length) return hits.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8).map(d => shape(d, [], 0));
-    return hits.map(d => { const lt = d.text.toLowerCase(); const m = terms.filter(t => lt.includes(t)); return { d, m }; })
-      .filter(h => h.m.length === terms.length || (h.m.length && terms.length > 2 && h.m.length >= terms.length - 1))
-      .map(h => { const lt = h.d.text.toLowerCase(); let tf = 0; h.m.forEach(t => { tf += lt.split(t).length - 1; }); const rec = (new Date(h.d.date) - new Date('2026-01-01')) / 864e5 / 120; return shape(h.d, h.m, +(h.m.length * 2.4 + tf * 0.7 + rec).toFixed(2)); })
-      .sort((a, b) => b.score - a.score);
   }
   renderVals() {
     const s = this.state;
@@ -1097,7 +1061,7 @@ class Component extends DCLogic {
       onNav: (e) => this.go(e.currentTarget.dataset.view),
       tabs,
       engineDot: { width: '7px', height: '7px', borderRadius: '99px', background: s.apiLive && !s.apiDown ? '#0A7A43' : '#C9A93E', display: 'inline-block' },
-      engineLabel: s.apiDown ? 'demo data · API unreachable' : s.apiLive ? 'live engine' : 'connecting…',
+      engineLabel: s.apiDown ? 'engine unreachable' : s.apiLive ? 'live engine' : 'connecting…',
       apiDown: s.apiDown, retryApi: (e) => { e.stopPropagation(); this.bootstrap(); },
       vSearch: s.view === 'search', vAsk: s.view === 'ask', vTickers: s.view === 'tickers', vScore: s.view === 'scoreboard', vLedger: s.view === 'ledger',
       rootClick: () => { if (s.openFilter) this.setState({ openFilter: null }); },
@@ -1135,10 +1099,10 @@ class Component extends DCLogic {
       // Ticker options come from the live universe (symbols that actually have
       // receipts, busiest first); jurisdictions from the ones live results name.
       tickerOpts: [{ val: 'All', label: 'All tickers' }]
-        .concat(s.apiDown ? uniq(CORPUS.map(d => d.ticker)).map(t => ({ val: t, label: t })) : liveTickers.map(t => ({ val: t.sym, label: t.sym })))
+        .concat(s.apiDown ? [] : liveTickers.map(t => ({ val: t.sym, label: t.sym })))
         .concat(s.fTicker !== 'All' && !liveTickers.some(t => t.sym === s.fTicker) ? [{ val: s.fTicker, label: s.fTicker }] : []),
       jurOpts: [{ val: 'All', label: 'All jurisdictions' }]
-        .concat((s.apiDown ? uniq(CORPUS.map(d => d.jur)) : s.jurs).map(j => ({ val: j, label: j })))
+        .concat((s.apiDown ? [] : s.jurs).map(j => ({ val: j, label: j })))
         .concat(s.fJur !== 'All' && (s.jurs || []).indexOf(s.fJur) < 0 ? [{ val: s.fJur, label: s.fJur }] : []),
       pickSource: (e) => { e.stopPropagation(); this.setState({ fSource: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
       pickVenue: (e) => { e.stopPropagation(); this.setState({ fVenue: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
@@ -1146,8 +1110,8 @@ class Component extends DCLogic {
       pickJur: (e) => { e.stopPropagation(); this.setState({ fJur: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
       anyFilter: s.fSource !== 'All' || s.fVenue !== 'All' || s.fTicker !== 'All' || s.fJur !== 'All',
       clearFilters: () => { this.setState({ fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', selIdx: 0 }); this.runSearch(true); },
-      countLine: s.searching ? 'searching…' : raw.length + ' receipts · ' + (s.apiDown ? 'demo data' : s.searchMs + ' ms'),
-      listLabel: s.apiDown ? 'Demo data · API unreachable' : qTrim ? 'Ranked results' : 'The record awaits a query',
+      countLine: s.searching ? 'searching…' : s.apiDown ? 'engine unreachable — retry (top right)' : raw.length + ' receipts · ' + s.searchMs + ' ms',
+      listLabel: s.apiDown ? 'Engine unreachable' : qTrim ? 'Ranked results' : 'The record awaits a query',
       results, hasResults: results.length > 0, noResults: results.length === 0 && !s.searching,
       emptyTitle: qTrim ? 'The record is silent on this.' : 'Start with a term.',
       emptyBody: qTrim ? 'No indexed document matches every term. Try fewer terms, or one of these:' : 'The record answers questions, not silence. Try one of these:',
@@ -1191,7 +1155,7 @@ class Component extends DCLogic {
       askSuggestions, hasAskSuggestions: askSuggestions.length > 0,
       askCitations, hasAskCitations: askCitations.length > 0,
       askRetrievedRows, askCitedCount, askRetrievedTotal: askRetrievedRows.length,
-      demoAskVisible: s.apiDown,
+      demoAskVisible: false, // T-035: illustrative answers are permanently off -- a receipts platform renders engine truth or nothing
       askSuggest: (e) => { this.askSend(e.currentTarget.dataset.q); },
       askSugStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', display: 'block', border: '1px solid #E7E4DA', borderRadius: '9px', padding: '9px 13px', fontSize: '13px', color: '#16150F', background: '#FAFAF7', lineHeight: 1.4 },
       chipStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#fff', borderRadius: '99px', padding: '6px 13px' },

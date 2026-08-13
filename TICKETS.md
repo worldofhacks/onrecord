@@ -55,25 +55,25 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 ### Wave 8 (5 parallel — disjoint file scopes; shared empty `onrecord/rag/__init__.py` across T-020/T-021/T-027 per the wave-2 auto-merge precedent)
 | id | title | status | deps | model |
 |----|-------|--------|------|-------|
-| T-018 | Corpus-version manifest — `make ingest V=2 [RAW=…]`, checksummed manifest, versioned scoreboard rows | backlog | — | cheap |
-| T-019 | k1/b sweep — NDCG@10 grid, curve artifact, defended-params docs | backlog | — | standard |
-| T-020 | RAG chunking — alternate windowings + window/overlap recall sweep | backlog | — | standard |
-| T-021 | Embeddings — provider adapter, id-keyed content-hash cache, fp16 store, cosine | backlog | — | standard |
-| T-027 | Claim segmentation authority — rag/claims.py (grounding + judge) | backlog | — | cheap |
+| T-018 | Corpus-version manifest — `make ingest V=2 [RAW=…]`, checksummed manifest, versioned scoreboard rows | done | — | cheap |
+| T-019 | k1/b sweep — NDCG@10 grid, curve artifact, defended-params docs | done | — | standard |
+| T-020 | RAG chunking — alternate windowings + window/overlap recall sweep | done | — | standard |
+| T-021 | Embeddings — provider adapter, id-keyed content-hash cache, fp16 store, cosine | done | — | standard |
+| T-027 | Claim segmentation authority — rag/claims.py (grounding + judge) | done | — | cheap |
 
 ### Wave 9 (4 parallel)
 | id | title | status | deps | model |
 |----|-------|--------|------|-------|
-| T-022 | Retrieval modes — semantic, hybrid RRF k=60, side-by-side report | backlog | T-018, T-020, T-021 | standard |
-| T-023 | Grounded answer pipeline — citations, grounding, refusal (library) | backlog | T-020, T-027 | capable |
-| T-025 | QA + unanswerable eval sets, refusal/false-refusal runner | backlog | T-018 | standard |
-| T-026 | Cross-family faithfulness judge + hand-label validation gate | backlog | T-018, T-027 | standard |
+| T-022 | Retrieval modes — semantic, hybrid RRF k=60, side-by-side report | done | T-018, T-020, T-021 | standard |
+| T-023 | Grounded answer pipeline — citations, grounding, refusal (library) | done | T-020, T-027 | capable |
+| T-025 | QA + unanswerable eval sets, refusal/false-refusal runner | done | T-018 | standard |
+| T-026 | Cross-family faithfulness judge + hand-label validation gate | done | T-018, T-027 | standard |
 
 ### Wave 10 (2 parallel — disjoint: onrecord/api.py vs ui/**)
 | id | title | status | deps | model |
 |----|-------|--------|------|-------|
-| T-024 | API unlock — live semantic\|hybrid, full /api/answer, 3 transitional re-pins | backlog | T-018, T-020, T-021, T-022, T-023 | capable |
-| T-028 | Ask view wired to the real /api/answer — citations, grounding, refusal, 503 states | backlog | — (builds to the pinned contract; verified post-merge) | standard |
+| T-024 | API unlock — live semantic\|hybrid, full /api/answer, 3 transitional re-pins | done | T-018, T-020, T-021, T-022, T-023 | capable |
+| T-028 | Ask view wired to the real /api/answer — citations, grounding, refusal, 503 states | done | — (builds to the pinned contract; verified post-merge) | standard |
 
 ### Non-ticket orchestrator/owner actions (epic 2)
 - **Judgment repair FIRST (adjudicated, plan-review C-4)**: re-pool + re-judge q1–q5 against corpus-v2 per `evalsets/judgment-session-2.md` §"FIRST: top up q1–q5" (already prepped, drift-guard-compatible resume) — HARD PRECONDITION for the official k1/b sweep run and every "Defended k1/b"/metrics README number. Measured context: BM25 NDCG@10 on v2 with v1-pooled judgments = 0.173 (pooling bias). The 0.5 NDCG gate stays as-is — still-red after re-judging is honest data, not a gate to weaken. Until then, ledger notes `make eval` exit-1 as EXPECTED on v2.
@@ -99,4 +99,7 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-029 | qa_eval real-seam test full-suite order dependence | done (merged wave-9 repair) | wave-9 integration |
 | T-030 | embed input-limit guard (33 filing sections > 8K tokens) | done (merged wave-9 repair) | operational embed run 1 |
 | T-031 | token-aware embedding request packing + Retry-After honoring | backlog | operational embed runs 2–3 |
-| T-032 | /api/prices + /api/tickers async-def-sync-body (T-024 I-1 class) | backlog | T-024 fix round |
+| T-032 | /api/prices + /api/tickers async-def-sync-body (T-024 I-1 class) | done | T-024 fix round |
+| T-033 | Mention-anchored ticker performance (paste.trade reference) | backlog | — | T-032, T-034 | standard |
+| T-034 | Price source repair — yahoo keyless primary (stooq bot-walled) | done | repair | — | standard |
+| T-035 | Remove ALL demo data from UI (search corpus + Ask illustrative) | done | repair | T-032 | standard |

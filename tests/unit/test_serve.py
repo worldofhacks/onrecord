@@ -784,3 +784,73 @@ def test_bootstrap_survives_corrupt_corpus_snapshot_never_crashes_startup(
         f"expected at least one ERROR-level log line describing the corpus-bootstrap "
         f"failure, got: {[(r.levelname, r.getMessage()) for r in caplog.records]}"
     )
+
+
+# ==========================================================================
+# AMENDMENT — T-032 (2026-08-13): /api/tickers + /api/prices were `async
+# def` with fully synchronous bodies — and /api/prices does REAL network IO
+# (yahoo, since T-034) on a cache miss, so one slow upstream fetch starved
+# the entire event loop: every concurrent request (search, health, UI
+# assets) queued behind it. Observed live: a user's hybrid search timed out
+# behind ticker-price fetches and the UI fell back to demo data. These pins
+# force the T-024 convention (plain `def` -> threadpool dispatch) onto both
+# routes and prove the loop stays live while a slow prices request runs.
+# ==========================================================================
+
+
+def test_tickers_and_prices_handlers_are_not_coroutine_functions():
+    # spec(T-032:AC-1)
+    import inspect
+
+    api_module = _api_module()
+    dispatch_modes = {}
+    for route in api_module.app.routes:
+        path = getattr(route, "path", "")
+        if path in ("/api/tickers", "/api/prices/{ticker}"):
+            dispatch_modes[path] = inspect.iscoroutinefunction(route.endpoint)
+
+    assert set(dispatch_modes) == {"/api/tickers", "/api/prices/{ticker}"}, (
+        f"expected both routes registered, found: {sorted(dispatch_modes)}"
+    )
+    offenders = [p for p, is_coro in dispatch_modes.items() if is_coro]
+    assert offenders == [], (
+        f"{offenders} are `async def` with synchronous bodies — they block the event "
+        f"loop for their full duration (T-024 I-1 defect class). Convert to plain "
+        f"`def` so Starlette dispatches them to the threadpool."
+    )
+
+
+def test_health_stays_responsive_while_slow_prices_request_is_in_flight(
+    tmp_path, monkeypatch
+):
+    # spec(T-032:AC-2)
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, SEARCH_DOCS)
+
+    def slow_api_payload(*args, **kwargs):
+        _time.sleep(1.2)
+        return {"ticker": "VST", "series": [], "significant_moves": []}
+
+    monkeypatch.setattr(api_module, "api_payload", slow_api_payload)
+
+    with _client(api_module, monkeypatch, index_dir=index_dir) as client:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            in_flight = pool.submit(client.get, "/api/prices/VST")
+            _time.sleep(0.25)  # let the slow prices request actually start
+
+            t0 = _time.monotonic()
+            health = client.get("/health")
+            elapsed = _time.monotonic() - t0
+
+            prices_response = in_flight.result(timeout=10)
+
+    assert health.status_code == 200
+    assert prices_response.status_code == 200
+    assert elapsed < 0.8, (
+        f"/health took {elapsed:.2f}s while a slow /api/prices request was in flight — "
+        f"the prices handler is blocking the event loop instead of running in the "
+        f"threadpool (T-032). A responsive loop answers /health in milliseconds."
+    )
