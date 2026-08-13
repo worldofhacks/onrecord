@@ -124,12 +124,12 @@ env lookup — the generator id's single source is T-023's
 `resolved_generator_model()`, reached only through the `_resolve_generator_
 model()` seam above.
 
-DEFAULT_JUDGE_MODEL (RESEARCH-REQUIRED AT PROVISIONING, ticket DoD): the
-literal value below is a placeholder that satisfies the frozen contract (a
-non-empty, openai-family, non-Claude id) so local/CI runs — which always
-inject a fake `judge_fn` — stay fully deterministic. The owner must verify
-the current, live model id (and its pricing) before this ships against a
-real `OPENAI_API_KEY` — never taken from training-data memory.
+DEFAULT_JUDGE_MODEL (RESOLVED at wave-10 integration, 2026-08-12 — ticket
+DoD's research-required gate): verified live-available, `gpt-5-mini`,
+satisfying the frozen contract (a non-empty, openai-family, non-Claude id).
+Local/CI runs stay fully deterministic regardless — they always inject a
+fake `judge_fn`, never a real `OPENAI_API_KEY`. Pricing should still be
+re-checked before any high-volume operational run.
 
 Secret hygiene (LESSONS.md T-014, locked): the key must never appear in any
 log record, exception, or repr. `default_judge`'s adapter silences the
@@ -729,13 +729,12 @@ def run_faithfulness(
 # AC-7 — default_judge (OpenAI chat-completions adapter) + model plumbing
 # --------------------------------------------------------------------------
 
-# RESEARCH-REQUIRED AT PROVISIONING (ticket DoD): verify the current, live
-# OpenAI model id and its pricing before this ships against a real
-# OPENAI_API_KEY -- never taken from training-data memory. This placeholder
-# satisfies the frozen contract (non-empty, openai-family, non-Claude) and
-# keeps every frozen test (which always injects a fake judge_fn or a
-# MockTransport) fully deterministic and keyless.
-DEFAULT_JUDGE_MODEL = "gpt-4o-mini"
+# RESOLVED at wave-10 integration (2026-08-12): verified gpt-5-mini is the
+# current, live OpenAI model id (ticket DoD's research-required gate).
+# Satisfies the frozen contract (non-empty, openai-family, non-Claude) and
+# every frozen test stays fully deterministic and keyless regardless (they
+# always inject a fake judge_fn or a MockTransport, never dial out).
+DEFAULT_JUDGE_MODEL = "gpt-5-mini"
 
 _OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 _JUDGE_MAX_RETRIES = 3  # retries beyond the initial attempt (<= 4 requests/call)

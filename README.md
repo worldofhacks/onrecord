@@ -72,8 +72,8 @@ message. CORS is open to `http://localhost:5173` (the UI's dev origin).
 | Endpoint | What it does |
 |---|---|
 | `GET /health` | Liveness check, always `200 {"status": "ok"}`. |
-| `GET /api/search?q=&mode=lexical&op=OR&k=20&source=&venue=&ticker=&jurisdiction=` | Lexical search (boolean OR/AND today; upgrades transparently to BM25 once T-011's `ranked_search` lands) with metadata filters, AND-combined when more than one is given. `mode=semantic`/`hybrid` return a `{"error": "available_wednesday"}` teaser; an unknown `mode` is `422`. |
-| `POST /api/answer` | Grounded Q&A ("Ask") stub — body `{"question", "mode", "k"}`; currently `200 {"error": "available_thursday"}`, `422` when `question` is missing. |
+| `GET /api/search?q=&mode=lexical&op=OR&k=20&source=&venue=&ticker=&jurisdiction=` | Lexical search is BM25-ranked with metadata filters, AND-combined when more than one is given. `mode=semantic`/`hybrid` (T-024) are LIVE: cosine/RRF retrieval over an embedding store, `503` naming the missing condition (`OPENAI_API_KEY`, an unbuilt store, a store/provider identity mismatch) when unconfigured — `mode=lexical` needs no key. An unknown `mode` is `422`. |
+| `POST /api/answer` | Grounded Q&A ("Ask", T-024) — body `{"question", "mode", "k"}`; retrieves per mode then generates a cited answer, `200` with the full T-023 answer shape (a refusal is a populated `refusal` object, not an error). `503` when the index is missing, or naming `ANTHROPIC_API_KEY` (no generator configured) or the semantic/hybrid retrieval condition; `mode=lexical` answers need no key at all (the keyless-lexical guarantee). `422` when `question` is missing. |
 | `GET /api/tickers` | Registered tickers (`corpus/registry.yaml`) grouped by sector, each with a live `receipt_count` and `last_receipt` date computed off the loaded index. |
 | `GET /api/metrics` | Parsed `artifacts/scoreboard.jsonl` eval history as a JSON array (`[]` when it doesn't exist yet). |
 
@@ -88,6 +88,27 @@ The same FastAPI app also serves the static UI and a prices endpoint
 | `GET /` | Serves `<ONRECORD_UI_DIR>/index.html` (default `ui/`). |
 | `GET /<any-other-path>` | Serves a matching static asset under `ONRECORD_UI_DIR` if one exists (e.g. `/support.js`, guessed content type); an unmatched extension-less path SPA-falls-back to `index.html`; an unmatched path with an extension `404`s. `/api/*` paths are never shadowed by this fallback. |
 | `GET /api/prices/{ticker}?range=365&threshold=5.0` | EOD price series + significant-move timeline joined to nearby receipts, via `onrecord.ingest.prices.api_payload`. Index-independent; an unsafe/unknown ticker `200`s with an empty series rather than erroring. |
+
+## Robustness
+
+Both retrieval paths — boolean AND/OR and BM25 — are exercised against the
+canonical edge-case query inventory: **empty**, **stopword-only**,
+**unicode** (punctuation/junk), **emoji-only**, **CJK**, **absent-terms**,
+and **very-long** queries, crossed with boolean AND/OR and BM25 ranking.
+Every case resolves gracefully (a clean empty/no-results response, never an
+uncaught exception or a 500) rather than merely being assumed safe.
+
+**Real-index verification**: run against the fully-built corpus-v2 index
+(289,536 docs: 288,578 county-meeting segments + 958 filings) on
+2026-08-12 — **24/24 cases passed** (`.tdd-swarm/progress.md`, "CORPUS-V2
+OFFICIAL" entry: "Robustness on final index 24/24 PASS").
+
+**Honest caveat**: county-meeting text is sourced from YouTube
+auto-captions, which are noisy by construction (misheard terms, missed
+punctuation). Per the design spec's Risks & fallbacks (§9): "noisy text is
+honest IR reality — metrics measure through it." Every number in this
+README, including the 24/24 above, is measured through that noise, not
+smoothed around it.
 
 ## Deploy (Railway, single service)
 
@@ -138,6 +159,55 @@ Both the index-missing and corpus-missing/corrupt cases degrade gracefully
 rather than crashing the deploy: with neither a usable index nor a usable
 corpus snapshot, `/api/search` and `/api/tickers` return a `503` with an
 actionable message while `/` (the UI) and `/health` keep serving normally.
+
+### Redeploy / rollback runbook
+
+```sh
+railway up --service onrecord   # from the repo root; the Railway service is
+                                 # NOT git-connected, so this is the only deploy trigger
+```
+
+Smoke-test after every deploy: `GET /health` (200), `GET
+/api/search?q=test&mode=lexical` (200), `POST /api/answer
+{"question": "...", "mode": "lexical"}` (200 or a 503 naming the missing
+condition — never a 500).
+
+Rollback: `git checkout <previous-good-commit-or-the-mvp-checkpoint-tag> &&
+railway up --service onrecord`.
+
+**Prod stays pinned to corpus/v1, lexical-only, for this epic.** Promoting
+corpus-v2 or the RAG surface (semantic/hybrid search, Ask) to production is
+a deliberate, owner-gated decision, not something this wave ships
+automatically — see `TICKETS.md`'s "Deferred items" section ("RAG-to-prod
+deploy — owner-gated, post-epic") for the measured cost/memory facts behind
+that call.
+
+### Running against corpus-v2 locally
+
+corpus-v2 (289,536 docs) is bigger than corpus-v1 and isn't shipped in the
+repo (its snapshot exceeds GitHub's 100 MB file limit — see `TICKETS.md`'s
+deferred items — so `corpus/v2/corpus.jsonl.gz` is gitignored; only
+`corpus/v2/manifest.json` is committed) and is never the default anywhere
+in `onrecord/api.py`. To rebuild it and point a local `uvicorn` at it:
+
+```sh
+make ingest V=2 RAW=<parsed-raw-dir>   # rebuilds corpus/v2/ + artifacts/index locally
+
+ONRECORD_CORPUS=corpus/v2/corpus.jsonl.gz \
+ONRECORD_INDEX=artifacts/index-v2 \
+ONRECORD_EMBED_STORE=artifacts/embeddings/<model> \
+ONRECORD_GENERATOR_MODEL=<generator-model-id> \
+ONRECORD_JUDGE_MODEL=<judge-model-id> \
+uv run uvicorn onrecord.api:app --reload
+```
+
+| Env var | Purpose |
+|---|---|
+| `ONRECORD_CORPUS` | Corpus snapshot path; point at `corpus/v2/corpus.jsonl.gz` to bootstrap/answer from v2 instead of the v1 default. |
+| `ONRECORD_INDEX` | Saved `InvertedIndex` directory; use a v2-specific path (e.g. `artifacts/index-v2`) so it never collides with the v1 index already saved at the default `artifacts/index`. |
+| `ONRECORD_EMBED_STORE` | Embedding-store directory backing `mode=semantic`/`hybrid`; must be built for the SAME corpus version being served — T-021's store/provider identity check `503`s on a mismatch rather than silently serving stale vectors. |
+| `ONRECORD_GENERATOR_MODEL` | Overrides the Claude generator model id `onrecord/rag/answer.py` resolves for `/api/answer` (its own pinned default otherwise). |
+| `ONRECORD_JUDGE_MODEL` | Overrides `onrecord/rag/judge.py`'s eval-harness judge model id (`DEFAULT_JUDGE_MODEL` otherwise). |
 
 ## Metrics report (reproducible)
 

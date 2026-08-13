@@ -162,9 +162,17 @@ $ curl -s '.../api/search?q=zzzznotarealterm&k=5'   → results: 0   (empty stat
 $ curl -s '.../api/search?q=&k=5'                   → results: 0   (empty-query state)
 ```
 
-**Search — validation + stub modes (drives the teasers)**
+**Search — validation + degraded modes**
 ```
-$ curl -s '.../api/search?q=x&mode=semantic'   → {"error":"available_wednesday"}  200
+$ curl -s '.../api/search?q=x&mode=semantic'   → 503 {"error": "the embedding provider is
+                                                  not configured — set OPENAI_API_KEY to
+                                                  enable mode=semantic and mode=hybrid
+                                                  (mode=lexical needs no key)"}
+                                                  (T-024 unlock, wave-10 merge — the
+                                                  removed `available_wednesday` stub used to
+                                                  200 here; now a real degradation-ladder
+                                                  503 naming the missing condition, or a real
+                                                  ranked result set once a store is provisioned)
 $ curl -so/dev/null -w '%{http_code}' '.../api/search?q=x&op=or'  → 422
 $ curl -so/dev/null -w '%{http_code}' '.../api/search?q=x&k=0'    → 422
 ```
@@ -205,8 +213,12 @@ tiles `P@10 0.31 (+0.19 vs a1b2c3d)` etc., red under 0.50 exactly as designed.
 ```
 $ curl -s -X POST http://127.0.0.1:8123/api/answer \
     -H 'Content-Type: application/json' -d '{"question":"test q","mode":"lexical","k":8}'
-{"error":"available_thursday"}   HTTP 200
+{"error":"no answer generator is configured — set ANTHROPIC_API_KEY to enable
+grounded answers (retrieval-only search needs no key)"}   HTTP 503
 ```
+(T-024 unlock, wave-10 merge — the removed `available_thursday` stub used to
+200 here; now a real degradation-ladder 503 naming the missing key, or the
+full PINNED-FOR-THURSDAY answer shape once `ANTHROPIC_API_KEY` is set.)
 
 **Prices — not built yet**
 ```
