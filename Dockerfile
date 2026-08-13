@@ -23,10 +23,17 @@ RUN uv sync --no-dev --no-install-project --frozen
 # extracted tree. Placed before the code COPY so code-only changes reuse
 # this layer from cache.
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Download to a file with resume-on-retry (-C - against GitHub's
+# range-supporting CDN), then extract: a plain `curl | tar` pipe cannot
+# survive a mid-stream reset, and one killed the first deploy attempt
+# (curl exit 56 at ~half of the 799MB embeddings asset). The temp file is
+# removed inside the same RUN, so it never lands in a committed layer.
 RUN mkdir -p artifacts corpus/v2 \
- && curl -fsSL https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/index-v2.tar.gz | tar -xz -C artifacts \
- && curl -fsSL https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/embeddings-v2.tar.gz | tar -xz -C artifacts \
- && curl -fsSL https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/corpus-v2.jsonl.gz -o corpus/v2/corpus.jsonl.gz
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/index-v2.tar.gz \
+ && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/embeddings-v2.tar.gz \
+ && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o corpus/v2/corpus.jsonl.gz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/corpus-v2.jsonl.gz
 
 # Now copy the rest of the repo (onrecord/, ui/, corpus/v1/corpus.jsonl.gz,
 # etc.) and do a final sync to install the project itself.
