@@ -1077,7 +1077,7 @@ def answer(request: AnswerRequest):  # NOT `async` -- see the module docstring
 
 
 @app.get("/api/tickers")
-async def tickers():
+def tickers():  # NOT `async` (T-032) -- CPU-bound index scan; threadpool dispatch
     index = _require_index()
     if index is None:
         return _missing_index_response()
@@ -1157,7 +1157,11 @@ async def metrics():
 
 
 @app.get("/api/prices/{ticker}")
-async def prices(ticker: str, range: int = 365, threshold: float = 5.0) -> dict:
+def prices(ticker: str, range: int = 365, threshold: float = 5.0) -> dict:
+    # NOT `async` (T-032) -- api_payload does REAL network IO (yahoo, since
+    # T-034) on a cache miss; on the event loop that starved every
+    # concurrent request (observed live: search timeouts -> UI demo-data
+    # fallback). Threadpool dispatch, same convention as search()/answer().
     corpus_path = getattr(app.state, "corpus_path", DEFAULT_CORPUS_PATH)
     cache_dir = getattr(app.state, "prices_cache_dir", DEFAULT_PRICES_CACHE_DIR)
     return api_payload(
