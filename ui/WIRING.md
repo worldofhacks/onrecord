@@ -24,12 +24,12 @@ prop override survives for cross-origin dev; see "Running it" below.
 | Filter pills | same request | `source`/`venue`/`ticker`/`jurisdiction` query params, AND-combined server-side |
 | Ticker pill options | `GET /api/tickers` | symbols with `receipt_count > 0`, busiest first |
 | Jurisdiction pill options | `GET /api/search` responses | accumulated from live results; one broad probe (`k=150`) fires the first time the dropdown opens |
-| Semantic / Hybrid teasers | `GET /api/search?mode=semantic\|hybrid` | contract check — API answers `{"error":"available_wednesday"}`; the designer's teaser copy shows. If the mode ever goes live the teaser says so instead. |
+| Search mode toggle (T-028) | `GET /api/search?mode=lexical\|semantic\|hybrid` | Lexical/Semantic/Hybrid is now a REAL segmented control (`fMode` state) — the chosen mode is what `doSearch()` sends, not always `lexical`. A 503 flat `{"error": ...}` on semantic/hybrid renders the "Not provisioned yet." card (§4 below) scoped to the results pane only; lexical/tickers/metrics stay live. Superseded: the old `probeMode()`/`teaser` banner mechanism (a separate k=1 probe fired only by clicking Semantic/Hybrid, decoupled from the actual results) is removed. |
 | Hero "N tickers" | `GET /api/tickers` | live total (102) |
 | **Tickers view** | `GET /api/tickers` once per mount | `sectors[].sector` (registry slug) → the design's own section headings, in the design's order · `tickers[].symbol`→card · `receipt_count`→count chip + section `countLine` · `last_receipt`→card teaser. `NAMES` kept as the detail-pane display fallback (the endpoint carries no company name). |
 | **Detail pane series** | `GET /api/prices/{sym}?range=365` | `series[]`→SVG path (x = `i/(n-1)*720`) · `significant_moves[]`→dashed rules + the "Significant moves" list · `significant_moves[].nearby_receipts[]`→the green receipt markers (`mkI` hover card, deduped by `id`) · last/first close→price + 1Y delta |
 | **Scoreboard** | `GET /api/metrics` | `metrics.mean["P@10"/"R@50"/"MRR"/"NDCG@10"]`→tiles + table · `timestamp[:10]`→date · `corpus_version` (or short `git_sha` when it is `"unversioned"`)→version · last row vs previous→tile deltas |
-| **Ask** | `POST /api/answer` `{question, mode:"lexical", k:8}` | `{"error":"available_thursday"}` → the design's existing QUEUED-FOR-THURSDAY card. Fires on Enter and on every suggestion chip. |
+| **Ask** (T-028) | `POST /api/answer` `{question, mode:"hybrid", k:8}` | The full PINNED-FOR-THURSDAY shape is rendered — see §9 below for the complete state → UI mapping. `available_thursday` teaser is gone. |
 
 **Removed:** `SECTORS`, `FEATURED`, `METRICS`, `hashSym`, `rng`, `series()`,
 `WEEK0`/`weekIndex` (the fake shock injection is gone with them).
@@ -99,9 +99,13 @@ It is never rendered while the API answers. `retry` re-runs the full bootstrap
 - **`GET /api/prices/{ticker}` does not exist yet** (404 today — a parallel
   ticket adds it). It is wired to the pinned payload and the panel degrades to
   the "not on the record yet" note. No change needed here when it lands.
-- **`POST /api/answer`** returns the Thursday stub; the queued card is the
-  teaser. The pinned real shape (`answer_id`/`text`/`citations`/`retrieved`/
-  `grounding`/`refusal`) is not rendered — that's the RAG ticket's job.
+- **`POST /api/answer`** — landed T-028 (see §9). The pinned real shape is
+  fully rendered; this ticket built against the PINNED-FOR-THURSDAY contract
+  in `tests/unit/test_api.py`, not against T-024's in-flight code (parallel
+  wave-10 tickets on disjoint scopes), so the states below are verified with a
+  local stub server standing in for the not-yet-merged real endpoint — the
+  orchestrator's post-wave-10-merge browser pass against the live unlocked API
+  is what confirms it end to end (V-1..V-3 in T-028's ticket).
 - **The API does not serve `ui/` yet.** `apiBase: ''` assumes it will. Until a
   static mount exists, use the override in "Running it".
 - **Hero stat strip: "24,412 documents indexed" and "31 jurisdictions" are
@@ -296,8 +300,15 @@ open throughout.
    and scrolls. Pick one → request carries the URL-encoded jurisdiction.
 10. Two filters at once → both params on one request, results satisfy both.
 11. `clear ✕` resets all four pills and re-searches.
-12. Click **Semantic** → amber teaser banner appears (a `mode=semantic` request
-    fires and returns `available_wednesday`). `✕` dismisses it. Same for Hybrid.
+12. **[T-028]** Click **Semantic** → the pill goes active (black/white) and a
+    `mode=semantic` request fires. Today (embeddings unprovisioned) it 503s and
+    the results pane shows a centered **"Not provisioned yet."** card naming
+    the condition from the flat error body — never a blank pane, never the
+    removed `available_wednesday` teaser copy. The header stays **`live
+    engine`** throughout (this is scoped to the results pane, not a whole-app
+    outage). Same for **Hybrid**. Clicking back to **Lexical** restores live
+    results immediately. EXECUTED against a local stub (see §9) — verified
+    2026-08-12; re-verify against the real unlocked endpoint post-wave-10.
 13. Click outside an open dropdown → it closes (root-click behavior intact).
 
 ### C. Keyboard
@@ -342,16 +353,38 @@ open throughout.
     newest-first with version + date. Values must match the JSONL's
     `metrics.mean` exactly.
 
-### G. Ask
-28. Go to **Ask**. The "PREVIEW THREAD · illustrative answers until /api/answer
-    lands Thursday" banner is present (this is the label on the two illustrative
-    Q&A blocks).
+### G. Ask (T-028 — landed; superseded items 28-30 below, EXECUTED against the
+local stub server described in §9; re-verify against the real unlocked
+endpoint post-wave-10-merge per the ticket's own V-1..V-3)
+28. Go to **Ask** with the API reachable. No "PREVIEW THREAD" banner, no
+    illustrative Q·1/Q·2 example threads, no "LIVE THURSDAY" pill by the input
+    — the view is empty except the suggestion chips and input bar until a
+    question is asked (the illustrative examples now render ONLY when
+    `apiDown` is true, clearly labeled "Demo data · API unreachable —
+    illustrative answers below", T-016 §7 convention). VERIFIED.
 29. Type a question, press Enter → Network shows `POST /api/answer` with body
-    **`{"question":"…","mode":"lexical","k":8}`** and response
-    `{"error":"available_thursday"}`. The Q·3 "QUEUED FOR THURSDAY" card appears
-    with your question; the input clears.
-30. Each suggestion chip fires the same POST. Hovering a citation `n` opens its
-    popover; "HOW THIS WAS ANSWERED" expands and the chevron rotates.
+    `{"question":"…","mode":"hybrid","k":8}`. **Grounded answer**: the answer
+    text renders with clickable `[n]` chips (real `<a href>` to the citation's
+    `deep_link`, opens in a new tab); the grounding badge shows
+    `<status> · <supported> of <total> claims checked` with mode/k alongside;
+    the sidebar "Sources" cards show one real card per citation (venue chip,
+    ref chip, snippet, date · source line, working deep-link CTA); "HOW THIS
+    WAS ANSWERED" expands to MODE/RETRIEVED/CITED counts and every
+    `retrieved[]` row, cited rows visually distinct (filled green dot +
+    `CITED [n]`) from uncited (outline dot + `retrieved`). Input clears on
+    send. VERIFIED.
+30. **Loading**: between submit and response, a pulsing-dot "Reading the
+    record…" line shows in place of the answer (no flash of the demo/empty
+    state). VERIFIED. **Refusal** (`refusal != null`): the "NOT IN THE RECORD"
+    card shows `refusal.reason` verbatim + every `refusal.suggestions[]` entry
+    as a tappable chip; clicking one re-asks immediately (new POST fires,
+    title/answer update in place). VERIFIED. **Whitespace-only text**
+    (`text.trim() === ''`, `refusal: null` — the T-023 fully-dangling-
+    generation edge case) → the distinct "NO ANSWER TEXT" note, never a blank
+    paragraph. VERIFIED. **503** (`{"error": ...}`) → the "NOT AVAILABLE YET"
+    card names the condition verbatim from the flat error body. VERIFIED.
+    Hovering a citation `n` opens its popover (venue/ref/date + snippet);
+    "HOW THIS WAS ANSWERED" chevron rotates on toggle. VERIFIED.
 
 ### H. API-down / demo data
 31. Stop uvicorn, click `retry` in the header. Chip goes amber and reads
@@ -370,3 +403,101 @@ open throughout.
     `▶` pill still pulses on hover.
 36. Console is free of errors and of dc-runtime `sc-interp sc-missing` warnings
     on every view.
+
+---
+
+## 9. T-028 — Ask view wired to the real `/api/answer`; search sends `mode`
+
+Plan-review C-5 found `ui/index.html`'s `askSend()` firing `POST /api/answer`
+and discarding the response body entirely, and the search fetch never sending
+`mode` (always hardcoded `lexical`). This ticket fixes both, building against
+the **PINNED-FOR-THURSDAY** contract in `tests/unit/test_api.py` (frozen since
+T-013) rather than against T-024's in-flight code — T-024 (the endpoint) and
+T-028 (this ticket, the UI) run wave-10-parallel on disjoint scopes
+(`onrecord/api.py` vs `ui/**`); T-028's browser verification is the
+orchestrator's post-wave-10-merge pass against the real unlocked endpoint.
+
+### 9.1 State → UI mapping (the pinned shape, verbatim keys)
+
+`askSend(question)` now RETAINS the parsed response in `state.askResp` and
+tracks `state.askStatus` (`'loading' | 'answer' | 'refusal' | 'empty' |
+'error'`), computed from the response:
+
+| Response shape | `askStatus` | Rendered as |
+|---|---|---|
+| in flight | `loading` | pulsing-dot "Reading the record…" line (reuses the existing `pulse` keyframe — no new animation) |
+| 200, `refusal` populated | `refusal` | the design's "NOT IN THE RECORD" card: `refusal.reason` verbatim + `refusal.suggestions[]` as tappable chips that re-ask (`askSuggest`, pre-existing handler, reused as-is) |
+| 200, `refusal: null`, `text.trim() === ''` | `empty` | a distinct "NO ANSWER TEXT" note — the T-023 review note's "fully-dangling generation yields a lone space" edge case; whitespace-only text is treated as absent, never rendered as a blank paragraph |
+| 200, `refusal: null`, real `text` | `answer` | grounding badge (`status` + `supported_claims`/`total_claims`, color reuses the venue palette: green/amber/red for grounded/partial/ungrounded) · `text` with `[n]` markers split into segments, citation markers rendered as real `<a href="{deep_link}">` chips (click opens the receipt; hover shows the venue/ref/date + snippet popover, the SAME `openCite`/`enterCite`/`leaveCite` mechanism the design shipped with, generalized from three hardcoded `pop1/pop2/pop3` booleans to a per-segment `open` computed from `citations[]` of any length) · the "HOW THIS WAS ANSWERED" drawer lists every `retrieved[]` row, `cited: true` rows visually distinguished (filled green dot + `CITED [n]`) from uncited (outline dot + `retrieved`) · the sidebar "Sources" cards, one per `citations[]` entry, real `deep_link` + `snippet` |
+| flat `{"error": ...}` (503) or a true network failure | `error` | the "NOT AVAILABLE YET" card, body = the flat error's `.error` string verbatim (names what's unprovisioned) with a generic fallback line only when no message is present |
+
+`citations[]` only carries `{n, doc_id, deep_link, snippet}` (no venue/date/
+ticker) per the pinned contract — venue chip, ref chip and date for both the
+inline popover and the sidebar cards are joined in from `retrieved[]` by
+`doc_id` (a plain object lookup, not positional), with the same neutral-chip
+fallback (`venueOf`) used everywhere else in the file if a join ever misses.
+
+Mode: Ask has no per-view mode control in the design, so `askSend` always
+sends `mode: "hybrid"` (the wiring map's documented default for "no mode
+control present" — distinct from the API's own bare-call default of
+`lexical`, which only matters for callers that omit `mode`; this UI always
+sends it explicitly, so the two defaults never conflict). `k` stays `8`.
+
+### 9.2 Removed
+
+The "PREVIEW THREAD · illustrative answers until /api/answer lands Thursday"
+banner, the two hardcoded illustrative Q&A example threads (utilities-hedging
+grounded example, Oracle/Oklo refusal example), the hardcoded 3-card "Sources
+· Q·1" sidebar mock, the "QUEUED FOR THURSDAY" card, and the "LIVE THURSDAY"
+pill next to the ask input are all gone from the live path. Per the T-016 §7
+demo-data convention, the two illustrative examples (banner + Q·1/Q·2 +
+sidebar mock) survive **only** when `state.apiDown` is true, now labeled
+honestly ("Demo data · API unreachable — illustrative answers below" /
+"Sources · Q·1 (demo)") instead of a Thursday-launch teaser.
+
+### 9.3 Search sends `mode`
+
+`doSearch()` now sends `mode: state.fMode` instead of a hardcoded `'lexical'`.
+The Lexical/Semantic/Hybrid segmented control (previously: a static "Lexical"
+label plus two buttons that only fired a decoupled `probeMode()` k=1 check and
+showed an amber teaser banner) is now a real 3-way toggle — clicking a mode
+sets `fMode` and re-runs the actual search. A 503 flat error on semantic/
+hybrid renders a centered "Not provisioned yet." card (reusing the empty-state
+card idiom already used for `noResults`/`noSectors`/`noMetrics`) naming the
+condition, scoped to the results pane only — it does **not** flip the whole
+app into `apiDown`/demo-data, since lexical search, tickers and metrics may
+still be fully live. A true network outage or a lexical-mode failure (the
+keyless-lexical guarantee means lexical should always work against a live
+index) still routes to the pre-existing whole-app `apiDown` fallback.
+
+### 9.4 Verification
+
+No UI unit-test harness exists (T-016/T-017 precedent, recorded in
+`tickets/T-028.md`). Verification performed:
+
+1. **Static**: `node --check` on the extracted `<script type="text/x-dc">`
+   body (syntax-valid); `sc-if`/`sc-for`/`div`/`span`/`section`/`aside`/`main`/
+   `p`/`a`/`button`/`svg` open/close tag counts balanced across the file.
+2. **Live DOM walkthrough**: `ui/` served via `python3 -m http.server 5173`,
+   pointed (via `__dcSetProps(__dcRootName(), {apiBase: '...'})` per §7 above)
+   at a throwaway stub `/api/*` server implementing the exact PINNED shape
+   (scratchpad-only, not committed) with magic question substrings selecting
+   `answer` / `refusal` / `empty` / `error` responses, plus `mode=semantic|
+   hybrid` 503s. Exercised in a real browser: grounded answer end-to-end
+   (citation chips open the real `deep_link`, hover popover, "HOW THIS WAS
+   ANSWERED" drawer with correct cited/uncited styling), refusal + suggestion
+   re-ask, whitespace-only-text empty state, 503 error card naming the
+   condition, loading state, search mode toggle (Lexical ↔ Semantic ↔ Hybrid)
+   including the "Not provisioned yet." card and its header staying `live
+   engine` throughout. Console checked for `dc-runtime` warnings after every
+   state transition — none from any T-028 binding (the pre-existing
+   `detMoves`/`detPath`/`detMarks` SVG placeholder-parse errors on first paint
+   are unrelated to this ticket — present in the untouched Tickers detail-pane
+   code, a streaming-placeholder artifact, not a T-028 regression). Tickers
+   and Scoreboard views spot-checked unaffected.
+3. Dual-file byte-identity: `cmp ui/index.html "ui/OnRecord App.dc.html"` —
+   identical. `git diff --stat -- ui/support.js` — empty (zero changes).
+
+The keys-dependent real-answer path (an actually-provisioned generator) is
+NOT verified here — that is the post-provisioning local smoke alongside
+T-024's eval item, per the ticket's own Test Plan.
