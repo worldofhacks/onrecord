@@ -72,8 +72,8 @@ message. CORS is open to `http://localhost:5173` (the UI's dev origin).
 | Endpoint | What it does |
 |---|---|
 | `GET /health` | Liveness check, always `200 {"status": "ok"}`. |
-| `GET /api/search?q=&mode=lexical&op=OR&k=20&source=&venue=&ticker=&jurisdiction=` | Lexical search (boolean OR/AND today; upgrades transparently to BM25 once T-011's `ranked_search` lands) with metadata filters, AND-combined when more than one is given. `mode=semantic`/`hybrid` return a `{"error": "available_wednesday"}` teaser; an unknown `mode` is `422`. |
-| `POST /api/answer` | Grounded Q&A ("Ask") stub — body `{"question", "mode", "k"}`; currently `200 {"error": "available_thursday"}`, `422` when `question` is missing. |
+| `GET /api/search?q=&mode=lexical&op=OR&k=20&source=&venue=&ticker=&jurisdiction=` | Lexical search is BM25-ranked with metadata filters, AND-combined when more than one is given. `mode=semantic`/`hybrid` (T-024) are LIVE: cosine/RRF retrieval over an embedding store, `503` naming the missing condition (`OPENAI_API_KEY`, an unbuilt store, a store/provider identity mismatch) when unconfigured — `mode=lexical` needs no key. An unknown `mode` is `422`. |
+| `POST /api/answer` | Grounded Q&A ("Ask", T-024) — body `{"question", "mode", "k"}`; retrieves per mode then generates a cited answer, `200` with the full T-023 answer shape (a refusal is a populated `refusal` object, not an error). `503` when the index is missing, or naming `ANTHROPIC_API_KEY` (no generator configured) or the semantic/hybrid retrieval condition; `mode=lexical` answers need no key at all (the keyless-lexical guarantee). `422` when `question` is missing. |
 | `GET /api/tickers` | Registered tickers (`corpus/registry.yaml`) grouped by sector, each with a live `receipt_count` and `last_receipt` date computed off the loaded index. |
 | `GET /api/metrics` | Parsed `artifacts/scoreboard.jsonl` eval history as a JSON array (`[]` when it doesn't exist yet). |
 
@@ -88,6 +88,29 @@ The same FastAPI app also serves the static UI and a prices endpoint
 | `GET /` | Serves `<ONRECORD_UI_DIR>/index.html` (default `ui/`). |
 | `GET /<any-other-path>` | Serves a matching static asset under `ONRECORD_UI_DIR` if one exists (e.g. `/support.js`, guessed content type); an unmatched extension-less path SPA-falls-back to `index.html`; an unmatched path with an extension `404`s. `/api/*` paths are never shadowed by this fallback. |
 | `GET /api/prices/{ticker}?range=365&threshold=5.0` | EOD price series + significant-move timeline joined to nearby receipts, via `onrecord.ingest.prices.api_payload`. Index-independent; an unsafe/unknown ticker `200`s with an empty series rather than erroring. |
+
+## Robustness
+
+Both retrieval paths — boolean AND/OR and BM25 — are exercised against the
+canonical edge-case query inventory: **empty**, **stopword-only**,
+**unicode** (punctuation/junk), **emoji-only**, **CJK**, **absent-terms**,
+and **very-long** queries, crossed with boolean AND/OR and BM25 ranking.
+Every case resolves gracefully (a clean empty/no-results response, never an
+uncaught exception or a 500) rather than merely being assumed safe.
+
+**Real-index verification**: run against the fully-built corpus-v2 index
+(289,536 docs: 288,578 county-meeting segments + 958 filings) on
+2026-08-12 — **24/24 cases passed**. Reproduce anytime: the probe is the
+same case matrix as the frozen unit suites (empty / stopword-only /
+unicode / emoji / CJK / absent-term / very-long × boolean AND/OR + BM25)
+executed against the live `artifacts/index`.
+
+**Honest caveat**: county-meeting text is sourced from YouTube
+auto-captions, which are noisy by construction (misheard terms, missed
+punctuation). Per the design spec's Risks & fallbacks (§9): "noisy text is
+honest IR reality — metrics measure through it." Every number in this
+README, including the 24/24 above, is measured through that noise, not
+smoothed around it.
 
 ## Deploy (Railway, single service)
 
@@ -139,13 +162,124 @@ rather than crashing the deploy: with neither a usable index nor a usable
 corpus snapshot, `/api/search` and `/api/tickers` return a `503` with an
 actionable message while `/` (the UI) and `/health` keep serving normally.
 
+### Redeploy / rollback runbook
+
+```sh
+railway up --service onrecord   # from the repo root; the Railway service is
+                                 # NOT git-connected, so this is the only deploy trigger
+```
+
+Smoke-test after every deploy: `GET /health` (200), `GET
+/api/search?q=test&mode=lexical` (200), `POST /api/answer
+{"question": "...", "mode": "lexical"}` (200 or a 503 naming the missing
+condition — never a 500).
+
+Rollback: `git checkout <previous-good-commit-or-the-mvp-checkpoint-tag> &&
+railway up --service onrecord`.
+
+**Prod stays pinned to corpus/v1, lexical-only, for this epic.** Promoting
+corpus-v2 or the RAG surface (semantic/hybrid search, Ask) to production is
+a deliberate, owner-gated decision, not something this wave ships
+automatically — see `TICKETS.md`'s "Deferred items" section ("RAG-to-prod
+deploy — owner-gated, post-epic") for the measured cost/memory facts behind
+that call.
+
+### Running against corpus-v2 locally
+
+corpus-v2 (289,536 docs) is bigger than corpus-v1 and isn't shipped in the
+repo (its snapshot exceeds GitHub's 100 MB file limit — see `TICKETS.md`'s
+deferred items — so `corpus/v2/corpus.jsonl.gz` is gitignored; only
+`corpus/v2/manifest.json` is committed) and is never the default anywhere
+in `onrecord/api.py`. To rebuild it and point a local `uvicorn` at it:
+
+```sh
+# Rebuilds corpus/v2/corpus.jsonl.gz + manifest AND writes the v2 index over
+# the default artifacts/index (the Makefile passes no --index-out). This is
+# the same invocation the official 2026-08-12 rebuild used. If you need to
+# keep a v1 index around, pass an explicit index dir via the module instead:
+#   uv run python -m onrecord.ingest.build_corpus --version 2 \
+#       --raw-dir <parsed-raw-dir> --index-out artifacts/index-v2
+make ingest V=2 RAW=<parsed-raw-dir>
+
+ONRECORD_CORPUS=corpus/v2/corpus.jsonl.gz \
+ONRECORD_EMBED_STORE=artifacts/embeddings \
+ONRECORD_GENERATOR_MODEL=<generator-model-id> \
+ONRECORD_JUDGE_MODEL=<judge-model-id> \
+uv run uvicorn onrecord.api:app --reload
+```
+
+(`ONRECORD_INDEX` is omitted above because `make ingest V=2` writes the
+default `artifacts/index`; set it only if you built the index into a
+non-default directory with `--index-out`. The manifest travels with the
+index, so `/api/stats` reports `corpus_version: v2` either way.)
+
+| Env var | Purpose |
+|---|---|
+| `ONRECORD_CORPUS` | Corpus snapshot path; point at `corpus/v2/corpus.jsonl.gz` to bootstrap/answer from v2 instead of the v1 default. |
+| `ONRECORD_INDEX` | Saved `InvertedIndex` directory (default `artifacts/index`). Only needed when the index was built into a non-default dir via `--index-out`. |
+| `ONRECORD_ANSWER_MIN_CONF` | Optional refusal gate for `/api/answer`: minimum top retrieval confidence below which the pipeline refuses *before* calling the generator. Unset = no gate. A malformed value surfaces as its own named 503 ladder condition rather than being echoed. |
+| `ONRECORD_EMBED_STORE` | Embedding-store directory backing `mode=semantic`/`hybrid`; must be built for the SAME corpus version being served — T-021's store/provider identity check `503`s on a mismatch rather than silently serving stale vectors. |
+| `ONRECORD_GENERATOR_MODEL` | Overrides the Claude generator model id `onrecord/rag/answer.py` resolves for `/api/answer` (its own pinned default otherwise). |
+| `ONRECORD_JUDGE_MODEL` | Overrides `onrecord/rag/judge.py`'s eval-harness judge model id (`DEFAULT_JUDGE_MODEL` otherwise). |
+
 ## Metrics report (reproducible)
 
-Hand-built judgment set: 5 queries, 65 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
+Judgment set: 15 queries, 255 blind pooled judgments (`evalsets/judgments.jsonl`), criteria written before candidates were seen. Session 1 (5 queries, 65 rows) was hand-labeled at the MVP checkpoint against corpus-v1; session 2 (q1–q5 re-pooled against corpus-v2 + 10 new queries, 190 rows) was labeled by an LLM judge (`gpt-5.2` — a different model family from the answer generator; provenance in `evalsets/judgment-session-2-provenance.json`) under the same protocol: criterion-first, pooled grep+BM25+random, shuffled, blind to source. Reproduce with `make eval` (boolean baseline, exits 1 — red by design) and the BM25 run in `docs/metrics.md`.
 
-| Retrieval | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
+| Retrieval (corpus-v2, 15 queries) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
-| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.003 | 0.000 |
-| BM25 (k1=1.5, b=0.75) | 0.520 | 0.540 | 0.612 | 0.949 | 1.000 | 0.622 |
+| Boolean OR (unranked, Day-1 baseline) | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 |
+| BM25 (k1=1.5, b=0.75) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
 
-MRR = 1.000: the top-ranked result was human-judged relevant on every query. The identical labels produce both rows — the delta is the ranking function, measured, not vibed. History: `evalsets/scoreboard.jsonl`.
+The identical labels produce both rows — the delta is the ranking function, measured, not vibed. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
+
+## Defended k1/b
+
+BM25's `k1` (tf-saturation strength) and `b` (length-normalization
+strength) are not picked by convention — they're swept over a grid and
+defended against the judgment set's mean NDCG@10, via
+`onrecord/eval/sweep.py`:
+
+```sh
+uv run python -m onrecord.eval.sweep \
+    --index artifacts/index \
+    --judgments evalsets/judgments.jsonl \
+    --out artifacts/sweeps/k1b_ndcg10.json \
+    [--plot]
+```
+
+The sweep scores every cell of `k1 ∈ {0.0, 0.25, …, 2.5}` ×
+`b ∈ {0.0, 0.1, …, 1.0}` (121 cells) as the mean NDCG@10 across every
+judgment query — a query that retrieves nothing still counts (as a 0.0)
+toward the mean, so the number below cannot be inflated by silently
+dropping hard queries. `--plot` additionally renders a heatmap PNG next to
+the JSON artifact.
+
+**Chosen (k1, b): 1.5, 0.75 — the shipped default, kept deliberately.**
+
+| k1 | b | Mean NDCG@10 |
+|---|---|---|
+| 1.25 | 0.8 | 0.7617 (grid best) |
+| 1.5 | 0.8 | 0.7611 |
+| 1.5 | 0.7 | 0.7425 |
+| **1.5** | **0.75 (shipped)** | **≈0.752 (between its grid neighbors)** |
+| 0.0 | any | 0.2937 (degenerate floor) |
+
+*Grid summary (corpus-v2, 289,536 docs, 15-query judgment set with q1–q5
+re-pooled against v2 per `tickets/T-019.md`'s hard precondition; run
+2026-08-12, 121 cells in 4.0 min, artifact + heatmap in
+`artifacts/sweeps/`, `corpus_version: v2` recorded in the artifact):
+the top of the surface is a broad plateau — the best five cells span
+`k1 ∈ [0.75, 1.75]` × `b ∈ [0.5, 0.9]` within 0.006 NDCG of each other.*
+
+**Defense:** the shipped default sits on the same plateau as the grid best —
+0.752 vs 0.7617, a gap of ~0.01 that is well within noise on a 15-query set —
+so changing frozen-tested defaults would be noise-chasing, not tuning. What
+the sweep *does* establish is that the parameters are load-bearing: every
+`k1 = 0` cell collapses to 0.294 (tf-saturation off means term frequency
+stops discriminating), and low-`b` cells lag because this corpus mixes
+75-second caption windows with filing sections a hundred times longer, so
+length normalization has real work to do. The defense of (1.5, 0.75) is
+therefore measured, not conventional: it is statistically indistinguishable
+from the best cell on this corpus's judgment set, and the sweep artifact
+regenerates in ~4 minutes whenever the judgment set grows.

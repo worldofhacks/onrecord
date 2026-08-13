@@ -74,6 +74,107 @@ pins T-015's additions (static UI serving, `/api/prices`, index bootstrap)
   tests can monkeypatch it directly.
 - CORS: allows `http://localhost:5173` (the commissioned UI's dev origin).
 
+Extension — the T-024 RAG unlock (live `mode=semantic|hybrid`, the real
+`POST /api/answer`, the degradation ladder)
+--------------------------------------------------------------------------
+`tests/unit/test_api_rag.py`'s module docstring is the frozen contract for
+everything in this section — read it in full (especially "MODULE SEAMS
+PINNED" and the ladder table) before touching the code below. Summary:
+
+- Module seams: `answer_mod` / `embeddings` / `retrieve` are imported at
+  module level and called through the module ATTRIBUTE, resolved fresh per
+  request (`embeddings.get_provider()`, `answer_mod.default_generator()`,
+  `answer_mod.answer(...)`) — the same monkeypatchable shape as the
+  `registry.load` seam above. Per-request provider resolution is required,
+  not stylistic: "store present but provider unconfigured" has to stay
+  distinguishable from "store missing", which a startup-cached provider
+  cannot do (it would send an operator hunting the wrong problem).
+- Env vars consumed here: `ONRECORD_EMBED_STORE` (embedding-store dir;
+  default `artifacts/embeddings/<resolved provider model>` — the same
+  default `onrecord/rag/judge.py` computes, so the two agree by
+  construction rather than by coincidence), `ONRECORD_ANSWER_MIN_CONF` (the
+  retrieval-confidence threshold threaded into `answer(min_confidence=...)`;
+  unset/blank → `None`, unparseable → a 503 naming the var, NEVER a silent
+  fall-back to "no threshold"), plus `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`,
+  which are read only inside the two library calls above, never here.
+- Startup state: identity chunks (`chunk_corpus(docs, 1, 0)` over the
+  loaded index's docs — T-020's locked invariant `len(doc_ids) == 1 <=>
+  chunk_id == doc_ids[0]`), plus a best-effort WARM load of the embedding
+  store into a DIRECTORY-KEYED cache (`app.state.embed_stores`). The cache
+  is keyed by directory rather than held in a single `embed_store` slot
+  because the default directory depends on the per-request resolved
+  provider model; a store that fails to load (missing dir, `CorruptStore`,
+  unresolvable provider) is simply absent from it and degrades to the
+  ladder's store rung — startup itself never raises, so a corrupt store can
+  never crash-loop the deploy (the T-015 bootstrap lesson).
+- `GET /api/search?mode=semantic|hybrid` runs T-022's `semantic_search` /
+  `hybrid_search` at FULL corpus depth, projects every hit's chunk_id
+  through the EXPLICIT `chunk.doc_ids[0]` projection, and then takes the
+  same filter-then-truncate tail as `mode=lexical`, so all three modes
+  share one 9-key result shape and one filter order. `op` stays whitelisted
+  (422 off-whitelist) but is ACCEPTED AND IGNORED for these modes: a
+  boolean candidate-set rule has no meaning for a cosine ranking or an RRF
+  fusion.
+- `POST /api/answer` is a DATA endpoint at the unlock — a missing index is
+  the same flat 503 `/api/search` and `/api/tickers` return. It retrieves
+  per `mode` (default `"lexical"`: T-022 measured hybrid at ~1.3-1.4 s
+  typical / ~3.5 s worst over 289K docs, so the lexical default is what
+  keeps a bare API call fast AND keyless — the UI sends `mode` explicitly),
+  threads the retrieval RANK ORDER and the REAL scores into
+  `answer_mod.answer(...)`, and returns that dict VERBATIM as the 200 body.
+  A refusal is a 200 with a populated `refusal` object, never an error.
+  `k` is bounded ABOVE as well as below (`MAX_ANSWER_K`): every retrieved
+  chunk's full text goes into the generator prompt, so an unbounded `k` is
+  an unauthenticated spend amplifier once a key is provisioned.
+- The degradation ladder: every rung is a flat `{"error": <str>}`
+  `JSONResponse` (always `application/json`) NAMING ITS CONDITION with a
+  token no other rung uses (`tests/unit/test_api_rag.py`'s `LADDER_TOKENS`
+  is the frozen vocabulary — these strings are the only diagnosis a human
+  ever sees, rendered verbatim by T-028's UI). Pinned on BOTH endpoints, in
+  both embedding-backed modes. CONFIGURATION rungs, all detectable before
+  any paid call: index missing → no embedding store (missing or corrupt) →
+  provider unconfigured (`OPENAI_API_KEY`) → store/provider identity
+  mismatch → partially embedded store (T-022 `MissingEmbeddings`) → stale
+  store rows (T-022 `StoreMismatch`) → generator unconfigured
+  (`ANTHROPIC_API_KEY`) → unparseable `ONRECORD_ANSWER_MIN_CONF`. RUNTIME
+  rungs, for a correctly configured dependency that fails mid-request:
+  `embedding request failed` (T-021 `EmbeddingRequestError` — a 429, 401,
+  5xx or transport failure that survived its retries) and `generation
+  failed` (ANY exception out of `generate_fn`, typed or not). Never an
+  `HTTPException` (which would wrap the body in `{"detail": ...}`), never
+  an uncaught 500 — an uncaught exception is a `text/plain` 500 with no
+  `.error` at all, which is exactly how T-028's card loses its diagnosis
+  on the most likely failure once keys are provisioned. Operator-, corpus-
+  and library-supplied strings go through `_safe_echo` before entering a
+  message (bounded, other rungs' tokens masked) so no echoed value can
+  break the partition; the raw value goes to the log.
+  `MinConfidenceWithoutScores` is the ladder's one 422 sibling: a
+  server-side WIRING fault (a threshold configured with no scores to
+  compare it against, which `answer()` would silently no-op), reported in
+  the same flat shape.
+- Handler shape: `search` and `answer` are plain `def`, so FastAPI runs
+  them in its THREADPOOL. Their bodies are fully synchronous and now do
+  seconds of blocking work — a blocking `httpx` embedding round trip with
+  retries, a full-matrix cosine pass, corpus-wide hash verification, and on
+  `/api/answer` a blocking LLM call (measured: 3179 ms for the
+  `mode=hybrid, k=8` request T-028's Ask view sends, at 289K docs). On the
+  event loop that stalls EVERY other request for the full duration
+  (measured: `/health` 6 ms → 1968 ms behind one in-flight request), which
+  is platform-health-check starvation arriving through a different door
+  than the T-015 crash-loop. `/health` and the other constant-time
+  handlers stay `async` — they belong on the loop and a threadpool hop
+  would only cost them. This shape is coupled to the store cache's lock
+  (see `_load_embed_store`): the cache was thread-safe only by accident
+  while every handler serialised on the loop.
+- The KEYLESS-LEXICAL guarantee: `mode=lexical` search AND answer work with
+  no embedding store on disk and no key of any kind, and a lexical request
+  never RESOLVES an embedding provider at all. The deployed corpus-v1
+  service and every deterministic test in this repo depend on it.
+- `/api/stats`'s `corpus_version` is T-018's `read_manifest` over the INDEX
+  dir with the literal `"unversioned"` fallback — never a fabricated
+  version string, and the same resolution `onrecord/eval/run.py` and
+  `onrecord/rag/modes.py` use.
+
 Run locally:
     uv run uvicorn onrecord.api:app --reload
 """
@@ -84,7 +185,9 @@ import json
 import logging
 import mimetypes
 import os
-from collections.abc import AsyncIterator
+import re
+import threading
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -92,14 +195,17 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from onrecord import registry
 from onrecord.index.inverted import InvertedIndex
-from onrecord.ingest.build_corpus import load_corpus_snapshot
+from onrecord.ingest.build_corpus import load_corpus_snapshot, read_manifest
 from onrecord.ingest.prices import api_payload
+from onrecord.rag import answer as answer_mod
+from onrecord.rag import embeddings, retrieve
+from onrecord.rag.chunking import Chunk, chunk_corpus
 from onrecord.search.boolean import boolean_search
-from onrecord.types import Doc
+from onrecord.types import Doc, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +214,17 @@ DEFAULT_UI_DIR = "ui/"
 DEFAULT_CORPUS_PATH = "corpus/v1/corpus.jsonl.gz"
 DEFAULT_PRICES_CACHE_DIR = "artifacts/prices"
 SCOREBOARD_PATH = os.environ.get("ONRECORD_SCOREBOARD", "artifacts/scoreboard.jsonl")
+
+# T-024. The store env var is canonically ONRECORD_EMBED_STORE (T-026 shipped
+# it in onrecord/rag/judge.py; the ticket's own ONRECORD_EMBEDDINGS prose is
+# superseded), and its default is spelled exactly as judge.py spells it, so a
+# store built with one tool is found by the other.
+EMBED_STORE_ENV = "ONRECORD_EMBED_STORE"
+DEFAULT_EMBED_STORE_ROOT = "artifacts/embeddings"
+MIN_CONFIDENCE_ENV = "ONRECORD_ANSWER_MIN_CONF"
+# The honest fallback when the index dir carries no usable T-018 manifest --
+# never a fabricated "v1" (orchestrator adjudication of plan-review I-12).
+UNVERSIONED_CORPUS = "unversioned"
 
 # 9-key result shape pinned by tests/unit/test_api.py's module docstring:
 # SearchResult's 3 fields (doc_id, score, snippet) + 6 of Doc's metadata
@@ -121,6 +238,97 @@ _RESULT_METADATA_FIELDS = (
     "ticker",
     "deep_link",
 )
+
+# --------------------------------------------------------------------------
+# T-024 degradation ladder (AC-3): one flat 503 per condition, each message
+# NAMING its own condition in words no other rung uses -- these strings are
+# the only diagnosis an operator (or T-028's UI) ever sees. The frozen
+# vocabulary lives in tests/unit/test_api_rag.py's LADDER_TOKENS.
+# --------------------------------------------------------------------------
+
+
+class MinConfidenceWithoutScores(Exception):
+    """A `min_confidence` threshold is configured but retrieval produced no
+    scores to compare it against — `answer()` would silently no-op the gate,
+    shipping ungrounded answers from a box whose operator believes the gate is
+    on (T-023 review concern (c); AMENDMENT 2026-08-12). A NAMED type because
+    `answer()` already raises a bare `ValueError` for its own scores/chunks
+    length mismatch, and the two must stay distinguishable at the ladder.
+    Mapped to a flat 422: it is a server-side WIRING fault, not a complaint
+    about the request body."""
+
+
+class _Degradation(Exception):
+    """An internal ladder signal carrying the flat response body it becomes.
+
+    Raised by the resolution helpers below (which sit several frames under a
+    route handler) and converted at the route boundary, so no helper has to
+    return a union of "value or response" and no rung can leak as an uncaught
+    500."""
+
+    def __init__(self, message: str, status_code: int = 503) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+    def response(self) -> JSONResponse:
+        return _flat_error(self.status_code, self.message)
+
+
+def _flat_error(status_code: int, message: str) -> JSONResponse:
+    """The frozen error shape: a FLAT `{"error": ...}` `JSONResponse`, never
+    `HTTPException` (which wraps the body in `{"detail": ...}`), and always
+    `application/json` — an uncaught exception becomes a `text/plain` 500
+    whose body has no `.error` at all, which is exactly how T-028's cards
+    lose their diagnosis."""
+    return JSONResponse(status_code=status_code, content={"error": message})
+
+
+# The ladder's condition vocabulary, restated here on purpose: it is the
+# CONTRACT (tests/unit/test_api_rag.py's LADDER_TOKENS), and `_safe_echo`
+# uses it to enforce the partition property structurally rather than leaving
+# it to the discipline of whoever writes the next message.
+_LADDER_TOKENS = (
+    "index not loaded",
+    "no embedding store",
+    "OPENAI_API_KEY",
+    "identity mismatch",
+    "not embedded",
+    "stale",
+    "ANTHROPIC_API_KEY",
+    "ONRECORD_ANSWER_MIN_CONF",
+    "embedding request failed",
+    "generation failed",
+)
+
+_ECHO_LIMIT = 120
+
+
+def _safe_echo(value: object, *, limit: int = _ECHO_LIMIT) -> str:
+    """Bound and neutralise an operator-, corpus- or library-supplied string
+    before interpolating it into a ladder message.
+
+    Two properties, both learned from the review:
+
+    1. **The partition holds.** Every rung names exactly ONE condition, and
+       every rung assertion in the frozen suite rests on that. An echoed
+       value the ladder never accounted for silently breaks it — a store
+       directory like `/srv/embeddings-stale-2025-01/`, a model id someone
+       suffixed, a library message quoting corpus text. Each rung's own token
+       comes from the CONSTANT part of its message, so masking every token
+       inside the echo is always the right move.
+    2. **The body is bounded.** A 4 KB environment value must not become a
+       4 KB error body handed to an anonymous caller.
+
+    The full, unmasked value always goes to the log, where the operator can
+    read it and an anonymous caller cannot."""
+    text = str(value)
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    for token in _LADDER_TOKENS:
+        text = re.sub(re.escape(token), "…", text, flags=re.IGNORECASE)
+    return text
+
 
 # --------------------------------------------------------------------------
 # index lifecycle (AC-5): re-read ONRECORD_INDEX at startup *call* time, not
@@ -175,7 +383,26 @@ def _bootstrap_index_from_corpus(index_dir: Path, corpus_path: Path) -> Inverted
     return index
 
 
-def _compute_stats(index: InvertedIndex) -> dict:
+def _corpus_version(index_dir: str | Path) -> str:
+    """`corpus_version` from T-018's `read_manifest` over the INDEX dir — the
+    same artifact the counts themselves come from, so the number and the
+    version on the UI's hero strip always describe the same corpus (T-024
+    re-pin #3).
+
+    Every failure mode `read_manifest`'s tolerant contract collapses to `None`
+    (no manifest, unreadable/corrupt JSON, JSON that is not an object), plus a
+    manifest without the key, is the literal `"unversioned"` — never a
+    fabricated `"v1"`. Spelled exactly as `onrecord/eval/run.py::
+    _corpus_version` and `onrecord/rag/modes.py` spell it, so `/api/stats` and
+    the scoreboard agree by construction (orchestrator adjudication of
+    plan-review I-12)."""
+    manifest = read_manifest(index_dir)
+    if manifest is None:
+        return UNVERSIONED_CORPUS
+    return manifest.get("corpus_version", UNVERSIONED_CORPUS)
+
+
+def _compute_stats(index: InvertedIndex, index_dir: str | Path) -> dict:
     """One-time stats computation (T-017) over every doc in `index`, mirroring
     `/api/tickers`'s existing `index.get_doc(i)` enumeration idiom. Called
     once at ASGI startup and cached on `app.state.stats_cache` — never
@@ -195,8 +422,44 @@ def _compute_stats(index: InvertedIndex) -> dict:
         "jurisdictions": len(jurisdictions),
         "tickers": len(tickers),
         "sources": sources,
-        "corpus_version": "v1",
+        "corpus_version": _corpus_version(index_dir),
     }
+
+
+def _identity_chunks(index: InvertedIndex | None) -> list[Chunk]:
+    """The shipped chunking: identity chunks over the loaded index's docs
+    (`chunk_corpus(docs, 1, 0)`, T-020's locked invariant `len(doc_ids) == 1
+    <=> chunk_id == doc_ids[0]`), derived once at startup.
+
+    Retrieval keys everything by chunk_id and this module projects back with
+    `chunk.doc_ids[0]`, so these chunks are the only place the two id spaces
+    meet. The invariant is not re-asserted here: `chunk_corpus(docs, 1, 0)`
+    produces it by construction, and T-022's `hybrid_search` guards it
+    corpus-wide (`NonIdentityChunking`, laddered below) for anything that
+    ever changes the windowing."""
+    if index is None:
+        return []
+    docs = [index.get_doc(i) for i in range(index.doc_count())]
+    return chunk_corpus(docs, 1, 0)
+
+
+def _warm_embed_store() -> None:
+    """Best-effort startup preload of the embedding store into the
+    directory-keyed cache, so the first semantic/hybrid request does not pay
+    for a full matrix read.
+
+    EVERY failure is swallowed: no store configured, an unresolvable provider
+    on a keyless box, a missing directory, a `CorruptStore`. The per-request
+    path re-resolves and reports the precise ladder rung; a startup that
+    raised here would crash-loop the deploy instead (the T-015 corpus-snapshot
+    lesson), and the keyless-lexical guarantee requires this box to keep
+    serving regardless."""
+    try:
+        _load_embed_store(_embed_store_dir(embeddings.get_provider()))
+    except Exception as exc:
+        logger.info(
+            "no embedding store warmed at startup (%s); lexical retrieval is unaffected", exc
+        )
 
 
 @asynccontextmanager
@@ -232,7 +495,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # T-017: computed once here (not per-request) and cached; `None` when
     # no index loaded, mirroring the existing missing-index 503 contract.
-    app.state.stats_cache = _compute_stats(app.state.index) if app.state.index is not None else None
+    app.state.stats_cache = (
+        _compute_stats(app.state.index, index_dir) if app.state.index is not None else None
+    )
+
+    # T-024: the RAG state. Chunks are derived from the index that was just
+    # loaded (never from a separate corpus read), so the two can never
+    # disagree about what is retrievable; the store cache starts empty and is
+    # warmed below on a best-effort basis.
+    app.state.chunks = _identity_chunks(app.state.index)
+    app.state.chunks_by_id = {chunk.chunk_id: chunk for chunk in app.state.chunks}
+    app.state.embed_stores = {}
+    _warm_embed_store()
     yield
 
 
@@ -255,6 +529,194 @@ def _missing_index_response() -> JSONResponse:
         status_code=503,
         content={"error": "index not loaded — build one with `make ingest` or set ONRECORD_INDEX"},
     )
+
+
+# --------------------------------------------------------------------------
+# T-024 embedding-side resolution: provider -> store -> identity, each step a
+# ladder rung of its own. Resolved FRESH PER REQUEST through the module seams
+# (see the module docstring): a provider folded into a startup-time
+# `embed_store = None` would report "store missing" for a missing key.
+# --------------------------------------------------------------------------
+
+
+# Serialises the load-and-insert into `app.state.embed_stores` (see
+# `_load_embed_store`). Module level, not per-app-instance: it guards the
+# operation, and there is exactly one `app`.
+_EMBED_STORE_LOCK = threading.Lock()
+
+
+def _chunks() -> list[Chunk]:
+    return getattr(app.state, "chunks", [])
+
+
+def _chunks_by_id() -> dict[str, Chunk]:
+    return getattr(app.state, "chunks_by_id", {})
+
+
+def _embed_store_dir(provider: embeddings.EmbeddingProvider) -> Path:
+    """`ONRECORD_EMBED_STORE`, else `artifacts/embeddings/<resolved model>` —
+    byte-for-byte the default `onrecord/rag/judge.py` computes, so the API and
+    the eval harness look in the same place for the same store."""
+    configured = os.environ.get(EMBED_STORE_ENV)
+    if configured:
+        return Path(configured)
+    return Path(DEFAULT_EMBED_STORE_ROOT) / provider.model
+
+
+def _load_embed_store(directory: Path) -> embeddings.EmbeddingStore:
+    """Load the T-021 store at `directory`, caching it BY DIRECTORY on
+    `app.state`.
+
+    Cached because a real store is a multi-hundred-megabyte matrix read (848
+    MB at v2 scale), and keyed by directory rather than kept in one slot
+    because the default directory depends on the per-request resolved
+    provider model. Failures are never cached: a missing directory fails
+    fast, and an operator who builds the store mid-flight should not have to
+    restart the process. A store that LOADED, on the other hand, is held for
+    the life of the process, exactly as the index is — re-embedding in place
+    needs a restart. Every failure mode (missing dir, missing file,
+    `CorruptStore`) is the SAME rung: a corrupt store degrades exactly like an
+    absent one, so it never serves mis-mapped receipts and never crash-loops
+    startup.
+
+    THREAD SAFETY (code review I-1, coupled to the `def` handlers): the
+    handlers run in FastAPI's threadpool, so a cold-cache burst arrives here
+    genuinely concurrently. Without the lock, N workers each start their own
+    multi-hundred-megabyte read of the same store; without the re-check
+    INSIDE the lock, they merely do it one after another, which is no better.
+    The fast path stays lock-free — the lock is held across a long read, and
+    a warm request must never queue behind one."""
+    key = str(directory)
+    cache = getattr(app.state, "embed_stores", None)
+    if cache is not None:
+        store = cache.get(key)
+        if store is not None:
+            return store
+
+    with _EMBED_STORE_LOCK:
+        cache = getattr(app.state, "embed_stores", None)
+        if cache is None:
+            cache = {}
+            app.state.embed_stores = cache
+        # Re-check under the lock: every worker that missed the fast path is
+        # queued here, and all but the first must take what the first loaded.
+        store = cache.get(key)
+        if store is not None:
+            return store
+
+        try:
+            store = embeddings.EmbeddingStore.load(directory)
+        except Exception as exc:
+            logger.warning("embedding store at %s is unavailable: %s", directory, exc)
+            raise _Degradation(
+                f"no embedding store at {_safe_echo(directory)} — build one, or point "
+                f"{EMBED_STORE_ENV} at an existing store"
+            ) from exc
+
+        cache[key] = store
+        return store
+
+
+def _require_store_identity(
+    store: embeddings.EmbeddingStore, provider: embeddings.EmbeddingProvider
+) -> None:
+    """A store built by one model queried with another's vectors returns
+    meaningless numbers, not weak matches — a WRONG receipt, the product's
+    worst failure. The rung names BOTH sides so an operator can see which one
+    to fix."""
+    if store.model == provider.model and store.dim == provider.dim:
+        return
+    raise _Degradation(
+        f"embedding store identity mismatch: the store was built with "
+        f"model={_safe_echo(store.model)!r} (dim={store.dim}), but the resolved provider is "
+        f"model={_safe_echo(provider.model)!r} (dim={provider.dim}) — re-embed the corpus "
+        f"with this provider, or point {EMBED_STORE_ENV} at the store that matches it"
+    )
+
+
+def _embedding_context() -> tuple[embeddings.EmbeddingStore, embeddings.EmbeddingProvider]:
+    """`(store, provider)` for the embedding-backed modes, or the first ladder
+    rung that blocks them.
+
+    Provider FIRST: resolving it is free (no network, no spend — construction
+    only reads a key), and it is what the default store location is computed
+    from, so a keyless box reports the key rather than a store it could never
+    have located anyway."""
+    try:
+        provider = embeddings.get_provider()
+    except embeddings.ProviderNotConfigured as exc:
+        raise _Degradation(
+            "the embedding provider is not configured — set OPENAI_API_KEY to enable "
+            "mode=semantic and mode=hybrid (mode=lexical needs no key)"
+        ) from exc
+
+    store = _load_embed_store(_embed_store_dir(provider))
+    _require_store_identity(store, provider)
+    return store, provider
+
+
+def _embedding_hits(index: InvertedIndex, mode: str, query: str, k: int) -> list[SearchResult]:
+    """T-022 retrieval for `mode`, with every typed error mapped onto its OWN
+    rung (AMENDMENT per T-022's test review I-2, extended by code review I-2):
+    a partially-embedded store, a stale store and a FAILED EMBEDDING REQUEST
+    must each name their condition as a flat 503, never escape as an uncaught
+    `text/plain` 500 — and the operator's fix differs in each case."""
+    store, provider = _embedding_context()
+    chunks = _chunks()
+    try:
+        if mode == "semantic":
+            return retrieve.semantic_search(store, chunks, query, provider, k=k)
+        return retrieve.hybrid_search(index, store, chunks, query, provider, k=k)
+    except retrieve.MissingEmbeddings as exc:
+        raise _Degradation(
+            f"corpus chunks are not embedded in the configured store ({_safe_echo(exc)}) — "
+            f"re-run the embedding build so every chunk has a row"
+        ) from exc
+    except retrieve.StoreMismatch as exc:
+        raise _Degradation(
+            f"the embedding store is stale ({_safe_echo(exc)}) — re-embed the chunks whose "
+            f"text changed"
+        ) from exc
+    except retrieve.NonIdentityChunking as exc:
+        raise _Degradation(
+            f"retrieval requires identity chunking over the loaded corpus ({_safe_echo(exc)})"
+        ) from exc
+    except embeddings.EmbeddingRequestError as exc:
+        # A CONFIGURATION-clean provider that failed MID-REQUEST: a 429, a
+        # 401, a 5xx or a transport error that survived T-021's own retries.
+        # Every rung above is detectable before any paid call; this one is
+        # the most likely thing to happen once keys are provisioned, and it
+        # was measured escaping as a text/plain 500 that stripped T-028's
+        # card of its diagnosis.
+        logger.warning("embedding request failed during %s retrieval: %s", mode, exc)
+        raise _Degradation(
+            f"embedding request failed ({_safe_echo(exc)}) — the embedding provider did not "
+            f"answer; this is usually a rate limit or an expired key, and it is worth "
+            f"retrying shortly"
+        ) from exc
+
+
+def _project_to_doc_ids(results: list[SearchResult]) -> list[SearchResult]:
+    """Project retrieval's chunk_id-keyed hits into the corpus doc id space
+    through the EXPLICIT `chunk.doc_ids[0]` projection (orchestrator
+    adjudication of plan-review I-11), so the shared filter/serialise tail
+    resolves every result through `index.get_doc` exactly as the lexical path
+    does. Under the shipped identity chunking the two ids are equal — the
+    projection is what keeps that an invariant rather than a coincidence."""
+    chunks_by_id = _chunks_by_id()
+    projected: list[SearchResult] = []
+    for result in results:
+        chunk = chunks_by_id.get(result.doc_id)
+        if chunk is None:
+            # A hit with no chunk cannot be projected onto a corpus doc, so it
+            # cannot carry a receipt: dropping it is the conservative choice.
+            # Unreachable while chunks and retrieval share one startup
+            # snapshot, which they do.
+            continue
+        projected.append(
+            SearchResult(doc_id=chunk.doc_ids[0], score=result.score, snippet=result.snippet)
+        )
+    return projected
 
 
 # --------------------------------------------------------------------------
@@ -313,8 +775,36 @@ def _apply_filters(
     return [hit for hit in hits if _matches(index.get_doc(hit.doc_id))]
 
 
+def _filtered_results(
+    index: InvertedIndex,
+    hits: list,
+    *,
+    query: str,
+    mode: str,
+    k: int,
+    source: str | None,
+    venue: str | None,
+    ticker: str | None,
+    jurisdiction: str | None,
+) -> dict:
+    """The shared `/api/search` tail: AND-combined metadata filters, THEN
+    truncation to `k`, then the locked 9-key result dicts. One tail for all
+    three modes (T-024) — the filter-then-truncate order and the result shape
+    are pinned identically for every mode, so they must not be re-implemented
+    per mode."""
+    hits = _apply_filters(
+        hits, index, source=source, venue=venue, ticker=ticker, jurisdiction=jurisdiction
+    )
+    hits = hits[:k]
+
+    results = [
+        _doc_to_result_dict(index.get_doc(hit.doc_id), hit.score, hit.snippet) for hit in hits
+    ]
+    return {"query": query, "mode": mode, "results": results}
+
+
 @app.get("/api/search")
-async def search(
+def search(  # NOT `async` -- see the module docstring's threadpool note
     q: str = "",
     mode: Literal["lexical", "semantic", "hybrid"] = "lexical",
     op: Literal["AND", "OR"] = "OR",
@@ -324,12 +814,46 @@ async def search(
     ticker: str | None = None,
     jurisdiction: str | None = None,
 ):
-    if mode in ("semantic", "hybrid"):
-        return {"error": "available_wednesday"}
-
     index = _require_index()
     if index is None:
         return _missing_index_response()
+
+    if mode in ("semantic", "hybrid"):
+        # T-024. `op` is accepted and deliberately IGNORED on these modes (a
+        # documented accept-and-ignore, not an oversight): it is a boolean
+        # candidate-set rule, and neither a cosine ranking nor an RRF fusion
+        # has a conjunctive candidate set to narrow. It stays VALIDATED
+        # though -- a malformed request is still a malformed request (422).
+        #
+        # Ranking DEPTH follows the filters. With any metadata filter set,
+        # retrieval runs at FULL corpus depth (as the BM25 path below does):
+        # an unbounded number of higher-ranked docs can be filtered out, and
+        # the pinned order is filter-THEN-truncate. With NO filter the served
+        # results are just the first `k` of the ranking, and T-021's
+        # `cosine_top_k` is documented to be bit-for-bit the full sort's
+        # prefix (ties included), so asking for `k` is exactly equivalent --
+        # and it keeps an unfiltered query from paying T-022's per-result
+        # hash verification over the whole corpus, which is the cost the
+        # orchestrator's result-scoped-verification ruling exists to avoid.
+        # The hits are then projected out of the chunk_id space into the
+        # corpus doc id space, so the tail below is literally shared.
+        filtered = any(value is not None for value in (source, venue, ticker, jurisdiction))
+        depth = max(len(_chunks()), 1) if filtered else k
+        try:
+            hits = _project_to_doc_ids(_embedding_hits(index, mode, q, depth))
+        except _Degradation as exc:
+            return exc.response()
+        return _filtered_results(
+            index,
+            hits,
+            query=q,
+            mode=mode,
+            k=k,
+            source=source,
+            venue=venue,
+            ticker=ticker,
+            jurisdiction=jurisdiction,
+        )
 
     ranked_search = _resolve_search_fn()
     if ranked_search is not None:
@@ -356,32 +880,195 @@ async def search(
     else:
         hits = boolean_search(index, q, op)
 
-    hits = _apply_filters(
-        hits, index, source=source, venue=venue, ticker=ticker, jurisdiction=jurisdiction
+    return _filtered_results(
+        index,
+        hits,
+        query=q,
+        mode=mode,
+        k=k,
+        source=source,
+        venue=venue,
+        ticker=ticker,
+        jurisdiction=jurisdiction,
     )
-    hits = hits[:k]
-
-    results = [
-        _doc_to_result_dict(index.get_doc(hit.doc_id), hit.score, hit.snippet) for hit in hits
-    ]
-    return {"query": q, "mode": mode, "results": results}
 
 
 # --------------------------------------------------------------------------
-# POST /api/answer (stub — real grounded Q&A lands Thursday, see the ticket's
-# module docstring "PINNED-FOR-THURSDAY" shape)
+# POST /api/answer (T-024) -- the real grounded path: retrieve per mode, then
+# T-023's answer() over the resolved generator. Its returned dict IS the 200
+# body, verbatim (the PINNED-FOR-THURSDAY shape); a refusal is a 200 with a
+# populated `refusal` object, because a refusal is an answer, not an error.
 # --------------------------------------------------------------------------
+
+
+MAX_ANSWER_K = 100
 
 
 class AnswerRequest(BaseModel):
     question: str
-    mode: str = "lexical"
-    k: int = 10
+    mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
+    # `ge=1` mirrors /api/search's frozen `k` convention (and onrecord/cli.py's
+    # `--k`); the T-013-era stub accepted any int because it never retrieved.
+    #
+    # `le` is the code review's Minor-3: this endpoint is no longer a stub, and
+    # `k` sizes the set whose FULL TEXT goes into the generator prompt —
+    # measured at 1.96 M characters for `k=1000000000` on a 405-doc index, so
+    # at corpus scale one unauthenticated request would hand a paid generator
+    # something approaching the whole corpus. 100 is comfortably above every
+    # real caller (T-028's Ask view sends 8; /api/search's own default depth
+    # is 20). /api/search's unbounded `k` is T-013-frozen and spends CPU
+    # rather than money — re-pinning it belongs to the wave-10 checklist.
+    k: int = Field(default=10, ge=1, le=MAX_ANSWER_K)
+
+
+def _min_confidence() -> float | None:
+    """`ONRECORD_ANSWER_MIN_CONF` as a float; unset or blank → `None` (NO
+    threshold — never an invented default, which would refuse real questions
+    on a box whose operator never configured a gate).
+
+    A value that does not parse is a 503 naming the var, never a silent
+    fall-back to "no threshold": a configured grounding gate that quietly
+    evaporates ships ungrounded answers from a box whose operator believes the
+    gate is on. 503 rather than 422 because this is a SERVER
+    misconfiguration, ladder-consistent with the two key rungs.
+
+    The offending value is LOGGED, never echoed into the response (code
+    review Minor-5): it reaches an anonymous caller, it is unbounded, and an
+    operator string that happens to contain another rung's word would make
+    this message name two conditions. The operator reads their own logs; the
+    caller only needs to know which variable is wrong."""
+    raw = os.environ.get(MIN_CONFIDENCE_ENV)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        logger.warning("%s is not a valid float: %r", MIN_CONFIDENCE_ENV, raw)
+        raise _Degradation(
+            f"{MIN_CONFIDENCE_ENV} is not a valid float — set it to a number such as 0.25, "
+            f"or unset it to run without a retrieval-confidence gate (the value it is set to "
+            f"is in the server log)"
+        ) from exc
+
+
+def _resolve_generator() -> Callable[[str], str]:
+    """T-023's generator, resolved fresh per request through the module seam
+    and wrapped so a RUNTIME failure is a rung rather than a 500.
+
+    Resolution failure and call failure are two different conditions with two
+    different fixes: the first means no key is configured (an operator sets
+    one), the second means a configured generator did not complete — an
+    Anthropic overload, a rate limit, a timeout, a transport reset — which is
+    worth retrying. Both were measured escaping as `text/plain` 500s (code
+    review I-2), which is precisely what T-028's Ask view cannot render.
+
+    The wrapper catches EVERY exception, not just T-023's typed
+    `GenerationError`: `generate_fn` is an injected seam, so an untyped
+    `RuntimeError`/`TimeoutError` from deep in a transport is at least as
+    likely, and from the caller's side both mean the same thing. Only the
+    exception TYPE reaches the body — the one string here that a third party
+    authored, and the one place a message could carry something we never
+    audited."""
+    try:
+        generate_fn = answer_mod.default_generator()
+    except answer_mod.GeneratorNotConfigured as exc:
+        raise _Degradation(
+            "no answer generator is configured — set ANTHROPIC_API_KEY to enable grounded "
+            "answers (retrieval-only search needs no key)"
+        ) from exc
+
+    def generate(prompt: str) -> str:
+        try:
+            return generate_fn(prompt)
+        except Exception as exc:
+            logger.warning("answer generation failed", exc_info=True)
+            raise _Degradation(
+                f"generation failed ({_safe_echo(type(exc).__name__)}) — the answer generator "
+                f"did not complete; the retrieval side is healthy, so this is worth retrying"
+            ) from exc
+
+    return generate
+
+
+def _lexical_ranking(index: InvertedIndex, query: str, k: int) -> list:
+    """BM25 hits at depth `k` through the same feature-detected seam
+    `/api/search`'s lexical mode uses."""
+    ranked_search = _resolve_search_fn()
+    if ranked_search is None:
+        # Unreachable in any worktree that can import `onrecord.rag.retrieve`
+        # (it imports `ranked_search` unconditionally); kept so this path
+        # degrades exactly like /api/search's lexical mode rather than raising.
+        return boolean_search(index, query, "OR")[:k]
+    return ranked_search(index, query, k=k)
+
+
+def _retrieve_for_answer(
+    index: InvertedIndex, mode: str, question: str, k: int
+) -> tuple[list[Chunk], list[float] | None]:
+    """The top `k` chunks for `question` under `mode`, in RETRIEVAL RANK ORDER,
+    with the REAL retrieval scores positionally aligned.
+
+    Both halves are load-bearing (AMENDMENT 2026-08-12, T-026 review — the CLI
+    seam was found discarding both): citation `[n]` indexes the chunk list, so
+    a reordering silently re-attributes every citation, and `answer()`
+    substitutes `0.0` placeholders when the scores are dropped, which is
+    invisible in the response shape but disables the confidence gate and lies
+    in the UI's retrieved panel."""
+    if mode == "lexical":
+        hits = _lexical_ranking(index, question, k)
+    else:
+        hits = _embedding_hits(index, mode, question, k)
+
+    chunks_by_id = _chunks_by_id()
+    chunks: list[Chunk] = []
+    scores: list[float] = []
+    for hit in hits:
+        chunk = chunks_by_id.get(hit.doc_id)
+        if chunk is None:
+            # See `_project_to_doc_ids`: a hit with no chunk cannot be
+            # grounded, so it cannot be answered from.
+            continue
+        chunks.append(chunk)
+        scores.append(float(hit.score))
+    return chunks, scores
 
 
 @app.post("/api/answer")
-async def answer(_request: AnswerRequest):
-    return {"error": "available_thursday"}
+def answer(request: AnswerRequest):  # NOT `async` -- see the module docstring
+    index = _require_index()
+    if index is None:
+        # Index BEFORE everything else (cheapest check, and the honest one):
+        # a box with no index has nothing to answer from regardless of which
+        # keys are missing, so this is the rung that points at the blocker.
+        return _missing_index_response()
+
+    try:
+        min_confidence = _min_confidence()
+        # Resolved BEFORE retrieval: an answer is not an answer without a
+        # generator, and a box that cannot generate should not first pay a
+        # provider to embed the question.
+        generate_fn = _resolve_generator()
+        chunks, scores = _retrieve_for_answer(index, request.mode, request.question, request.k)
+        if min_confidence is not None and scores is None:
+            # Unreachable through correct wiring (retrieval always produces
+            # scores) -- which is the point: this is the tripwire that stops a
+            # future regression from presenting as a normal 200 with a
+            # threshold that was never enforced.
+            raise MinConfidenceWithoutScores(
+                f"{MIN_CONFIDENCE_ENV} is configured but retrieval produced no scores to "
+                f"compare it against"
+            )
+        return answer_mod.answer(
+            request.question,
+            chunks,
+            generate_fn,
+            retrieval_scores=scores,
+            min_confidence=min_confidence,
+        )
+    except MinConfidenceWithoutScores as exc:
+        return _flat_error(422, str(exc))
+    except _Degradation as exc:
+        return exc.response()
 
 
 # --------------------------------------------------------------------------

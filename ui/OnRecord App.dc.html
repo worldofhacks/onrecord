@@ -62,17 +62,11 @@ input::placeholder{color:#B5B0A1}
         <input ref="{{ searchRef }}" value="{{ q }}" onChange="{{ setQ }}" onKeyDown="{{ qKey }}" style="flex:1;min-width:160px;border:0;background:transparent;outline:0;font-family:Fraunces,serif;font-size:clamp(19px,2vw,26px);font-weight:480;color:#16150F;padding:0" placeholder="Ask the record…">
         <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;border:1px solid #E7E4DA;border-radius:5px;padding:3px 7px">/</span></sc-if>
         <div style="display:flex;border:1px solid #E7E4DA;border-radius:99px;overflow:hidden;font-size:12px;font-weight:500;background:#fff">
-          <span style="padding:7px 15px;background:#16150F;color:#FAFAF7">Lexical</span>
-          <button onClick="{{ modeSem }}" style="all:unset;cursor:pointer;padding:7px 13px;color:#B5B0A1">Semantic</button>
-          <button onClick="{{ modeHyb }}" style="all:unset;cursor:pointer;padding:7px 13px;color:#B5B0A1;border-left:1px solid #F0EEE4">Hybrid</button>
+          <button onClick="{{ setMode }}" data-mode="lexical" style="{{ modeLexStyle }}">Lexical</button>
+          <button onClick="{{ setMode }}" data-mode="semantic" style="{{ modeSemStyle }}">Semantic</button>
+          <button onClick="{{ setMode }}" data-mode="hybrid" style="{{ modeHybStyle }}">Hybrid</button>
         </div>
       </div>
-      <sc-if value="{{ teaser }}" hint-placeholder-val="{{ false }}">
-        <div style="display:flex;align-items:center;gap:10px;margin-top:12px;background:#F6F3E4;border:1px dashed #DCCf9E;border-radius:10px;padding:9px 14px;font-size:12.5px;color:#6B5B1E;animation:pop .2s ease both">
-          <span style="width:7px;height:7px;border-radius:99px;background:#C9A93E;flex-shrink:0"></span>{{ teaser }}
-          <button onClick="{{ clearTeaser }}" style="all:unset;cursor:pointer;margin-left:auto;color:#8A8574;font-size:13px;padding:0 4px">✕</button>
-        </div>
-      </sc-if>
       <div style="display:flex;gap:8px;align-items:center;padding:14px 0 4px;font-size:12.5px;font-weight:500;flex-wrap:wrap">
         <div style="position:relative"><button onClick="{{ togSource }}" style="{{ pillSource }}">{{ fSourceLabel }} ▾</button>
           <sc-if value="{{ openSource }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:180px;animation:pop .15s ease both"><sc-for list="{{ sourceOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickSource }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
@@ -91,6 +85,13 @@ input::placeholder{color:#B5B0A1}
       </div>
     </section>
     <main style="flex:1;padding-bottom:8px">
+      <sc-if value="{{ searchNotProvisioned }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+          <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">Not provisioned yet.</p>
+          <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0">{{ modeErr }}</p>
+        </div>
+      </sc-if>
+      <sc-if value="{{ !searchNotProvisioned }}" hint-placeholder-val="{{ true }}">
       <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8A8574;padding:14px 0 2px">{{ listLabel }}</div>
       <sc-for list="{{ results }}" as="r" hint-placeholder-count="4">
         <article style="{{ r.rowStyle }}" onMouseEnter="{{ hoverRow }}" data-i="{{ r.i }}">
@@ -128,17 +129,21 @@ input::placeholder{color:#B5B0A1}
         </div>
       </sc-if>
       <sc-if value="{{ hasResults }}" hint-placeholder-val="{{ true }}"><p style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;padding:14px 0 0;text-align:center">↑↓ navigate · Enter opens the receipt · / focuses search</p></sc-if>
+      </sc-if>
     </main>
   </div>
   </sc-if>
 
   <sc-if value="{{ vAsk }}" hint-placeholder-val="{{ false }}">
   <div style="{{ padX }}">
+    <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
     <div style="display:flex;justify-content:center;padding:14px 0 0">
-      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 14px;text-align:center">PREVIEW THREAD · illustrative answers until /api/answer lands Thursday</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 14px;text-align:center">Demo data · API unreachable — illustrative answers below</span>
     </div>
+    </sc-if>
     <main style="{{ askGrid }}">
       <div style="display:flex;flex-direction:column;gap:34px;min-width:0">
+        <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
         <section style="animation:fadeup .45s ease both">
           <div style="display:flex;gap:14px;align-items:baseline">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·1</span>
@@ -201,23 +206,93 @@ input::placeholder{color:#B5B0A1}
             </div>
           </div>
         </section>
+        </sc-if>
         <sc-if value="{{ askQueued }}" hint-placeholder-val="{{ false }}">
           <section style="animation:pop .25s ease both">
             <div style="display:flex;gap:14px;align-items:baseline">
-              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·3</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">{{ askQLabel }}</span>
               <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">{{ askQueued }}</h2>
             </div>
             <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
-              <div style="border:1px dashed #DCCf9E;border-radius:14px;background:#F6F3E4;padding:18px 22px;max-width:560px">
-                <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#C9A93E"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A6D1F">QUEUED FOR THURSDAY</span></div>
-                <p style="font-size:13.5px;line-height:1.6;color:#6B5B1E;margin:0;text-wrap:pretty">The answering engine goes live Thursday. Your question is saved — retrieval already works, so try it as a <a href="#search">Search</a> in the meantime.</p>
-              </div>
+              <sc-if value="{{ askLoading }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;color:#8A8574;font-size:13.5px;padding:4px 0 8px">
+                  <span style="width:7px;height:7px;border-radius:99px;background:#0A7A43;animation:pulse .9s ease-out infinite;flex-shrink:0"></span>
+                  Reading the record…
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsAnswer }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap">
+                  <span style="{{ groundingStyle }}">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5.2" stroke="{{ groundingIconColor }}" stroke-width="1.3"></circle><path d="M3.8 6.2l1.5 1.5 2.9-3" stroke="{{ groundingIconColor }}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    {{ groundingLabel }} · {{ groundingSupported }} of {{ groundingTotal }} claims checked
+                  </span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">{{ askModeLabel }} · k {{ askKLabel }}</span>
+                </div>
+                <div style="font-family:Fraunces,serif;font-size:clamp(16.5px,1.3vw,18.5px);line-height:1.72;font-weight:420;text-wrap:pretty;max-width:66ch">
+                  <p style="margin:0">
+                    <sc-for list="{{ answerSegs }}" as="sg" hint-placeholder-count="1">
+                      <sc-if value="{{ sg.isCite }}" hint-placeholder-val="{{ false }}"><span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="{{ sg.n }}"><a href="{{ sg.link }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">{{ sg.n }}</a><sc-if value="{{ sg.open }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="{{ sg.popVenueStyle }}">{{ sg.popVenue }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ sg.popRef }}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">{{ sg.popDate }}</span></span>{{ sg.popSnip }}</span></sc-if></span></sc-if>
+                      <sc-if value="{{ !sg.isCite }}" hint-placeholder-val="{{ true }}">{{ sg.t }}</sc-if>
+                    </sc-for>
+                  </p>
+                </div>
+                <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#F6F5EF;overflow:hidden">
+                  <button onClick="{{ toggleDrawer }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;padding:11px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6E6A5E">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style="{{ chev }}"><path d="M3 4.5l3 3 3-3" stroke="#6E6A5E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    HOW THIS WAS ANSWERED
+                  </button>
+                  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding:4px 16px 16px;border-top:1px solid #E7E4DA;background:#fff">
+                      <div style="display:flex;gap:26px;padding:12px 0;font-size:12.5px;flex-wrap:wrap">
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">MODE</div><strong>{{ askModeLabel }}</strong></div>
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">RETRIEVED</div><strong style="font-variant-numeric:tabular-nums">{{ askRetrievedTotal }}</strong> passages</div>
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">CITED</div><strong style="font-variant-numeric:tabular-nums">{{ askCitedCount }}</strong> of {{ askRetrievedTotal }}</div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+                        <sc-for list="{{ askRetrievedRows }}" as="rr" hint-placeholder-count="3">
+                          <div style="{{ rr.rowStyle }}"><span style="{{ rr.dotStyle }}"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">{{ rr.score }}</span><span style="flex:1;min-width:0">{{ rr.line }}</span><span style="{{ rr.citedLabelStyle }}">{{ rr.citedLabel }}</span></div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsRefusal }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:22px 24px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.8" stroke="#8A8574" stroke-width="1.3"></circle><path d="M5.5 8h5" stroke="#8A8574" stroke-width="1.3" stroke-linecap="round"></path></svg>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NOT IN THE RECORD</span>
+                  </div>
+                  <p style="font-family:Fraunces,serif;font-size:19px;font-weight:480;line-height:1.5;margin:0 0 8px;letter-spacing:-0.01em">The record doesn't cover this.</p>
+                  <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0 0 16px;text-wrap:pretty">{{ refusalReason }}</p>
+                  <sc-if value="{{ hasAskSuggestions }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:7px">
+                      <sc-for list="{{ askSuggestions }}" as="sug" hint-placeholder-count="2">
+                        <button onClick="{{ askSuggest }}" data-q="{{ sug }}" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">{{ sug }}</button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px dashed #DDD9CC;border-radius:14px;background:#F6F5EF;padding:18px 22px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#8A8574"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NO ANSWER TEXT</span></div>
+                  <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0;text-wrap:pretty">The record retrieved passages but the pipeline produced no answer text for this question. Try rephrasing it, or run it as a <a href="#search">Search</a> instead.</p>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsError }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px dashed #E3B8AE;border-radius:14px;background:#F7E4DE;padding:18px 22px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#9C3A24"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#7A2E1B">NOT AVAILABLE YET</span></div>
+                  <p style="font-size:13.5px;line-height:1.6;color:#7A2E1B;margin:0;text-wrap:pretty">{{ askErr }}</p>
+                </div>
+              </sc-if>
             </div>
           </section>
         </sc-if>
       </div>
       <aside style="{{ railStyle }}">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources · Q·1</div>
+        <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources · Q·1 (demo)</div>
         <div style="{{ srcCards }}">
           <a href="#ask" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
             <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">1</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Bartow County, GA</span></div>
@@ -235,7 +310,20 @@ input::placeholder{color:#B5B0A1}
             <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">10-K · 2026-02-27</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">EDGAR ↗</span></div>
           </a>
         </div>
+        </sc-if>
+        <sc-if value="{{ hasAskCitations }}" hint-placeholder-val="{{ false }}">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources</div>
+        <div style="{{ srcCards }}">
+          <sc-for list="{{ askCitations }}" as="c" hint-placeholder-count="3">
+            <a href="{{ c.link }}" target="_blank" rel="noopener" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+              <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">{{ c.n }}</span><span style="{{ c.venueStyle }}">{{ c.venueLabel }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ c.refChip }}</span></div>
+              <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">{{ c.snippet }}</p>
+              <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">{{ c.metaLine }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">{{ c.cta }}</span></div>
+            </a>
+          </sc-for>
+        </div>
         <p style="font-size:11.5px;line-height:1.55;color:#8A8574;margin:14px 2px 0;text-wrap:pretty">Every claim is composed from these passages only. Hover a <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 5px">n</span> to preview; click to open the receipt.</p>
+        </sc-if>
       </aside>
     </main>
     <div style="position:sticky;bottom:0;background:linear-gradient(180deg,rgba(250,250,247,0) 0,#FAFAF7 24px);padding:22px 0 18px">
@@ -248,7 +336,6 @@ input::placeholder{color:#B5B0A1}
         <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #E7E4DA;border-radius:14px;box-shadow:0 2px 6px rgba(22,21,15,.04),0 12px 32px rgba(22,21,15,.06);padding:14px 18px">
           <svg width="19" height="19" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><path d="M10 2.5c3.6 0 6.5 2.6 6.5 5.9 0 3.2-2.9 5.8-6.5 5.8-.7 0-1.4-.1-2-.3L4 16l.9-3.1c-.9-1-1.4-2.2-1.4-3.5 0-3.3 2.9-5.9 6.5-5.9Z" stroke="#0A7A43" stroke-width="1.5" stroke-linejoin="round"></path></svg>
           <input ref="{{ askRef }}" value="{{ askQ }}" onChange="{{ setAsk }}" onKeyDown="{{ askKey }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:15.5px;font-weight:500;color:#16150F;font-family:Inter,sans-serif" placeholder="Ask the record a question…">
-          <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><span style="display:inline-flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.06em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:6px 13px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:99px;background:#C9A93E"></span>LIVE THURSDAY</span></sc-if>
         </div>
       </div>
     </div>
@@ -400,7 +487,7 @@ input::placeholder{color:#B5B0A1}
 
   <footer style="{{ footerStyle }}">
     <span style="font-family:Fraunces,serif;font-style:italic;font-size:13px;color:#6E6A5E">OnRecord — every megawatt promised, permitted, and powered.</span>
-    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">corpus v1 · measured, not vibed</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">corpus v2 · measured, not vibed</span>
   </footer>
 
   <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
@@ -451,11 +538,14 @@ const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo In
 //   GET  /api/tickers        -> {sectors:[{sector, tickers:[{symbol,receipt_count,last_receipt}]}]}
 //   GET  /api/prices/{sym}?range=365 -> {ticker, series:[{date,close}], significant_moves:[...]}
 //   GET  /api/metrics        -> [ {timestamp, git_sha, corpus_version, metrics:{per_query, mean}} ]
-//   POST /api/answer         <- {question, mode, k}   -> {"error":"available_thursday"}
+//   POST /api/answer         <- {question, mode, k}   -> pinned shape {answer_id, text,
+//                                citations[{n,doc_id,deep_link,snippet}], retrieved[9-key+cited],
+//                                grounding{status,supported_claims,total_claims}, refusal|null}
+//                                (T-028) | 503 flat {"error": ...} when unprovisioned
 //   GET  /api/stats          -> {documents, jurisdictions, tickers, sources, corpus_version} (T-017)
 // ---------------------------------------------------------------------------
-const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, PRICE_RANGE = 365, JUR_PROBE_K = 150;
-const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 15000;
+const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, ASK_MODE = 'hybrid', PRICE_RANGE = 365, JUR_PROBE_K = 150;
+const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 120000; // SLOW: /api/answer generation measured at 12-19s live (opus-5, hybrid); 120s matches the server-side generator timeout
 const JUR_PROBE_Q = 'data center county city water power substation zoning';
 
 const SOURCE_LABELS = { county_meeting: 'county meeting', filing: 'SEC filing', docket: 'regulatory docket', earnings_call: 'earnings call' };
@@ -464,6 +554,13 @@ const SOURCE_LABELS = { county_meeting: 'county meeting', filing: 'SEC filing', 
 const SECTOR_LABELS = { utilities_ipp: 'Utilities & IPPs', hyperscaler_ai: 'Hyperscalers & AI', neocloud_miner_pivot: 'Neoclouds & Miner Pivots', dc_reit_land: 'Data-center REITs & Land', builders_ec: 'Builders & E&C', power_equipment_cooling: 'Power Equipment & Cooling', gas_midstream_fuel: 'Gas, Midstream & Fuel', nuclear_smr_uranium: 'Nuclear, SMR & Uranium', grid_copper_fiber_materials: 'Grid, Copper, Fiber & Materials', servers_networking: 'Servers & Networking' };
 const SECTOR_ORDER = ['utilities_ipp', 'hyperscaler_ai', 'neocloud_miner_pivot', 'dc_reit_land', 'builders_ec', 'power_equipment_cooling', 'gas_midstream_fuel', 'nuclear_smr_uranium', 'grid_copper_fiber_materials', 'servers_networking'];
 const NEUTRAL_CHIP = { color: '#6E6A5E', background: '#F0EEE4', borderRadius: '4px', padding: '3px 8px' };
+// Grounding badge palette reuses the venue chip tokens already in the design
+// (sworn-green/coached-amber/candid-red) rather than inventing new colors.
+const GROUNDING_STYLE = {
+  grounded: { color: '#075C32', background: '#E4F3E9' },
+  partial: { color: '#8A6D1F', background: '#F5EEDA' },
+  ungrounded: { color: '#9C3A24', background: '#F7E4DE' },
+};
 
 function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function titleize(slug) { return String(slug || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()); }
@@ -520,12 +617,14 @@ function segsFromSnippet(snippet, terms) {
 class Component extends DCLogic {
   state = {
     w: 1280, view: 'search', q: 'substation capacity', selIdx: 0,
-    fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null, teaser: null,
+    fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null,
+    fMode: 'lexical', modeErr: null,
     apiLive: false, apiDown: false,
     hits: [], searchMs: 0, searching: true,
     tickers: null, metrics: null, jurs: [], jurProbed: false, stats: null,
     priceSym: null, price: null, priceState: 'idle',
     detSym: null, mkI: null, openCite: null, drawerOpen: false, askQ: '', askQueued: null,
+    askStatus: 'idle', askResp: null, askErr: null,
   };
   componentDidMount() {
     this.onResize = () => this.setState({ w: window.innerWidth });
@@ -610,8 +709,8 @@ class Component extends DCLogic {
   doSearch() {
     const s = this.state, q = String(s.q || '').trim();
     const seq = (this._seq = (this._seq || 0) + 1);
-    if (!q) { this.setState({ hits: [], searchMs: 0, searching: false }); return; }
-    const p = new URLSearchParams({ q, mode: 'lexical', op: 'OR', k: String(SEARCH_K) });
+    if (!q) { this.setState({ hits: [], searchMs: 0, searching: false, modeErr: null }); return; }
+    const p = new URLSearchParams({ q, mode: s.fMode, op: 'OR', k: String(SEARCH_K) });
     if (s.fSource !== 'All') p.set('source', s.fSource);
     if (s.fVenue !== 'All') p.set('venue', s.fVenue);
     if (s.fTicker !== 'All') p.set('ticker', s.fTicker);
@@ -621,14 +720,26 @@ class Component extends DCLogic {
     this.fetchJson('/api/search?' + p.toString()).then(r => {
       if (seq !== this._seq) return;
       const ms = Math.round(((window.performance && performance.now()) || Date.now()) - t0);
-      if (!r.ok || !r.body || !Array.isArray(r.body.results)) {
-        this.setState({ hits: [], searchMs: ms, searching: false, apiLive: false, apiDown: true });
+      if (r.ok && r.body && Array.isArray(r.body.results)) {
+        this.setState(st => ({
+          hits: r.body.results, searchMs: ms, searching: false, selIdx: 0,
+          apiLive: true, apiDown: false, modeErr: null, jurs: mergeJurs(st.jurs, r.body.results),
+        }));
         return;
       }
-      this.setState(st => ({
-        hits: r.body.results, searchMs: ms, searching: false, selIdx: 0,
-        apiLive: true, apiDown: false, jurs: mergeJurs(st.jurs, r.body.results),
-      }));
+      // A non-lexical mode that 503s (embeddings/generator not provisioned)
+      // degrades to an honest "not provisioned" card scoped to search alone --
+      // it does NOT pull the whole app into demo-data/apiDown, since lexical
+      // search, tickers and metrics may still be fully live (T-028 wiring map
+      // item 5). A true network outage (status 0) or a lexical-mode failure
+      // (the keyless-lexical guarantee means that should always work) is the
+      // pre-existing whole-app apiDown signal instead.
+      if (s.fMode !== 'lexical' && r.status !== 0) {
+        const msg = r.body && typeof r.body.error === 'string' ? r.body.error : null;
+        this.setState({ hits: [], searchMs: ms, searching: false, modeErr: msg || (titleize(s.fMode) + ' search is not provisioned yet.') });
+        return;
+      }
+      this.setState({ hits: [], searchMs: ms, searching: false, apiLive: false, apiDown: true, modeErr: null });
     });
   }
   // The jurisdiction pill has no dedicated endpoint; harvest the universe from
@@ -656,26 +767,43 @@ class Component extends DCLogic {
     });
   }
 
-  // --- POST /api/answer -----------------------------------------------------
-  // Contract: {question, mode, k}. Today it answers {"error":"available_thursday"},
-  // which the design's QUEUED-FOR-THURSDAY card already renders as the teaser.
+  // --- POST /api/answer (T-028) ----------------------------------------------
+  // Contract: {question, mode, k} -> the PINNED-FOR-THURSDAY shape (answer_id/
+  // text/citations/retrieved/grounding/refusal) on 200, or a flat 503
+  // {"error": ...} when embeddings/generator aren't provisioned. Ask has no
+  // per-view mode control today, so mode is always ASK_MODE ("hybrid" -- the
+  // wiring map's documented default when no mode control is present); k stays
+  // ASK_K (8). The full response body is RETAINED in state -- it used to be
+  // discarded (plan-review C-5).
   askSend(question) {
     const qn = String(question || '').trim();
     if (!qn) return;
-    this.setState({ askQueued: qn, askQ: '' });
+    const seq = (this._askSeq = (this._askSeq || 0) + 1);
+    this.setState({ askQueued: qn, askQ: '', askStatus: 'loading', askResp: null, askErr: null, openCite: null, drawerOpen: false });
     this.fetchJson('/api/answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: qn, mode: 'lexical', k: ASK_K }),
-    });
-  }
-  // Contract check for the search-mode teasers: the API answers
-  // {"error":"available_wednesday"} for semantic/hybrid today.
-  probeMode(mode, fallbackTeaser) {
-    this.setState({ teaser: fallbackTeaser });
-    this.fetchJson('/api/search?q=' + encodeURIComponent(String(this.state.q || 'test')) + '&mode=' + mode + '&k=1').then(r => {
-      const err = r.body && r.body.error;
-      if (r.ok && !err) this.setState({ teaser: titleize(mode) + ' retrieval is live — reload to pick it up.' });
+      body: JSON.stringify({ question: qn, mode: ASK_MODE, k: ASK_K }),
+    }, SLOW_TIMEOUT_MS).then(r => {
+      if (seq !== this._askSeq) return;
+      const body = r.body;
+      const shapeOk = r.ok && body && typeof body.text === 'string'
+        && Array.isArray(body.citations) && Array.isArray(body.retrieved)
+        && body.grounding && typeof body.grounding === 'object';
+      if (shapeOk) {
+        // Whitespace-only text is treated as EMPTY (T-023 review note: a
+        // fully-dangling generation -- every [n] marker stripped as invalid --
+        // yields a lone space, not an absent string).
+        const hasText = body.text.trim().length > 0;
+        const refusal = body.refusal || null;
+        this.setState({ askStatus: refusal ? 'refusal' : hasText ? 'answer' : 'empty', askResp: body, askErr: null });
+        return;
+      }
+      // Flat {"error": ...} (503 -- embeddings/generator/index not
+      // provisioned) or a true network failure both land here; the flat
+      // shape's message names the missing condition when present.
+      const msg = body && typeof body.error === 'string' ? body.error : null;
+      this.setState({ askStatus: 'error', askResp: null, askErr: msg || 'The answering engine is not reachable right now.' });
     });
   }
 
@@ -752,6 +880,13 @@ class Component extends DCLogic {
       };
     });
     const filterPill = (active) => ({ all: 'unset', cursor: 'pointer', boxSizing: 'border-box', border: active ? '1px solid #0A7A43' : '1px solid #E7E4DA', borderRadius: '99px', padding: '6px 14px', background: active ? '#E4F3E9' : '#fff', color: active ? '#075C32' : '#16150F', fontSize: '12.5px', fontWeight: 500 });
+    // Lexical/Semantic/Hybrid segmented control (T-028): a real toggle now --
+    // doSearch() sends whichever mode is active, instead of every request
+    // going out hardcoded 'lexical' underneath a static "Lexical" label.
+    const modePill = (active, sep) => Object.assign({
+      all: 'unset', cursor: 'pointer', padding: '7px 15px', fontSize: '12px', fontWeight: 500,
+      background: active ? '#16150F' : 'transparent', color: active ? '#FAFAF7' : '#B5B0A1',
+    }, sep ? { borderLeft: '1px solid #F0EEE4' } : {});
     // --- Tickers view: live /api/tickers, ordered by the design's own sector
     // sequence (the endpoint groups by registry slug and sorts alphabetically).
     const secRaw = Array.isArray(s.tickers) ? s.tickers : [];
@@ -862,6 +997,96 @@ class Component extends DCLogic {
     const tabs = [['search','Search'],['ask','Ask'],['tickers','Tickers'],['scoreboard','Score'],['ledger','Ledger']].map(([v, label]) => ({ v, label,
       style: { all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '7px 0 5px', fontSize: '10.5px', fontWeight: 600, color: s.view === v ? '#0A7A43' : '#8A8574', letterSpacing: '.02em' },
       dot: { width: '5px', height: '5px', borderRadius: '99px', background: s.view === v ? '#0A7A43' : 'transparent' } }));
+
+    // --- Ask answer view-model (T-028). Built entirely from the retained
+    // /api/answer response (`s.askResp`) -- the pinned shape's verbatim keys
+    // (answer_id/text/citations/retrieved/grounding/refusal). citations[] only
+    // carries {n, doc_id, deep_link, snippet}; venue/ticker/jurisdiction/date
+    // metadata for the popover + sidebar cards is joined in from retrieved[]
+    // by doc_id (retrieved always carries every cited doc_id per the pinned
+    // contract's own `cited` definition), with the same neutral-chip fallback
+    // used elsewhere (venueOf) if a join ever misses.
+    const ar = s.askResp;
+    const retrievedById = {};
+    (ar && Array.isArray(ar.retrieved) ? ar.retrieved : []).forEach(rr => { if (rr && rr.doc_id) retrievedById[rr.doc_id] = rr; });
+    const citeNByDoc = {};
+    (ar && Array.isArray(ar.citations) ? ar.citations : []).forEach(c => { citeNByDoc[c.doc_id] = c.n; });
+
+    // `text` -> segments with inline "[n]" markers turned into interactive
+    // chips. Every segment (cite or plain) renders as a React text node via
+    // {{ }} interpolation -- never innerHTML -- exactly like segsFromSnippet's
+    // search-result path (T-014R XSS note).
+    const answerSegs = [];
+    if (ar && s.askStatus === 'answer') {
+      const text = String(ar.text || '');
+      const re = /\[(\d+)\]/g;
+      let last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) answerSegs.push({ isCite: false, t: text.slice(last, m.index) });
+        const n = m[1];
+        const cit = (ar.citations || []).find(c => String(c.n) === n);
+        if (cit) {
+          const rr = retrievedById[cit.doc_id] || null;
+          const vn = rr && rr.venue_type ? venueOf(rr.venue_type) : { label: 'ON RECORD', style: NEUTRAL_CHIP };
+          answerSegs.push({
+            isCite: true, n, link: cit.deep_link || '#',
+            open: String(s.openCite) === String(n),
+            popVenue: vn.label, popVenueStyle: vn.style,
+            popRef: rr ? (rr.ticker || rr.jurisdiction || '—') : '—',
+            popDate: rr ? rr.date : '',
+            popSnip: cit.snippet || '',
+          });
+        } else {
+          // "[n]" with no matching citations[] entry -- render as plain text
+          // rather than a dangling, non-functional chip.
+          answerSegs.push({ isCite: false, t: '[' + n + ']' });
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) answerSegs.push({ isCite: false, t: text.slice(last) });
+      if (!answerSegs.length) answerSegs.push({ isCite: false, t: text });
+    }
+
+    const groundingStatus = ar && ar.grounding ? String(ar.grounding.status || '') : '';
+    const gStyle = GROUNDING_STYLE[groundingStatus] || { color: '#6E6A5E', background: '#F0EEE4' };
+
+    // Sidebar "Sources" cards -- one per citation, real deep_link + snippet.
+    const askCitations = (ar && Array.isArray(ar.citations) ? ar.citations : []).map(c => {
+      const rr = retrievedById[c.doc_id] || null;
+      const vn = rr && rr.venue_type ? venueOf(rr.venue_type) : { label: 'ON RECORD', style: NEUTRAL_CHIP };
+      return {
+        n: c.n, snippet: c.snippet || '', link: c.deep_link || '#',
+        venueLabel: vn.label, venueStyle: vn.style,
+        refChip: rr ? (rr.ticker || rr.jurisdiction || '—') : '—',
+        metaLine: rr ? [rr.date, srcLabel(rr.source_type)].filter(Boolean).join(' · ') : '',
+        cta: rr ? ctaFor(rr.source_type, tsOf(c.deep_link)) : 'Open ↗',
+      };
+    });
+
+    // "HOW THIS WAS ANSWERED" drawer rows -- retrieved[], cited rows visually
+    // distinguished (filled green dot + "CITED [n]" vs. an outline dot +
+    // "retrieved"), same design language as the drawer's original mock.
+    const askRetrievedRows = (ar && Array.isArray(ar.retrieved) ? ar.retrieved : []).map(rr => {
+      const cited = !!rr.cited;
+      const n = citeNByDoc[rr.doc_id];
+      return {
+        key: rr.doc_id, cited,
+        score: typeof rr.score === 'number' ? rr.score.toFixed(2) : '—',
+        line: [rr.jurisdiction || rr.ticker, srcLabel(rr.source_type), rr.date].filter(Boolean).join(' · '),
+        rowStyle: Object.assign({ display: 'flex', gap: '10px', alignItems: 'center' }, cited ? {} : { color: '#8A8574' }),
+        dotStyle: cited
+          ? { width: '8px', height: '8px', borderRadius: '99px', background: '#0A7A43', flexShrink: 0 }
+          : { width: '8px', height: '8px', borderRadius: '99px', border: '1.5px solid #DDD9CC', boxSizing: 'border-box', flexShrink: 0 },
+        citedLabel: cited ? ('CITED' + (n != null ? ' [' + n + ']' : '')) : 'retrieved',
+        citedLabelStyle: cited
+          ? { fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px', color: '#075C32' }
+          : { fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px' },
+      };
+    });
+    const askCitedCount = askRetrievedRows.filter(r => r.cited).length;
+
+    const askSuggestions = ar && ar.refusal && Array.isArray(ar.refusal.suggestions) ? ar.refusal.suggestions : [];
+
     return {
       isMobile, notMobile,
       padX: { padding: '0 ' + px, paddingBottom: isMobile ? '64px' : '0', flex: 1, display: 'flex', flexDirection: 'column' },
@@ -885,9 +1110,16 @@ class Component extends DCLogic {
       q: s.q, setQ: (e) => { this.setState({ q: e.target.value, selIdx: 0 }); this.runSearch(); },
       qKey: (e) => { if (e.key === 'Enter') { e.target.blur(); this.runSearch(true); } },
       searchRef: (el) => { this.searchEl = el; },
-      modeSem: () => this.probeMode('semantic', 'Semantic search lands Wednesday — the embedding index is built, the ranker isn\u2019t wired. Lexical stays live.'),
-      modeHyb: () => this.probeMode('hybrid', 'Hybrid (lexical + semantic, RRF) lands Wednesday. Lexical stays live.'),
-      teaser: s.teaser, clearTeaser: () => this.setState({ teaser: null }),
+      setMode: (e) => {
+        const m = e.currentTarget.dataset.mode;
+        if (m === s.fMode) return;
+        this.setState({ fMode: m, modeErr: null, selIdx: 0 });
+        this.runSearch(true);
+      },
+      modeLexStyle: modePill(s.fMode === 'lexical', false),
+      modeSemStyle: modePill(s.fMode === 'semantic', false),
+      modeHybStyle: modePill(s.fMode === 'hybrid', true),
+      searchNotProvisioned: !!s.modeErr, modeErr: s.modeErr || '',
       pillSource: filterPill(s.fSource !== 'All'), pillVenue: filterPill(s.fVenue !== 'All'), pillTicker: filterPill(s.fTicker !== 'All'), pillJur: filterPill(s.fJur !== 'All'),
       fSourceLabel: s.fSource === 'All' ? 'Source · All' : ({ county_meeting: 'County meetings', filing: 'SEC filings', docket: 'Dockets' })[s.fSource] || titleize(s.fSource),
       fVenueLabel: s.fVenue === 'All' ? 'Venue · All' : 'Venue · ' + s.fVenue,
@@ -937,6 +1169,29 @@ class Component extends DCLogic {
       askQ: s.askQ, setAsk: (e) => this.setState({ askQ: e.target.value }),
       askKey: (e) => { if (e.key === 'Enter') this.askSend(s.askQ); },
       askQueued: s.askQueued,
+      // Both illustrative examples are demo-gated; when they're hidden the
+      // real exchange is the first one on the page, so it reads "Q·1" -- it
+      // only falls back to "Q·3" in the rare case a question was asked while
+      // apiDown (demo Q·1/Q·2 are visible at the same time as the real one).
+      askQLabel: s.apiDown ? 'Q·3' : 'Q·1',
+      askLoading: s.askStatus === 'loading',
+      askIsAnswer: s.askStatus === 'answer',
+      askIsRefusal: s.askStatus === 'refusal',
+      askIsEmpty: s.askStatus === 'empty',
+      askIsError: s.askStatus === 'error',
+      askErr: s.askErr || '',
+      answerSegs,
+      groundingLabel: groundingStatus ? titleize(groundingStatus) : '',
+      groundingStyle: { display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11.5px', fontWeight: 600, color: gStyle.color, background: gStyle.background, borderRadius: '99px', padding: '4px 12px' },
+      groundingIconColor: gStyle.color,
+      groundingSupported: ar && ar.grounding ? ar.grounding.supported_claims : 0,
+      groundingTotal: ar && ar.grounding ? ar.grounding.total_claims : 0,
+      askModeLabel: ASK_MODE, askKLabel: ASK_K,
+      refusalReason: ar && ar.refusal ? ar.refusal.reason : '',
+      askSuggestions, hasAskSuggestions: askSuggestions.length > 0,
+      askCitations, hasAskCitations: askCitations.length > 0,
+      askRetrievedRows, askCitedCount, askRetrievedTotal: askRetrievedRows.length,
+      demoAskVisible: s.apiDown,
       askSuggest: (e) => { this.askSend(e.currentTarget.dataset.q); },
       askSugStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', display: 'block', border: '1px solid #E7E4DA', borderRadius: '9px', padding: '9px 13px', fontSize: '13px', color: '#16150F', background: '#FAFAF7', lineHeight: 1.4 },
       chipStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#fff', borderRadius: '99px', padding: '6px 13px' },

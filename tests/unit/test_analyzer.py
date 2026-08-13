@@ -184,7 +184,10 @@ def test_ac4_property_output_tokens_match_lowercase_alnum_charset(text):
         assert tok != "", "analyze() must drop empty tokens"
         assert tok == tok.strip(), f"token {tok!r} has leading/trailing whitespace"
         assert tok.isalnum(), f"token {tok!r} contains non-alphanumeric characters"
-        assert not any(ch.isupper() for ch in tok), f"token {tok!r} is not fully case-folded"
+        # Casefold-idempotence, NOT `not isupper()`: Cherokee is the Unicode
+        # casefold exception (small letters fold UP to capitals, so
+        # 'Ꭰ'.casefold() == 'Ꭰ' with isupper() True) — adjudicated 2026-08-12.
+        assert tok == tok.casefold(), f"token {tok!r} is not fully case-folded"
 
 
 @given(st.text(max_size=300))

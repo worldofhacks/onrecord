@@ -325,6 +325,59 @@ Net: **2 new RED failures** (`op=AND`'s narrowing gap) out of these 3
 re-pinned tests; the full-repo/file-level failure count reported by the
 Test Agent reflects this.
 
+Extension — the T-024 API unlock (two transitional re-pins)
+--------------------------------------------------------------
+Trigger: T-024 is the "unlocking merge" for the two TRANSITIONAL pins this
+file froze on day one — the `available_wednesday` search teaser and the
+`available_thursday` answer stub. `.tdd-swarm/LESSONS.md`'s wave-4 rule
+("tests that pin TRANSITIONAL behavior — feature-detect fallbacks — must be
+tagged for re-pin at the unlocking merge") makes re-pinning them the Test
+Agent's mandate, tests-first, on the T-013R/T-014R precedent: this file is
+otherwise still frozen, and NO other test in it changed. Both re-pins keep
+their original `spec(T-013:AC-2)` tag and add the T-024 AC they now also
+serve; both REMOVE the old-behavior assertion rather than keeping it
+alongside the new one.
+
+**Re-pin #1 — `mode=semantic|hybrid`** (was
+`test_search_semantic_and_hybrid_modes_return_available_wednesday_teaser`,
+now `..._no_longer_return_the_wednesday_teaser`). The "no other keys — the
+real embeddings-backed retrieval lands Wednesday" bullet in the
+`GET /api/search` section above is SUPERSEDED: those modes now run T-022's
+`semantic_search`/`hybrid_search` over T-021's `EmbeddingStore` and return
+the SAME 3-key body / 9-key result shape as `mode=lexical` (semantic
+scores = cosine floats, hybrid = RRF floats; metadata filters
+AND-combined then truncated to `k`, the same filter-then-truncate order;
+`op` still validated to the uppercase whitelist but IGNORED — `op` is a
+lexical concept). With no embedding store configured they take the
+degradation ladder's store-missing rung: a flat `{"error": ...}` 503, which
+is what the re-pinned test here asserts. The 200 happy path — hand-computed
+cosine/RRF orders against a fixture store and a monkeypatched provider seam
+— needs machinery this file was never frozen with, and lives in
+`tests/unit/test_api_rag.py` (T-024's own file) rather than being grafted
+in here.
+
+**Re-pin #2 — `POST /api/answer`** (was
+`test_answer_returns_available_thursday_teaser`, now
+`test_answer_no_longer_returns_the_thursday_teaser_and_is_now_index_dependent`).
+The `POST /api/answer` section above (both its "for now: 200, body EXACTLY
+`{"error": "available_thursday"}`" line and its "Does NOT depend on the
+loaded index (a pure stub)" line) is SUPERSEDED: the endpoint now retrieves
+per `mode` and runs T-023's `answer()`, returning the PINNED-FOR-THURSDAY
+dict above VERBATIM as its 200 body — that block stops being a forward
+declaration and becomes the live contract, unchanged in shape. Consequences
+pinned by the re-pinned test here: `/api/answer` JOINS `/api/search` and
+`/api/tickers` as an index-dependent "data endpoint", so a missing index is
+the same flat 503 (AC-5's data-endpoint list grows by one; `/api/metrics`
+and `/health` are still index-independent). Also amended by T-024's ticket
+but pinned in `test_api_rag.py`: `mode` defaults to `"lexical"` (T-022's
+measured hybrid latency, ~1.3-1.4 s typical / ~3.5 s worst at 289K docs)
+and `k` gains a `>= 1` lower bound, matching `/api/search`'s. `question`
+missing → 422 is UNCHANGED (its test is untouched).
+
+The third pin of this unlock — `/api/stats`'s hard-coded `corpus_version`
+`"v1"` → T-018's `read_manifest` with an `"unversioned"` fallback — belongs
+to `tests/unit/test_stats.py` and is documented there.
+
 Fixture corpora
 ----------------
 `AC1_DOCS` (5 docs): all 4 filter dimensions (source_type, venue_type,
@@ -797,22 +850,53 @@ def test_search_k_equal_to_one_still_works(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# AC-2 -- semantic/hybrid teaser + 422 unknown mode + /api/answer stub
+# AC-2 -- semantic/hybrid (re-pinned at the T-024 unlock) + 422 unknown mode
+# + /api/answer (re-pinned at the T-024 unlock)
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("mode", ["semantic", "hybrid"])
-def test_search_semantic_and_hybrid_modes_return_available_wednesday_teaser(
+def test_search_semantic_and_hybrid_modes_no_longer_return_the_wednesday_teaser(
     tmp_path, monkeypatch, mode
 ):
-    # spec(T-013:AC-2)
+    # spec(T-013:AC-2) + spec(T-024:AC-1) -- TRANSITIONAL RE-PIN #1, landed
+    # at the unlocking merge per .tdd-swarm/LESSONS.md's wave-4 rule
+    # ("tests that pin TRANSITIONAL behavior must be tagged for re-pin at
+    # the unlocking merge") and the T-013R/T-014R precedent: the Test Agent
+    # edits this otherwise-frozen file, for these pins ONLY.
+    #
+    # WAS: `200 {"error": "available_wednesday"}` -- the stub teaser held
+    # while the embeddings-backed retrieval was still unbuilt. T-024 wires
+    # it for real (T-021's store + T-022's semantic_search/hybrid_search),
+    # so the teaser is GONE; the old assertion is REMOVED, not kept
+    # alongside the new one.
+    #
+    # NOW: the mode is real, so with no embedding store configured it takes
+    # the degradation ladder's store-missing rung -- a flat 503, the same
+    # convention every other data-endpoint failure here uses. The 200 happy
+    # path (exact 3-key body, 9-key results, hand-computed cosine/RRF
+    # order) needs an embedding-store fixture and a provider seam and lives
+    # in tests/unit/test_api_rag.py, this ticket's own file; it is NOT
+    # re-created here, so this file keeps the T-013 fixture machinery it
+    # was frozen with.
     api_module = _api_module()
+    # delenv hygiene: a developer's exported store/key must not decide this.
+    for name in ("ONRECORD_EMBED_STORE", "OPENAI_API_KEY", "ONRECORD_CORPUS"):
+        monkeypatch.delenv(name, raising=False)
     index_dir = _build_index(tmp_path, AC1_DOCS)
-    with _client(api_module, monkeypatch, index_dir) as client:
+    with _client(api_module, monkeypatch, index_dir, raise_server_exceptions=False) as client:
         resp = client.get("/api/search", params={"q": "substation", "mode": mode})
 
-    assert resp.status_code == 200
-    assert resp.json() == {"error": "available_wednesday"}
+    assert resp.json() != {"error": "available_wednesday"}, (
+        "the Wednesday teaser is retired at the T-024 unlock (tickets/T-024.md re-pin #1)"
+    )
+    assert resp.status_code == 503
+    body = resp.json()
+    assert set(body.keys()) == {"error"}, (
+        f"503s here are a FLAT JSONResponse, never HTTPException's {{'detail': ...}}: "
+        f"{sorted(body)}"
+    )
+    assert isinstance(body["error"], str)
 
 
 def test_search_unknown_mode_returns_422(tmp_path, monkeypatch):
@@ -825,18 +909,49 @@ def test_search_unknown_mode_returns_422(tmp_path, monkeypatch):
     assert resp.status_code == 422
 
 
-def test_answer_returns_available_thursday_teaser(tmp_path, monkeypatch):
-    # spec(T-013:AC-2) -- owner-directed scope addition, see module docstring
+def test_answer_no_longer_returns_the_thursday_teaser_and_is_now_index_dependent(
+    tmp_path, monkeypatch
+):
+    # spec(T-013:AC-2) + spec(T-024:AC-4) -- TRANSITIONAL RE-PIN #2, landed
+    # at the unlocking merge (same LESSONS wave-4 rule + T-013R/T-014R
+    # precedent as re-pin #1 above).
+    #
+    # WAS: `200 {"error": "available_thursday"}` from a pure stub that did
+    # NOT depend on the loaded index -- which is exactly why the original
+    # test pointed ONRECORD_INDEX at a missing dir.
+    #
+    # NOW: T-024 makes /api/answer retrieve for real, so it joins
+    # /api/search and /api/tickers as a DATA endpoint: a missing index is
+    # the same flat 503 those two already return (tickets/T-024.md's
+    # endpoint contract, "Missing index -> 503 ... part of re-pin #2").
+    # The index rung is asserted specifically (not just "some 503"): with
+    # no index AND no ANTHROPIC_API_KEY, the operator must be pointed at
+    # the actual blocker -- a box with no index has nothing to answer from
+    # regardless of keys, so the index check comes first (Test Agent
+    # decision, recorded in tests/unit/test_api_rag.py's design-decision
+    # list). The 200 grounded-answer contract lives in test_api_rag.py.
     api_module = _api_module()
+    for name in ("ONRECORD_EMBED_STORE", "ANTHROPIC_API_KEY", "ONRECORD_ANSWER_MIN_CONF"):
+        monkeypatch.delenv(name, raising=False)
     missing_index_dir = tmp_path / "no_such_index"
-    with _client(api_module, monkeypatch, missing_index_dir) as client:
+    with _client(
+        api_module, monkeypatch, missing_index_dir, raise_server_exceptions=False
+    ) as client:
         resp = client.post(
             "/api/answer",
             json={"question": "what happened at the meeting", "mode": "lexical", "k": 5},
         )
 
-    assert resp.status_code == 200
-    assert resp.json() == {"error": "available_thursday"}
+    assert resp.json() != {"error": "available_thursday"}, (
+        "the Thursday teaser is retired at the T-024 unlock (tickets/T-024.md re-pin #2)"
+    )
+    assert resp.status_code == 503
+    body = resp.json()
+    assert set(body.keys()) == {"error"}, (
+        f"503s here are a FLAT JSONResponse, never HTTPException's {{'detail': ...}}: "
+        f"{sorted(body)}"
+    )
+    assert "index" in body["error"].lower()
 
 
 def test_answer_missing_question_returns_422(tmp_path, monkeypatch):

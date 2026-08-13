@@ -88,9 +88,13 @@ no extra/missing top-level keys.
     cache state) — verified directly below by raising it past a known
     flagged move and confirming the move disappears.
   - **`/api/prices` is index-independent** (Test Agent design decision,
-    mirroring `/api/metrics`'/`/api/answer`'s established independence from
+    mirroring `/api/metrics`'s established independence from
     `ONRECORD_INDEX` — see `tests/unit/test_api.py`'s module docstring's
-    AC-5 section): every test here points `ONRECORD_INDEX` at a
+    AC-5 section; NOTE, wave-10 integration edit: `/api/answer` no longer
+    shares this independence post-T-024 unlock — it became a genuine
+    index-dependent data endpoint, 503ing on a missing index BEFORE any
+    key/generator check, per T-024's re-pin #2) — every test here points
+    `ONRECORD_INDEX` at a
     deliberately-missing dir to pin this. The ticket's AC-4 "data
     endpoints 503" wording is read (per the same precedent) as covering
     the index-dependent endpoints (`/api/search`, `/api/tickers`) only —
