@@ -21,7 +21,10 @@ history_path="artifacts/modes_scoreboard.jsonl") -> list[dict]`
     `eval/run.py::_corpus_version` does: the `ONRECORD_INDEX` env var,
     falling back to `artifacts/index`, falling back to `"unversioned"`.
     This is provenance from the environment, not a property of the `index`
-    object that was actually scored.
+    object that was passed in — `report_modes`' signature is frozen (no
+    index-path parameter), so the only way to make the stamp track a
+    specific index is for the CALLER to point `ONRECORD_INDEX` at it first.
+    `main` does exactly that (see below; review round 2, Important-2).
   * Retrieval depth is not pinned by the ticket — full corpus depth
     (`index.doc_count()` for lexical/hybrid, `len(chunks)` for semantic) is
     used throughout, which trivially satisfies every depth this report's
@@ -30,7 +33,11 @@ history_path="artifacts/modes_scoreboard.jsonl") -> list[dict]`
 Also exposes a CLI `main`, mirroring `eval.run`'s pattern: a thin argparse
 wrapper with the same index/judgments/store/history defaults, resolving a
 provider via `onrecord.rag.embeddings.get_provider` and chunking the loaded
-index's docs at identity (`window=1`) before calling `report_modes`.
+index's docs at identity (`window=1`) before calling `report_modes`. `main
+--index X` exports `ONRECORD_INDEX=X` for the duration of the `report_modes`
+call (restored afterward) so the scoreboard's `corpus_version` names the
+index that was actually scored, never whatever `ONRECORD_INDEX`/the
+`artifacts/index` fallback happened to point at instead.
 
 No FastAPI import anywhere in this module (Definition of Done).
 """
@@ -220,7 +227,22 @@ def main() -> int:
     store = EmbeddingStore.load(args.store)
     provider = get_provider()
 
-    report_modes(index, store, chunks, args.judgments, provider, history_path=args.history)
+    # `report_modes` derives `corpus_version` from `ONRECORD_INDEX` (its
+    # signature is frozen — no index-path parameter can be threaded through
+    # it), so the CLI must export the index it actually loaded before
+    # calling in, or the scoreboard stamps whatever `ONRECORD_INDEX`/the
+    # `artifacts/index` fallback happened to name instead of the index that
+    # was scored (review round 2, Important-2). Restored afterward so
+    # `main()` never leaks a process-wide env mutation past its own call.
+    previous_index_env = os.environ.get("ONRECORD_INDEX")
+    os.environ["ONRECORD_INDEX"] = args.index
+    try:
+        report_modes(index, store, chunks, args.judgments, provider, history_path=args.history)
+    finally:
+        if previous_index_env is None:
+            os.environ.pop("ONRECORD_INDEX", None)
+        else:
+            os.environ["ONRECORD_INDEX"] = previous_index_env
     return 0
 
 

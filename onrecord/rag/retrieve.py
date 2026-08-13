@@ -3,9 +3,9 @@
 Pure retrieval functions consumed by T-024's API wiring; no FastAPI import
 anywhere in this module. Consumes T-020's `Chunk`/`chunk_corpus` and T-021's
 `EmbeddingStore`/`cosine_top_k`/`content_hash`. The authoritative contract
-lives in `tests/unit/rag/test_retrieve.py`'s module docstring (frozen suite)
-— read it in full before touching this file. Summary of what's implemented
-here:
+lives in `tests/unit/rag/test_retrieve.py`'s module docstring (frozen suite,
+including its "PIN ROUND 2" section) — read it in full before touching this
+file. Summary of what's implemented here:
 
 `semantic_search(store, chunks, query, provider, k=10) -> list[SearchResult]`
   * Embeds ONLY the query (`provider.embed([query])`) — the corpus is
@@ -20,22 +20,37 @@ here:
     grow-k retry (score at `k`, double, retry) fills the cut past however
     deep a field of uncovered rows sits above it, without paying for a
     full-depth scan when the store is small. This pins the OBSERVABLE, not
-    the strategy (a full-depth scan also satisfies every test here) — see
-    the frozen suite's "Test Agent decisions" 1 for the measured rationale
-    (full depth costs 24x more at 265K rows).
+    the strategy (a full-depth scan also satisfies every test here).
   * VERIFIES the recorded `content_hash` of every row it is about to
     RETURN against that chunk's current text — a disagreement (stale text)
     raises `StoreMismatch` naming the chunk_id and both hashes.
     Verification is RESULT-SCOPED (orchestrator ruling, locked): only rows
     that end up in the returned top-k are hashed, not the whole chunk set.
+    Verification always goes through T-021's public `store.entry_for(...)`
+    — never a private `store._entries` reach (review round 2: that saving
+    belongs to a T-021 accessor, not here).
   * `SearchResult(doc_id=chunk.chunk_id, score=<cosine float>,
     snippet=chunk.text[:160])`; `score` is a builtin `float`.
+  * `k <= 0` returns `[]` (ask for nothing, get nothing) — never an error,
+    unlike `hybrid_search` below.
+  * Receipt (`SearchResult`) construction scales with the number of
+    results returned, never with the corpus or with `len(chunks)` — the
+    ranking core (`_semantic_ranking`) verifies and returns `(chunk,
+    score)` pairs, and only the caller-facing wrapper builds `SearchResult`
+    objects, for exactly the pairs it is about to return. This is what
+    lets `hybrid_search` consume a full `k=len(chunks)` semantic ranking
+    (verifying every chunk, per the ruling above) without materializing a
+    receipt per chunk (review round 2, Important-1).
 
 `rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]`
   * `score(id) = sum over rankings containing id of 1/(k + rank)`, rank
     1-based; sorted by score DESC, ties by id ASC. An id absent from a
     ranking contributes nothing (no penalty term). `k=60` is a standing
     locked decision.
+  * `k <= 0` raises `ValueError` — `k` is RRF's smoothing constant, not a
+    result count; `k=0` would silently degrade the formula to `1/rank` and
+    a negative `k` hits `k + rank == 0` at some rank, a bare
+    `ZeroDivisionError` from inside the fusion.
 
 `hybrid_search(index, store, chunks, query, provider, k=10, rrf_k=60)`
   * GUARDS identity chunking FIRST, corpus-wide, over every chunk: each
@@ -43,11 +58,16 @@ here:
     == 1`, else `NonIdentityChunking` — fusion is defined over ONE id space
     (chunk_id), and the lexical ranking's ids are corpus doc ids, valid
     fusion input only under that identity invariant.
+  * `k <= 0` or `rrf_k <= 0` raises `ValueError`, checked before any work —
+    `fused[:k]` on a negative `k` is a negative slice (a wrong-LENGTH
+    receipt with no error), which this ticket refuses to ship silently.
   * Lexical ranking at FULL DEPTH — `ranked_search(index, query,
     k=index.doc_count())` — RRF needs deep rankings.
-  * Semantic ranking = `semantic_search(..., k=len(chunks))` id sequence
-    (so under hybrid every chunk is a result, and therefore every chunk is
-    hash-verified).
+  * Semantic ranking = `_semantic_ranking(..., k=len(chunks))`, consumed as
+    an ID SEQUENCE — every chunk is hash-verified (result-scoped
+    verification at `k=len(chunks)` covers everything), but NO
+    `SearchResult` is constructed for the ranking itself; only the final
+    fused-and-truncated `k` results become `SearchResult`s.
   * Fuses, truncates to `k`, `score=<RRF score>`; snippet from the lexical
     hit when the id appeared lexically (positional snippets are strictly
     better), else `chunk.text[:160]`.
@@ -132,7 +152,11 @@ def _covered_top_k(
     return covered[:k]
 
 
-def _verified_result(store: EmbeddingStore, chunk: Chunk, score: float) -> SearchResult:
+def _verify_chunk(store: EmbeddingStore, chunk: Chunk) -> None:
+    """Raise `StoreMismatch` (naming the chunk_id and both hashes) when the
+    store's recorded `content_hash` for `chunk.chunk_id` disagrees with the
+    chunk's current text. Always through T-021's public `entry_for` — never
+    a private `store._entries` reach."""
     entry = store.entry_for(chunk.chunk_id)
     expected = content_hash(store.model, store.dim, chunk.text)
     recorded = entry["content_hash"]
@@ -142,7 +166,34 @@ def _verified_result(store: EmbeddingStore, chunk: Chunk, score: float) -> Searc
             f"the recomputed content_hash {expected!r} for the chunk's current text "
             f"(stale row)"
         )
-    return SearchResult(doc_id=chunk.chunk_id, score=float(score), snippet=chunk.text[:SNIPPET_LEN])
+
+
+def _semantic_ranking(
+    store: EmbeddingStore,
+    chunks: list[Chunk],
+    query: str,
+    provider: EmbeddingProvider,
+    k: int,
+) -> list[tuple[Chunk, float]]:
+    """The verified core of `semantic_search`: cosine-ranked, result-scoped
+    hash-verified `(chunk, score)` pairs, cosine order, top `k` covered
+    rows — with NO `SearchResult` construction. `semantic_search` wraps
+    this to build receipts for its own callers; `hybrid_search` consumes it
+    directly as an id sequence (`k=len(chunks)`, so every chunk is verified)
+    without paying to materialize a receipt per chunk (review round 2,
+    Important-1)."""
+    row_to_chunk = _resolve_covered_rows(store, chunks)
+
+    query_vec = provider.embed([query])[0]
+
+    covered = _covered_top_k(store, query_vec, k, row_to_chunk)
+
+    ranking: list[tuple[Chunk, float]] = []
+    for row, score in covered:
+        chunk = row_to_chunk[row]
+        _verify_chunk(store, chunk)
+        ranking.append((chunk, float(score)))
+    return ranking
 
 
 def semantic_search(
@@ -155,20 +206,21 @@ def semantic_search(
     """Embed `query`, rank `chunks` by cosine similarity over `store`, and
     return the top `k` as `SearchResult`s. See module docstring for the
     frozen contract (coverage/verification/uncovered-row rules)."""
-    row_to_chunk = _resolve_covered_rows(store, chunks)
-
-    query_vec = provider.embed([query])[0]
-
-    covered = _covered_top_k(store, query_vec, k, row_to_chunk)
-
-    return [_verified_result(store, row_to_chunk[row], score) for row, score in covered]
+    ranking = _semantic_ranking(store, chunks, query, provider, k)
+    return [
+        SearchResult(doc_id=chunk.chunk_id, score=score, snippet=chunk.text[:SNIPPET_LEN])
+        for chunk, score in ranking
+    ]
 
 
 def rrf_fuse(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion: `score(id) = sum over rankings containing id
     of 1/(k + rank)`, rank 1-based. Sorted by score descending, ties broken
     by id ascending (byte-wise). An id absent from a ranking contributes
-    nothing — no penalty term."""
+    nothing — no penalty term. `k <= 0` raises `ValueError` (see module
+    docstring)."""
+    if k <= 0:
+        raise ValueError(f"rrf_fuse: k must be positive, got k={k!r}")
     scores: dict[str, float] = {}
     for ranking in rankings:
         for rank, doc_id in enumerate(ranking, start=1):
@@ -198,14 +250,19 @@ def hybrid_search(
     """RRF-fuse a full-depth lexical ranking with a semantic ranking over
     `chunks`, both keyed by chunk_id under the identity-chunking invariant.
     See module docstring for the frozen contract."""
+    if k <= 0:
+        raise ValueError(f"hybrid_search: k must be positive, got k={k!r}")
+    if rrf_k <= 0:
+        raise ValueError(f"hybrid_search: rrf_k must be positive, got rrf_k={rrf_k!r}")
+
     _guard_identity_chunking(chunks)
 
     lexical_results = ranked_search(index, query, k=index.doc_count())
     lexical_by_id = {result.doc_id: result for result in lexical_results}
     lexical_ranking = [result.doc_id for result in lexical_results]
 
-    semantic_results = semantic_search(store, chunks, query, provider, k=len(chunks))
-    semantic_ranking = [result.doc_id for result in semantic_results]
+    semantic_ranking_pairs = _semantic_ranking(store, chunks, query, provider, len(chunks))
+    semantic_ranking = [chunk.chunk_id for chunk, _score in semantic_ranking_pairs]
 
     fused = rrf_fuse([lexical_ranking, semantic_ranking], k=rrf_k)
 
