@@ -89,6 +89,34 @@ below):
   recorded as documented non-pins, M-5 (tag rationale), M-7 (the metric is
   named MACRO wherever it is asserted).
 
+PIN ROUND (post-implementation code/security review — see
+.tdd-swarm/reports/T-026-review.md against commit 665cb26; verdict CHANGES
+REQUESTED, 0 Critical + 3 Important + 18 Minor)
+-----------------------------------------------------------------------
+Tests-first per the T-003/T-027 precedent: this round extends the frozen
+suite with RED pins for defects the freeze structurally could not reach
+(`httpx.MockTransport` bypasses timeout ENFORCEMENT, and the suite pinned
+the error-conflating row shape as correct). Ratified as decisions 18-21:
+* **I-2** the adapter set no timeout, inheriting httpx's 5.0s default
+  against an endpoint whose normal latency exceeds it — measured by the
+  reviewer as 4 billable-but-abandoned requests per claim. Pinned via the
+  effective timeout CONFIG carried on the request
+  (`request.extensions["timeout"]`), which is observable under MockTransport
+  even though enforcement is not (decision 18).
+* **I-3** `judge_answer` preserves `error` verdicts, then `run_faithfulness`
+  discarded the distinction at exactly the point the number becomes durable:
+  a total provider outage was written to the scoreboard as a confident,
+  publishable `mean_faithfulness: 0.0`, byte-for-byte indistinguishable from
+  "the generator hallucinated everything". Pinned as per-answer `errors`,
+  aggregate `judge_errors`, and a NULL mean when nothing was actually
+  measured (decisions 19-20).
+* Minors taken because they harden cheaply: M-1 (no output cap on the wire),
+  M-3 (the raised error's `__context__` still carries the bearer header),
+  M-5 (unstripped `ONRECORD_JUDGE_MODEL` goes on the wire and 400s, feeding
+  straight into I-3's silent zero), M-11 (a typed failure escaping `main()`
+  as a raw traceback). Minors deliberately NOT pinned are listed with the
+  other non-pins below.
+
 Test Agent decisions (NOT in the ticket's Context — inventions this suite
 freezes; the implementer should read them as such)
 --------------------------------------------------------------------------
@@ -210,6 +238,48 @@ freezes; the implementer should read them as such)
     and `openrouter/auto` as OpenAI), and `voyage*` is no longer a family of
     its own (an embeddings vendor, never a judge or generator — it belongs in
     the fail-closed bucket).
+18. **RATIFIED (closes review I-2): the judge's HTTP call carries an
+    explicit, generous timeout.** Pinned as CONFIG, not enforcement:
+    `MockTransport` short-circuits the network, so no frozen test can time
+    anything out — but httpx resolves the effective timeout onto every
+    outgoing request as `request.extensions["timeout"]`, so a transport
+    handler can read what WOULD have been enforced. Either construction
+    satisfies it (`httpx.Client(..., timeout=...)` or `client.post(...,
+    timeout=...)`) because both land in the same place; the pin is a floor
+    (read >= 60s, no component below 10s), not a value, so the sibling
+    T-023 generator's `120.0` (`answer.py:666`) fits and stays the house
+    number. Rationale for a FLOOR rather than the exact value: httpx's 5.0s
+    default is shorter than a normal chat-completion, and each abandoned
+    attempt is still billed server-side — 4 paid-for, discarded requests per
+    claim across a full eval.
+19. **RATIFIED (closes review I-3, part 1): judge errors are VISIBLE in the
+    persisted row.** `per_answer` entries gain `"errors": int` (claims whose
+    verdict was `"error"`) and `metrics` gains an aggregate
+    `"judge_errors": int`. Every answer keeps an entry even when every one
+    of its claims errored — never silently dropped. The TOP-LEVEL row key
+    set is untouched (`timestamp, git_sha, corpus_version, kind, metrics`),
+    so the schema shared with T-025 does not move: both tickets state
+    `metrics` is free-form per `kind`.
+20. **RATIFIED (closes review I-3, part 2): a run that measured NOTHING
+    reports no measurement.** `mean_faithfulness` is `None` (JSON null) when
+    claims were judged but NOT ONE produced a verdict — i.e. total claims
+    > 0 and `judge_errors == <total claims>`. Otherwise it stays the macro
+    mean. Chosen over "refuse to write the row" because the ticket's posture
+    is failures-as-data (plan-review M-8: prior verdicts are never lost, the
+    run continues) — a refusal would discard the partial evidence and the
+    `git_sha`/`corpus_version` provenance of the outage. What the ticket
+    forbids is failure DISGUISED as measurement, and a null mean beside a
+    nonzero error count cannot be misread as "the generator hallucinated
+    everything". A partial outage keeps its number and carries the error
+    count as the qualifier. Note `judge_answer`'s own in-memory
+    `faithfulness` stays `0.0` for an all-error answer — that arithmetic is
+    already frozen (AC-3) and this decision governs only the PERSISTED row,
+    which is exactly where the reviewer measured the distinction being lost.
+21. **RATIFIED (review Unrequested-addition 1 + Minor 11):
+    `JudgeRequestError` is public API** — the module already ships it (it is
+    what lets the adapter avoid re-emitting transport text), and pinning the
+    name stops a silent rename. `main()` must convert ANY of this module's
+    OWN typed errors into a non-zero return code rather than a traceback.
 
 DELIBERATELY NOT PINNED (documented gaps, not oversights)
 ---------------------------------------------------------
@@ -255,6 +325,33 @@ DELIBERATELY NOT PINNED (documented gaps, not oversights)
   T-021 review accepted; noted, not tightened.
 * Schema validation of `answers` rows (unlike labels rows, they are produced
   by the pipeline, not hand-authored).
+* Sampling/format knobs on the wire — `temperature`, `seed`,
+  `response_format` (review Minor-2). A grading judge arguably wants
+  `temperature=0`, but several o-series models REJECT `temperature`
+  outright, so pinning it would turn a provisioning choice into a re-freeze.
+  The output CAP is pinned (decision 18's sibling, review Minor-1) because
+  it is a billing guard that every current chat model accepts under one of
+  its two names.
+* Frame locals holding the bearer token in a traceback (review Minor-4).
+  Identical shape to the merged T-021 adapter (`embeddings.py:246`), so it
+  is a house-wide property, not a T-026 regression — the reviewer flagged it
+  for the epic. What IS pinned here is the exception CHAIN (review Minor-3),
+  which is reachable through ordinary `__context__` walking.
+* `main()`'s behaviour on a THIRD-PARTY exception (e.g. `ModuleNotFoundError`
+  from the not-yet-merged `onrecord.rag.retrieve` import inside
+  `_resolve_answers`, review Minor-11). Decision 21 covers this module's own
+  typed errors only: a missing dependency mid-wave SHOULD surface loudly
+  rather than be flattened into an exit code that reads like a policy
+  refusal.
+* `DEFAULT_RAG_EVAL_PATH` overridability (review Minor-10) and `Retry-After`
+  honouring (Minor-14): real asymmetries, but an env var invented here for a
+  file T-025 also writes would create a two-writers/two-names split — worse
+  than the asymmetry. Recorded for the orchestrator.
+* Prefix-map collisions (`claudette-7b` -> anthropic, review Minor-6), real
+  fine-tune ids (`ft:gpt-4o-mini:...` -> unknown, Minor-7) and case
+  sensitivity (Minor-8): properties of the LOCKED canonical map (decision
+  17), fail-safe in the standing-decision direction. Changing them is a new
+  orchestrator ruling, not a test-agent pin.
 * `corpus_version` PLUMBING differs from T-025's runner for the same field
   (review M-4): this module reads `ONRECORD_INDEX` — verbatim
   `onrecord.eval.run._corpus_version`, decision 10 — while T-025's frozen
@@ -748,6 +845,7 @@ def test_module_exposes_documented_public_api():
         "CrossFamilyViolation",
         "JudgeNotValidated",
         "JudgeNotConfigured",
+        "JudgeRequestError",  # ratified decision 21 (review: shipped but unpinned)
         "DEFAULT_JUDGE_MODEL",
         "classify_family",
         "assert_cross_family",
@@ -767,9 +865,14 @@ def test_module_exposes_documented_public_api():
     assert missing == [], f"onrecord.rag.judge is missing public API symbols: {missing}"
 
 
-def test_the_three_typed_errors_are_exception_classes():
+def test_the_typed_errors_are_exception_classes():
     # spec(T-026:AC-1)
-    for name in ("CrossFamilyViolation", "JudgeNotValidated", "JudgeNotConfigured"):
+    for name in (
+        "CrossFamilyViolation",
+        "JudgeNotValidated",
+        "JudgeNotConfigured",
+        "JudgeRequestError",
+    ):
         error = _attr(name)
         assert isinstance(error, type) and issubclass(error, Exception), (
             f"{name} must be an Exception subclass so callers can catch it by type; got {error!r}"
@@ -2008,19 +2111,152 @@ def test_run_faithfulness_appends_the_exact_shared_row_shape(tmp_path, monkeypat
         f"rag_eval row keys are pinned exactly; got {sorted(row)}"
     )
     assert row["kind"] == "faithfulness"
-    assert set(row["metrics"]) == {"mean_faithfulness", "per_answer"}
+    assert set(row["metrics"]) == {"mean_faithfulness", "per_answer", "judge_errors"}, (
+        f"decision 19: `metrics` carries the aggregate judge-error count alongside the "
+        f"measurement. The TOP-LEVEL key set (asserted above) is what T-025 shares — "
+        f"`metrics` is free-form per `kind` in both tickets. Got {sorted(row['metrics'])}"
+    )
     assert row["metrics"]["per_answer"] == [
-        {"qa_id": "qa-1", "faithfulness": 0.5, "supported": 1, "total": 2},
-        {"qa_id": "qa-2", "faithfulness": 0.75, "supported": 3, "total": 4},
+        {"qa_id": "qa-1", "faithfulness": 0.5, "supported": 1, "total": 2, "errors": 0},
+        {"qa_id": "qa-2", "faithfulness": 0.75, "supported": 3, "total": 4, "errors": 0},
     ]
+    assert row["metrics"]["judge_errors"] == 0, "a clean run records zero judge errors"
     assert row["metrics"]["mean_faithfulness"] == pytest.approx(0.625), (
-        "mean_faithfulness is the MEAN OF PER-ANSWER faithfulness (0.5 and 0.75), not the "
-        "micro-average over all claims (4/6 = 0.667) — the fixture is built so the two differ"
+        "mean_faithfulness is the MACRO MEAN OF PER-ANSWER faithfulness (0.5 and 0.75), not "
+        "the micro-average over all claims (4/6 = 0.667) — the fixture is built so the two "
+        "differ"
     )
     assert isinstance(row["git_sha"], str) and row["git_sha"]
     assert row["corpus_version"] == "unversioned", "no manifest reachable -> the pinned fallback"
     datetime.fromisoformat(row["timestamp"])
     assert returned == row, "run_faithfulness returns the row it appended"
+
+
+def test_run_faithfulness_records_judge_errors_per_answer_and_in_aggregate(tmp_path, monkeypatch):
+    # spec(T-026:AC-5)
+    # RATIFIED decision 19 (closes review I-3, part 1). `judge_answer` already
+    # preserves `error` verdicts; this pins that the distinction SURVIVES into
+    # the persisted row, which is where the number becomes durable and
+    # quotable. A PARTIAL outage keeps its measurement — qualified by the
+    # error counts, never silently absorbed.
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(tmp_path / "artifacts" / "judge_validation.json")
+    script = dict(ANSWERS_TWO_SCRIPT)
+    script["Alpha claim two"] = JudgeTransportBoom("provider 5xx after retries")
+    script["Beta claim three"] = "the judge rambled and emitted no JSON at all"
+    script["Beta claim four"] = JudgeTransportBoom("connection reset")
+    judge = ClaimKeyedJudge(script)
+
+    row = _run_faithfulness(tmp_path, artifact, judge=judge)
+
+    assert judge.misses == [], judge.misses
+    assert row["metrics"]["per_answer"] == [
+        # qa-1: claim 1 supported, claim 2 errored -> 1/2 measured, 1 error
+        {"qa_id": "qa-1", "faithfulness": 0.5, "supported": 1, "total": 2, "errors": 1},
+        # qa-2: 2 supported, claim 3 UNPARSEABLE, claim 4 errored -> 2/4, 1 error
+        {"qa_id": "qa-2", "faithfulness": 0.5, "supported": 2, "total": 4, "errors": 1},
+    ], (
+        "`errors` counts the `error` verdict ONLY. An `unparseable` claim is a judge that "
+        "ANSWERED and broke the protocol — a judge-quality signal, already counted "
+        "not-supported; conflating it with a transport outage would make a badly-prompted "
+        "judge look like a provider failure and vice versa"
+    )
+    assert row["metrics"]["judge_errors"] == 2, (
+        "the aggregate is the sum over answers — one number an operator can see without "
+        "reading every per_answer entry; the unparseable claim is NOT in it"
+    )
+    assert row["metrics"]["mean_faithfulness"] == pytest.approx(0.5), (
+        "a PARTIAL outage still measured something, so the macro mean stands (0.5 and 0.5); "
+        "the error count is what qualifies it"
+    )
+
+
+def test_a_total_judge_outage_is_never_written_as_a_healthy_mean(tmp_path, monkeypatch):
+    # spec(T-026:AC-5)
+    # RATIFIED decision 20 (closes review I-3, part 2) — the reviewer's
+    # measured scenario: every judge call fails, and the old row was
+    # `mean_faithfulness: 0.0` with per-answer 0.0s, BYTE-FOR-BYTE
+    # indistinguishable from "the generator hallucinated everything", written
+    # with no exception, no warning, and exit 0. A confident, publishable 0.0
+    # produced by a provider outage defeats the whole point of validating the
+    # judge before its verdicts count.
+    #
+    # The pinned observable: nothing was measured, so no measurement is
+    # reported (null mean), while the evidence of what happened IS reported
+    # (per-answer entries, error counts) — failures as data, never failure
+    # disguised as measurement.
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(tmp_path / "artifacts" / "judge_validation.json")
+    script = {key: JudgeTransportBoom("provider outage") for key in ANSWERS_TWO_SCRIPT}
+    judge = ClaimKeyedJudge(script)
+
+    row = _run_faithfulness(tmp_path, artifact, judge=judge)
+
+    assert judge.misses == [], judge.misses
+    assert row["metrics"]["mean_faithfulness"] is None, (
+        f"NOT ONE claim produced a verdict, so there is no mean to report — a numeric "
+        f"{row['metrics']['mean_faithfulness']!r} here is an outage wearing a measurement's "
+        f"clothes"
+    )
+    assert row["metrics"]["judge_errors"] == 6, "2 + 4 claims, every one errored"
+    assert row["metrics"]["per_answer"] == [
+        {"qa_id": "qa-1", "faithfulness": 0.0, "supported": 0, "total": 2, "errors": 2},
+        {"qa_id": "qa-2", "faithfulness": 0.0, "supported": 0, "total": 4, "errors": 4},
+    ], (
+        "every answer keeps its entry (never silently dropped), and `errors == total` is what "
+        "makes each one unmistakable; per-answer `faithfulness` stays judge_answer's own "
+        "frozen arithmetic (AC-3), which decision 20 deliberately does not move"
+    )
+    # The row IS still written: the provenance of an outage (git_sha,
+    # corpus_version, timestamp) is evidence worth keeping, and refusing
+    # would discard the partial data the ticket's failures-as-data posture
+    # exists to preserve.
+    eval_path = tmp_path / "artifacts" / "rag_eval.jsonl"
+    lines = [line for line in eval_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == row
+
+
+def test_a_single_surviving_verdict_still_yields_a_numeric_mean(tmp_path, monkeypatch):
+    # spec(T-026:AC-5)
+    # Decision 20's boundary: the null is for "nothing was measured", not
+    # "most things failed". One surviving verdict is a measurement, however
+    # thin — and `judge_errors` is what tells the operator how thin.
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(tmp_path / "artifacts" / "judge_validation.json")
+    script = {key: JudgeTransportBoom("provider outage") for key in ANSWERS_TWO_SCRIPT}
+    script["Alpha claim one"] = _verdict_json("supported", 1)
+    judge = ClaimKeyedJudge(script)
+
+    row = _run_faithfulness(tmp_path, artifact, judge=judge)
+
+    assert judge.misses == [], judge.misses
+    assert row["metrics"]["mean_faithfulness"] == pytest.approx(0.25), (
+        "qa-1 scores 1/2 = 0.5 and qa-2 scores 0/4 = 0.0, so the macro mean is 0.25"
+    )
+    assert row["metrics"]["judge_errors"] == 5
+
+
+def test_a_hosted_judge_outage_end_to_end_reports_the_outage_not_a_zero(tmp_path, monkeypatch):
+    # spec(T-026:AC-5)
+    # The reviewer's exact route, driven through the REAL adapter rather than
+    # a fake: a permanently-failing endpoint (their measurement used a slow
+    # server plus the missing timeout; a 500 wall is the same observable) ->
+    # every claim `error` -> the persisted row must not read as a result.
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+    monkeypatch.delenv("ONRECORD_JUDGE_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    artifact = _write_validation_artifact(tmp_path / "artifacts" / "judge_validation.json")
+    requests: list = []
+    judge_fn = _attr("default_judge")(transport=_chat_handler(requests, statuses=[500] * 200))
+
+    row = _run_faithfulness(tmp_path, artifact, judge=judge_fn)
+
+    assert requests, "precondition: the adapter really did try to reach the endpoint"
+    assert row["metrics"]["mean_faithfulness"] is None
+    assert row["metrics"]["judge_errors"] == 6
+    assert all(entry["errors"] == entry["total"] for entry in row["metrics"]["per_answer"])
 
 
 def test_run_faithfulness_reads_corpus_version_from_the_index_manifest(tmp_path, monkeypatch):
@@ -2070,7 +2306,11 @@ def test_run_faithfulness_over_zero_answers_reports_zero(tmp_path, monkeypatch):
 
     row = _run_faithfulness(tmp_path, artifact, answers=[], judge=judge)
 
-    assert row["metrics"] == {"mean_faithfulness": 0.0, "per_answer": []}
+    assert row["metrics"] == {"mean_faithfulness": 0.0, "per_answer": [], "judge_errors": 0}, (
+        "zero answers is not an outage: nothing was asked, nothing failed, so the mean stays "
+        "the 0.0 the repo's own empty-input precedent uses and judge_errors is 0 (decision 20's "
+        "null applies only when claims WERE judged and none produced a verdict)"
+    )
     assert judge.call_count == 0
 
 
@@ -2319,6 +2559,101 @@ def test_default_judge_posts_the_prompt_and_returns_the_message_content(monkeypa
     assert "PROMPT-BODY-SENTINEL" in requests[0].content.decode("utf-8")
 
 
+def test_default_judge_sends_an_explicit_generous_request_timeout(monkeypatch):
+    # spec(T-026:AC-7)
+    # RATIFIED decision 18 (closes review I-2). httpx's DEFAULT is 5.0s for
+    # every phase — shorter than a normal chat completion, so each attempt is
+    # abandoned mid-flight and retried, and OpenAI bills all four: the
+    # reviewer measured 4 server hits and 20.4s of wall clock for ONE claim
+    # against an 8s endpoint, yielding zero data.
+    #
+    # MockTransport short-circuits ENFORCEMENT, which is precisely why the
+    # original freeze could not see this — but httpx resolves the effective
+    # timeout onto every outgoing request as `extensions["timeout"]`, so the
+    # CONFIG is observable here. Both `httpx.Client(timeout=...)` and
+    # `client.post(..., timeout=...)` land in the same place, so neither
+    # construction is dictated.
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+    monkeypatch.delenv("ONRECORD_JUDGE_MODEL", raising=False)
+    requests: list = []
+    judge_fn = _attr("default_judge")(transport=_chat_handler(requests))
+
+    judge_fn("prompt")
+
+    timeout = requests[0].extensions.get("timeout")
+    assert isinstance(timeout, dict) and timeout, (
+        f"the request must carry an explicit timeout configuration; got {timeout!r}"
+    )
+    assert timeout.get("read") is not None and timeout["read"] >= 60.0, (
+        f"the READ timeout must be generous enough for a real chat completion — httpx's "
+        f"5.0s default abandons a request the provider still bills for (the sibling T-023 "
+        f"generator uses 120.0). Got {timeout.get('read')!r}"
+    )
+    for phase in ("connect", "write", "pool"):
+        value = timeout.get(phase)
+        assert value is not None and value >= 10.0, (
+            f"the {phase} timeout must not be left at httpx's 5.0s default either; got {value!r}"
+        )
+
+
+def test_default_judge_caps_the_output_length_on_the_wire(monkeypatch):
+    # spec(T-026:AC-7)
+    # Review Minor-1: the judge emits ~30 tokens of JSON by protocol, and
+    # nothing bounded the response — direct per-claim billing exposure across
+    # a full eval. Either spelling counts: chat models take `max_tokens`, the
+    # o-series takes `max_completion_tokens`, and which one ships is a
+    # provisioning choice (the constant is research-required), so the pin is
+    # "a positive integer cap is present", not a name or a value.
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+    monkeypatch.delenv("ONRECORD_JUDGE_MODEL", raising=False)
+    requests: list = []
+    judge_fn = _attr("default_judge")(transport=_chat_handler(requests))
+
+    judge_fn("prompt")
+
+    body = json.loads(requests[0].content)
+    caps = {key: body[key] for key in ("max_tokens", "max_completion_tokens") if key in body}
+    assert caps, (
+        f"the request must bound the judge's output (`max_tokens` or `max_completion_tokens`); "
+        f"body keys were {sorted(body)}"
+    )
+    for name, value in caps.items():
+        assert isinstance(value, int) and not isinstance(value, bool) and value > 0, (
+            f"{name} must be a positive int; got {value!r}"
+        )
+
+
+def test_resolved_judge_model_strips_surrounding_whitespace(monkeypatch):
+    # spec(T-026:AC-7)
+    # Review Minor-5, and it is not cosmetic: `classify_family` strips
+    # internally, so a padded id sails through the cross-family gate and then
+    # goes on the WIRE padded -> HTTP 400 -> every claim `error` -> exactly
+    # the silent-outage row decision 20 exists to prevent. One `.strip()`.
+    monkeypatch.setenv("ONRECORD_JUDGE_MODEL", "  gpt-4o  ")
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+
+    assert _attr("resolved_judge_model")() == "gpt-4o"
+
+    requests: list = []
+    _attr("default_judge")(transport=_chat_handler(requests))("prompt")
+
+    assert json.loads(requests[0].content)["model"] == "gpt-4o", (
+        "the padded id must never reach the provider — a 400 on every call is an outage "
+        "that looks like a judgement"
+    )
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_blank_judge_model_env_falls_back_to_the_default(monkeypatch, blank):
+    # spec(T-026:AC-7)
+    # The companion to Minor-5: a variable exported empty (or as whitespace,
+    # the shape `.strip()` newly reveals) must fall back to the constant, not
+    # put an empty `model` on the wire.
+    monkeypatch.setenv("ONRECORD_JUDGE_MODEL", blank)
+
+    assert _attr("resolved_judge_model")() == _attr("DEFAULT_JUDGE_MODEL")
+
+
 def test_default_judge_model_defaults_to_the_module_constant(monkeypatch):
     # spec(T-026:AC-7)
     monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
@@ -2487,6 +2822,44 @@ def test_a_transport_error_carrying_the_key_is_not_re_emitted(monkeypatch, caplo
     assert _leaking_records(caplog, SENTINEL_KEY) == []
 
 
+def test_no_exception_in_the_raised_chain_carries_the_key(monkeypatch):
+    # spec(T-026:AC-7)
+    # Review Minor-3: `raise ... from None` sets `__suppress_context__` and
+    # clears `__cause__`, but `__context__` still REFERENCES the transport
+    # error whose own text embeds the Authorization header. Standard
+    # traceback rendering honours the suppression — but any reporter that
+    # walks the chain itself (Sentry-style handlers, custom log formatters,
+    # `pytest --tb` plugins) reaches the credential. The frozen contract is
+    # the reachability, not the rendering: nothing in the chain may carry it.
+    monkeypatch.setattr(time, "sleep", lambda *_a, **_kw: None)
+    monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_KEY)
+    monkeypatch.delenv("ONRECORD_JUDGE_MODEL", raising=False)
+    raised: list = []
+    judge_fn = _attr("default_judge")(transport=_leaky_transport(raised))
+
+    with pytest.raises(Exception) as excinfo:
+        judge_fn("prompt")
+
+    assert raised and all(SENTINEL_KEY in message for message in raised), (
+        "precondition: the transport error's own text carries the key, so the chain really "
+        "does have something to leak"
+    )
+    chain = []
+    seen = set()
+    current = excinfo.value
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    rendered = [f"{type(exc).__name__}: {exc}" for exc in chain]
+    leaking = [text for text in rendered if SENTINEL_KEY in text]
+    assert leaking == [], (
+        f"the credential is reachable by walking __cause__/__context__ from the raised "
+        f"error — clear the context (raise outside the `except` block, or set "
+        f"`__context__ = None`) rather than relying on __suppress_context__: {leaking}"
+    )
+
+
 def test_a_failing_hosted_judge_degrades_to_error_verdicts_not_a_crash(monkeypatch):
     # spec(T-026:AC-7)
     # The two halves together: the real adapter's failure becomes DATA inside
@@ -2575,6 +2948,43 @@ def test_main_takes_its_generator_id_from_the_resolve_seam_not_the_environment(m
     assert captured[0]["judge_model"] == "gpt-judge-for-main"
     assert captured[0]["answers"] == ANSWERS_TWO
     assert exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "error_name",
+    ["JudgeNotValidated", "CrossFamilyViolation", "JudgeNotConfigured", "JudgeRequestError"],
+)
+def test_main_returns_a_nonzero_exit_code_for_this_modules_typed_failures(monkeypatch, error_name):
+    # spec(T-026:AC-7)
+    # RATIFIED decision 21 (review Minor-11 + Unrequested-addition 1).
+    # `JudgeRequestError` is public API — the module ships it, it is what
+    # keeps transport text out of the error message, and pinning the name
+    # stops a silent rename. A CLI that tracebacks on its OWN typed failure
+    # reads as a crash to the operator and to any wrapping script's exit-code
+    # check; every one of these is an expected operational state.
+    # Deliberately NOT covered (documented non-pin): third-party exceptions
+    # such as the ModuleNotFoundError from the unmerged retrieval import —
+    # those should still surface loudly.
+    mod = _module()
+    error_type = _attr(error_name)
+    monkeypatch.setenv("ONRECORD_JUDGE_MODEL", "gpt-judge-for-main")
+    monkeypatch.setattr(mod, "_resolve_generator_model", lambda: "claude-generator-from-seam")
+    monkeypatch.setattr(mod, "_resolve_answers", lambda: ANSWERS_TWO)
+    monkeypatch.setattr(
+        mod, "default_judge", lambda *a, **kw: ConstantJudge(_verdict_json("supported", 1))
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise error_type("simulated refusal")
+
+    monkeypatch.setattr(mod, "run_faithfulness", _boom)
+
+    exit_code = mod.main()
+
+    assert isinstance(exit_code, int) and exit_code != 0, (
+        f"main() must convert {error_name} into a non-zero exit code, not a traceback; "
+        f"got {exit_code!r}"
+    )
 
 
 def test_importing_judge_does_not_import_the_answer_pipeline():
