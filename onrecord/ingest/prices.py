@@ -37,6 +37,20 @@ _CACHE_FRESHNESS = timedelta(days=1)
 _STOOQ_URL = "https://stooq.com/q/d/l/"
 _FMP_URL_TEMPLATE = "https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
 
+# T-034: yahoo is the keyless PRIMARY (stooq began serving a JS proof-of-work
+# bot wall in Aug 2026 — kept second in case the wall drops; FMP stays the
+# keyed last resort). Yahoo rejects default client User-Agents, so the request
+# carries a browser UA; dotted symbols use yahoo's dashed form (BRK.B ->
+# BRK-B). range=2y comfortably covers the UI's 365-day window; fetch_eod's
+# _trim_to_range still applies the caller's range_days.
+_YAHOO_URL_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+_YAHOO_PARAMS = {"range": "2y", "interval": "1d"}
+# Deliberately the MINIMAL browser UA: yahoo 429s a full spoofed Chrome UA
+# (browser-UA-without-browser-fingerprint reads as a bot) while accepting the
+# generic "Mozilla/5.0" (measured live 2026-08-13: chrome-UA -> 429,
+# bare -> 200 on the same IP minutes apart).
+_YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
 # A ticker must be a single, flat, filesystem-safe path component — no path
 # separators, no traversal segments — since it becomes `<cache_dir>/
 # <ticker>.json` verbatim. Anything else is rejected outright (post-review
@@ -236,6 +250,63 @@ def _trim_to_range(series: list[dict], range_days: int) -> list[dict]:
     ]
 
 
+def parse_yahoo_chart(payload) -> list[dict]:
+    """Parse one Yahoo v8 chart payload into the pinned ascending
+    `[{"date", "close"}]` shape (same as `parse_stooq_csv`). Timestamps are
+    epoch seconds mapped to their UTC calendar date; a null close (yahoo
+    emits them for halted/unpriced sessions) skips that row. ANY structural
+    surprise — wrong types, missing keys, empty result — parses to `[]`,
+    never raises (pure, no I/O)."""
+    try:
+        result = payload["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except (KeyError, IndexError, TypeError):
+        return []
+    if not isinstance(timestamps, list) or not isinstance(closes, list):
+        return []
+
+    series = []
+    for ts, close in zip(timestamps, closes, strict=False):
+        if close is None:
+            continue
+        try:
+            day = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
+            series.append({"date": day, "close": float(close)})
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
+    series.sort(key=lambda row: row["date"])
+    return series
+
+
+def _try_yahoo(client: httpx.Client, ticker: str) -> list[dict] | None:
+    """Attempt the yahoo chart fetch; return a parsed series on success,
+    None on any failure. Never raises. Diagnostic detail stays below INFO
+    (same convention as `_try_stooq`)."""
+    url = _YAHOO_URL_TEMPLATE.format(symbol=ticker.upper().replace(".", "-"))
+    try:
+        response = client.get(url, params=_YAHOO_PARAMS, headers=_YAHOO_HEADERS)
+    except httpx.HTTPError as exc:
+        logger.debug("yahoo fetch for %s raised %s: %s", ticker, type(exc).__name__, exc)
+        return None
+
+    if response.status_code >= 400:
+        logger.debug("yahoo fetch for %s failed with HTTP %d", ticker, response.status_code)
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError:
+        logger.debug("yahoo fetch for %s returned a non-JSON body", ticker)
+        return None
+
+    series = parse_yahoo_chart(payload)
+    if not series:
+        logger.debug("yahoo fetch for %s returned no usable rows", ticker)
+        return None
+    return series
+
+
 def _try_stooq(client: httpx.Client, ticker: str) -> list[dict] | None:
     """Attempt the stooq fetch; return a parsed series on success, None on
     any failure. Never raises. Diagnostic detail stays below INFO (never
@@ -313,7 +384,10 @@ def fetch_eod(
         return cached
 
     with _httpx_logger_suppressed(), httpx.Client(transport=transport) as client:
-        series = _try_stooq(client, ticker)
+        series = _try_yahoo(client, ticker)
+
+        if series is None:
+            series = _try_stooq(client, ticker)
 
         if series is None:
             fmp_key = os.environ.get("FMP_API_KEY")

@@ -84,6 +84,13 @@ list[dict]``
   shape / path beyond that is the implementer's choice — this suite
   asserts only on host + symbol substring, via `httpx.MockTransport`
   routing by URL substring). Body parsed via `parse_stooq_csv`.
+  [T-034 AMENDMENT 2026-08-13: stooq began serving a JS proof-of-work bot
+  wall (zero CSV rows), so the chain gained a keyless Yahoo chart-API
+  source AHEAD of stooq: yahoo → stooq → FMP. The pre-existing tests below
+  keep their original assertions by routing host
+  `query1.finance.yahoo.com` to a 500 responder (yahoo down → historic
+  chain semantics); yahoo-specific behavior is pinned in the T-034
+  amendment section at the end of this file.]
 - **Fallback source**: FMP's `historical-price-full` endpoint, used ONLY
   when stooq fails AND `FMP_API_KEY` is set (env var, matching the
   existing `.env.example`/T-008 convention) — URL must contain host
@@ -421,7 +428,13 @@ def test_fetch_eod_parses_ordered_rows_from_stooq_and_skips_malformed(tmp_path, 
         seen_urls.append(str(request.url))
         return httpx.Response(200, text=csv_text)
 
-    transport, calls = _make_transport({"stooq.com": stooq_responder})
+    transport, calls = _make_transport(
+        {
+            # T-034: yahoo (new primary) down -> historic stooq semantics hold
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
+            "stooq.com": stooq_responder,
+        }
+    )
 
     result = _call_or_fail(
         fetch_eod, "VST", range_days=365, transport=transport, cache_dir=tmp_path
@@ -448,6 +461,7 @@ def test_fetch_eod_falls_back_to_fmp_when_stooq_fails_and_key_is_set(tmp_path, m
 
     transport, calls = _make_transport(
         {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
             "stooq.com": lambda req: httpx.Response(500, text="stooq server error"),
             "financialmodelingprep.com": lambda req: httpx.Response(200, json=fmp_payload),
         }
@@ -681,7 +695,10 @@ def test_fetch_eod_stale_cache_triggers_refetch_and_rewrites_cache(tmp_path, mon
 
     csv_text = _read_fixture_text("stooq_sample.csv")
     transport, calls = _make_transport(
-        {"stooq.com": lambda req: httpx.Response(200, text=csv_text)}
+        {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
+            "stooq.com": lambda req: httpx.Response(200, text=csv_text),
+        }
     )
 
     result = _call_or_fail(
@@ -710,7 +727,10 @@ def test_fetch_eod_missing_cache_triggers_fetch_and_writes_cache(tmp_path, monke
 
     csv_text = _read_fixture_text("stooq_sample.csv")
     transport, calls = _make_transport(
-        {"stooq.com": lambda req: httpx.Response(200, text=csv_text)}
+        {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
+            "stooq.com": lambda req: httpx.Response(200, text=csv_text),
+        }
     )
 
     result = _call_or_fail(
@@ -739,6 +759,7 @@ def test_fetch_eod_both_sources_fail_returns_empty_with_one_log_line_no_exceptio
 
     transport, calls = _make_transport(
         {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
             "stooq.com": lambda req: httpx.Response(500, text="stooq down"),
             "financialmodelingprep.com": lambda req: httpx.Response(500, text="fmp down"),
         }
@@ -771,7 +792,12 @@ def test_fetch_eod_stooq_fails_without_fmp_key_returns_empty_and_never_contacts_
     monkeypatch.delenv("FMP_API_KEY", raising=False)
     fetch_eod = _callable_or_fail("fetch_eod")
 
-    transport, calls = _make_transport({"stooq.com": lambda req: httpx.Response(500, text="boom")})
+    transport, calls = _make_transport(
+        {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
+            "stooq.com": lambda req: httpx.Response(500, text="boom"),
+        }
+    )
 
     with caplog.at_level(logging.INFO, logger="onrecord.ingest.prices"):
         result = _call_or_fail(
@@ -841,6 +867,7 @@ def test_fetch_eod_fmp_key_never_leaks_via_any_logger_at_repo_info_level(
 
     transport, calls = _make_transport(
         {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
             "stooq.com": lambda req: httpx.Response(500, text="stooq down"),
             "financialmodelingprep.com": lambda req: httpx.Response(500, text="fmp down"),
         }
@@ -899,7 +926,10 @@ def test_fetch_eod_range_days_trims_to_trailing_calendar_window(tmp_path, monkey
     last_date = start + timedelta(days=total_days - 1)  # 2023-12-31 — the series' own last date
 
     transport, calls = _make_transport(
-        {"stooq.com": lambda req: httpx.Response(200, text=csv_text)}
+        {
+            "query1.finance.yahoo.com": lambda req: httpx.Response(500, text="yahoo down"),
+            "stooq.com": lambda req: httpx.Response(200, text=csv_text),
+        }
     )
 
     result = _call_or_fail(fetch_eod, "VST", range_days=30, transport=transport, cache_dir=tmp_path)
@@ -1138,3 +1168,140 @@ def test_nearby_receipts_receipt_has_exactly_the_six_amended_keys():
         f"(missing: {sorted(RECEIPT_KEYS - set(receipt))}, "
         f"extra: {sorted(set(receipt) - RECEIPT_KEYS)})"
     )
+
+
+# ==========================================================================
+# AMENDMENT — T-034 (2026-08-13): stooq began serving a JavaScript
+# proof-of-work bot wall instead of CSV (observed live: parse yields zero
+# rows on every ticker, prod + local). The source chain gains a keyless
+# Yahoo chart-API source AHEAD of stooq: yahoo -> stooq -> FMP. The frozen
+# tests above keep their original semantics via yahoo->500 routes (added in
+# this same amendment); the tests below pin the NEW yahoo behavior:
+# parse shape, chain position, browser User-Agent, dotted-symbol mapping,
+# and graceful fall-through on a non-JSON (bot-wall-style) body.
+# ==========================================================================
+
+
+YAHOO_CHART_PAYLOAD = {
+    "chart": {
+        "result": [
+            {
+                "meta": {"symbol": "VST"},
+                "timestamp": [1704378600, 1704465000, 1704724200],
+                "indicators": {"quote": [{"close": [181.91, None, 185.14]}]},
+            }
+        ],
+        "error": None,
+    }
+}
+
+# 1704378600 = 2024-01-04T14:30Z, 1704465000 = 2024-01-05T14:30Z (null close,
+# must be skipped), 1704724200 = 2024-01-08T14:30Z.
+YAHOO_EXPECTED_SERIES = [
+    {"date": "2024-01-04", "close": 181.91},
+    {"date": "2024-01-08", "close": 185.14},
+]
+
+
+def test_parse_yahoo_chart_maps_timestamps_to_dates_and_skips_null_closes():
+    # spec(T-034:AC-1)
+    parse_yahoo_chart = _callable_or_fail("parse_yahoo_chart")
+
+    result = _call_or_fail(parse_yahoo_chart, YAHOO_CHART_PAYLOAD)
+
+    assert result == YAHOO_EXPECTED_SERIES, result
+
+
+def test_parse_yahoo_chart_returns_empty_on_malformed_payloads():
+    # spec(T-034:AC-1)
+    parse_yahoo_chart = _callable_or_fail("parse_yahoo_chart")
+
+    for payload in (
+        {},
+        {"chart": {"result": None, "error": {"code": "Not Found"}}},
+        {"chart": {"result": []}},
+        {"chart": {"result": [{"meta": {}}]}},  # no timestamp/indicators
+        "not even a dict",
+    ):
+        assert _call_or_fail(parse_yahoo_chart, payload) == [], (
+            f"malformed yahoo payload must parse to [], got non-empty for {payload!r}"
+        )
+
+
+def test_fetch_eod_prefers_yahoo_and_contacts_nothing_else_on_success(tmp_path, monkeypatch):
+    # spec(T-034:AC-2)
+    monkeypatch.setenv("FMP_API_KEY", "fake-test-key")
+    fetch_eod = _callable_or_fail("fetch_eod")
+
+    # stooq/FMP deliberately UNROUTED: any contact raises via _make_transport.
+    transport, calls = _make_transport(
+        {"query1.finance.yahoo.com": lambda req: httpx.Response(200, json=YAHOO_CHART_PAYLOAD)}
+    )
+
+    result = _call_or_fail(
+        fetch_eod, "VST", range_days=365, transport=transport, cache_dir=tmp_path
+    )
+
+    assert result == YAHOO_EXPECTED_SERIES, result
+    assert calls["query1.finance.yahoo.com"] >= 1, "yahoo must be the first source attempted"
+
+    cache_file = tmp_path / "VST.json"
+    assert cache_file.exists(), "a successful yahoo fetch must write the cache like any source"
+    assert json.loads(cache_file.read_text())["series"] == YAHOO_EXPECTED_SERIES
+
+
+def test_fetch_eod_yahoo_request_sends_browser_ua_and_maps_dotted_symbol(tmp_path, monkeypatch):
+    # spec(T-034:AC-3)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    fetch_eod = _callable_or_fail("fetch_eod")
+
+    seen: list[tuple[str, str]] = []
+
+    def yahoo_responder(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("user-agent", "")))
+        return httpx.Response(200, json=YAHOO_CHART_PAYLOAD)
+
+    transport, _calls = _make_transport({"query1.finance.yahoo.com": yahoo_responder})
+
+    result = _call_or_fail(
+        fetch_eod, "BRK.B", range_days=365, transport=transport, cache_dir=tmp_path
+    )
+
+    assert result == YAHOO_EXPECTED_SERIES
+    assert seen, "yahoo must have been contacted"
+    url, ua = seen[0]
+    assert "BRK-B" in url, (
+        f"dotted symbols must map to yahoo's dashed form (BRK.B -> BRK-B) in the URL: {url}"
+    )
+    assert "BRK.B" not in url, f"the raw dotted symbol must not appear in the yahoo URL: {url}"
+    assert "Mozilla" in ua, (
+        f"the yahoo request must carry a browser User-Agent (yahoo rejects default "
+        f"client UAs), got: {ua!r}"
+    )
+
+
+def test_fetch_eod_falls_through_nonjson_yahoo_body_to_stooq(tmp_path, monkeypatch):
+    # spec(T-034:AC-2)
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    fetch_eod = _callable_or_fail("fetch_eod")
+    csv_text = _read_fixture_text("stooq_sample.csv")
+
+    transport, calls = _make_transport(
+        {
+            # A bot-wall-style 200-with-HTML body: not JSON, no chart data.
+            "query1.finance.yahoo.com": lambda req: httpx.Response(
+                200, text="<!DOCTYPE html><html>verify your browser</html>"
+            ),
+            "stooq.com": lambda req: httpx.Response(200, text=csv_text),
+        }
+    )
+
+    result = _call_or_fail(
+        fetch_eod, "VST", range_days=365, transport=transport, cache_dir=tmp_path
+    )
+
+    assert result == STOOQ_EXPECTED_SERIES, (
+        f"a non-JSON yahoo body must fall through to stooq, got {result[:3]}..."
+    )
+    assert calls["query1.finance.yahoo.com"] >= 1
+    assert calls["stooq.com"] >= 1, "stooq must be attempted after a yahoo parse failure"
