@@ -746,7 +746,11 @@ _JUDGE_BACKOFF_BASE = 0.05  # seconds; tests that don't monkeypatch time.sleep s
 _JUDGE_REQUEST_TIMEOUT = 120.0
 # Review Minor-1: the judge emits ~30 tokens of JSON by protocol; bound it
 # so a misbehaving/verbose model can't run up per-claim billing.
-_JUDGE_MAX_OUTPUT_TOKENS = 64
+# 2000, not verdict-sized: reasoning-family models (gpt-5-mini, the default
+# judge) bill their hidden reasoning against this SAME cap — at the original
+# 64 every live verdict came back empty ("unparseable", found 2026-08-13).
+# The verdict itself is still one word; the headroom is for reasoning.
+_JUDGE_MAX_OUTPUT_TOKENS = 2000
 _LIBRARY_LOGGER_NAMES = ("httpx", "httpcore", "openai")
 
 
@@ -812,7 +816,12 @@ class _OpenAIChatJudge:
         body = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": _JUDGE_MAX_OUTPUT_TOKENS,
+            # `max_completion_tokens`: the gpt-5 family REJECTS the legacy
+            # `max_tokens` spelling with HTTP 400 (found live 2026-08-13 —
+            # every real gpt-5-mini judge call failed; the frozen suite
+            # accepts either spelling by design). Also accepted by 4o-era
+            # models, so this is the universally safe key.
+            "max_completion_tokens": _JUDGE_MAX_OUTPUT_TOKENS,
         }
 
         # Set on failure INSIDE the loop, raised AFTER it (review Minor-3):

@@ -229,10 +229,16 @@ Judgment set: **100 queries, 1,360 blind pooled judgments** (`evalsets/judgments
 | Retrieval (corpus-v2) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
 | Boolean OR (unranked, Day-1 baseline, 15q) | 0.000 | 0.000 | 0.000 | 0.000 | 0.001 | 0.000 |
-| BM25 (k1=1.5, b=0.75, 15-query set) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
-| BM25 (k1=1.5, b=0.75, **100-query set**) | 0.470 | 0.392 | 0.689 | 0.846 | 0.618 | 0.558 |
+| BM25 (15-query set, three-arm pool) | 0.840 | 0.693 | 0.710 | 0.929 | 0.956 | 0.751 |
+| BM25 (100-query set, three-arm pool) | 0.470 | 0.392 | 0.689 | 0.846 | 0.618 | 0.558 |
+| BM25 (100q, **four-arm pool**, session 4) | 0.488 | 0.409 | 0.425 | 0.602 | 0.644 | 0.449 |
+| Semantic (100q, four-arm pool) | — | — | — | 0.644 | 0.670 | **0.538** |
+| Hybrid RRF (100q, four-arm pool) | — | — | — | **0.928** | 0.644 | 0.431 |
 
-The identical labels produce the boolean and BM25 rows — the delta is the ranking function, measured, not vibed. The 15q→100q drop is not a regression either: the 85 session-3 queries are deliberately narrower (single-ordinance, single-disclosure topics), so fewer pooled documents clear their grade-2 bars — the 100-query number is the more honest headline and still clears the ≥0.5 gate. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
+The identical labels produce each pool-generation's rows — the deltas are the ranking functions, measured, not vibed. Two honest methodology notes:
+
+1. **15q→100q drop**: the 85 session-3 queries are deliberately narrower (single-ordinance, single-disclosure topics), so fewer pooled documents clear their grade-2 bars.
+2. **Pooling-bias-by-method, found and repaired (session 4)**: the original pool drew candidates from grep+BM25+random — no semantic arm — so semantic retrieval's unique finds were never judged and scored as non-relevant (semantic *read* 0.135; a slander, not a measurement). Adding a semantic arm and judging its 886 new pairs moved semantic to 0.538 (the strongest single mode), pulled BM25 down to 0.449 (its old numbers were flattered by its own pooling arm), and revealed hybrid as the recall champion (R@50 0.928 — the mode the Ask view uses). Consequence: the `make eval` ≥0.5 NDCG gate — calibrated against the BM25-biased pool — now reads red for lexical-only (0.449) while semantic clears it; re-scoping that gate to the deployed retrieval config is an open owner decision, deliberately not made silently. All readings preserved in `evalsets/scoreboard.jsonl` + `artifacts/modes_scoreboard.jsonl`, provenance in `evalsets/judgment-session-{3,4}-provenance.json`. A methodological note worth reading before comparing across corpus versions: when corpus-v2 (289,536 docs) first replaced corpus-v1 (24,115 docs), BM25's NDCG@10 *read* 0.171 against the v1-pooled judgments — not a retrieval regression but pooling bias (the 10.6×-larger corpus pushed unjudged documents into the top ranks, and unjudged scores as non-relevant). Re-pooling the judgment set against v2 recovered the honest number above. Both readings are preserved in `evalsets/scoreboard.jsonl`, `corpus_version`-tagged.
 
 ## Defended k1/b
 

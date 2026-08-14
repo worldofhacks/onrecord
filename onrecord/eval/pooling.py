@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 from rank_bm25 import BM25Okapi
@@ -40,6 +41,7 @@ def pool_candidates(
     corpus_path: str | Path,
     k_per_source: int,
     seed: int,
+    semantic_fn: Callable[[str, int], list[str]] | None = None,
 ) -> list[Doc]:
     """Pool judgment candidates for `query` from grep + bm25 + random sources.
 
@@ -69,9 +71,22 @@ def pool_candidates(
 
     random_docs = rng.sample(docs, min(3, len(docs)))
 
+    # Optional fourth source (2026-08-13 pooling-bias repair): a semantic
+    # retriever, injected as `semantic_fn(query, k) -> [doc_id]` so this
+    # module keeps zero embedding dependencies. `None` (the default, and
+    # every frozen-test call) leaves the T-009 algorithm BIT-IDENTICAL:
+    # the rng call order (sample, then shuffle) is untouched because the
+    # semantic source never consumes randomness. Unknown ids are ignored.
+    semantic_docs: list[Doc] = []
+    if semantic_fn is not None:
+        by_id = {d.id: d for d in docs}
+        semantic_docs = [
+            by_id[i] for i in semantic_fn(query, k_per_source) if i in by_id
+        ][:k_per_source]
+
     seen: set[str] = set()
     combined: list[Doc] = []
-    for d in grep_docs + bm25_docs + random_docs:
+    for d in grep_docs + bm25_docs + random_docs + semantic_docs:
         if d.id not in seen:
             seen.add(d.id)
             combined.append(d)

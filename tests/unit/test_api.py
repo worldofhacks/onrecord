@@ -1105,3 +1105,95 @@ def test_tickers_503_with_actionable_message_when_index_missing(tmp_path, monkey
     assert set(body.keys()) == {"error"}
     assert isinstance(body["error"], str)
     assert "index" in body["error"].lower()
+
+
+# ==========================================================================
+# AMENDMENT — answer rate limiting (2026-08-13, gap-analysis B-4,
+# owner-directed): the live deployment serves real grounded answers
+# (~$0.03/answer of owner API credit) on a public URL with zero throttling.
+# Env-gated, OFF by default: ONRECORD_ANSWER_DAILY_CAP (global per UTC day)
+# and ONRECORD_ANSWER_IP_HOURLY_CAP (per client IP, trailing hour). Both
+# unset -> limiter fully off, every frozen test above unaffected. The
+# check runs BEFORE the availability ladder (a rate-limited caller gets
+# 429 even where an unkeyed deploy would 503) and counters live in
+# app.state, so each ASGI startup begins fresh. 429s use the ladder's flat
+# {"error": ...} shape plus a Retry-After header.
+# ==========================================================================
+
+
+ANSWER_BODY = {"question": "what is on the record?", "mode": "lexical", "k": 4}
+_RATE_ENV_VARS = (
+    "ONRECORD_ANSWER_DAILY_CAP",
+    "ONRECORD_ANSWER_IP_HOURLY_CAP",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+)
+
+
+def _clear_rate_env(monkeypatch):
+    for var in _RATE_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_answer_rate_limiting_is_off_by_default(tmp_path, monkeypatch):
+    _clear_rate_env(monkeypatch)
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        codes = [
+            client.post("/api/answer", json=ANSWER_BODY).status_code for _ in range(4)
+        ]
+    assert 429 not in codes, (
+        f"with no cap env vars set the limiter must be fully OFF, got {codes}"
+    )
+
+
+def test_answer_daily_cap_returns_flat_429_with_retry_after(tmp_path, monkeypatch):
+    _clear_rate_env(monkeypatch)
+    monkeypatch.setenv("ONRECORD_ANSWER_DAILY_CAP", "2")
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        first_two = [
+            client.post("/api/answer", json=ANSWER_BODY).status_code for _ in range(2)
+        ]
+        third = client.post("/api/answer", json=ANSWER_BODY)
+
+    assert 429 not in first_two, f"requests under the cap must not be limited: {first_two}"
+    assert third.status_code == 429
+    body = third.json()
+    assert set(body) == {"error"}, f"429 must use the ladder's flat error shape: {body}"
+    assert "limit" in body["error"].lower()
+    assert "retry-after" in {k.lower() for k in third.headers}, (
+        "429 must carry a Retry-After header"
+    )
+    assert int(third.headers["retry-after"]) > 0
+
+
+def test_answer_ip_hourly_cap_limits_per_client(tmp_path, monkeypatch):
+    _clear_rate_env(monkeypatch)
+    monkeypatch.setenv("ONRECORD_ANSWER_IP_HOURLY_CAP", "1")
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        first = client.post("/api/answer", json=ANSWER_BODY)
+        second = client.post("/api/answer", json=ANSWER_BODY)
+
+    assert first.status_code != 429
+    assert second.status_code == 429
+    assert int(second.headers["retry-after"]) > 0
+
+
+def test_answer_rate_counters_reset_on_asgi_startup(tmp_path, monkeypatch):
+    _clear_rate_env(monkeypatch)
+    monkeypatch.setenv("ONRECORD_ANSWER_DAILY_CAP", "1")
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+
+    with _client(api_module, monkeypatch, index_dir) as client:
+        assert client.post("/api/answer", json=ANSWER_BODY).status_code != 429
+        assert client.post("/api/answer", json=ANSWER_BODY).status_code == 429
+
+    # A fresh ASGI startup (new deployment / restart) must begin at zero.
+    with _client(api_module, monkeypatch, index_dir) as client:
+        assert client.post("/api/answer", json=ANSWER_BODY).status_code != 429

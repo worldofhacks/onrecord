@@ -27,11 +27,23 @@
 | Judged answer (adds gpt-5-mini per-claim verdicts) | +≈1.5K in / ≈100 out | +≈$0.0006 |
 | Corpus re-embed (only on corpus version bump) | ≈74M tokens | ≈$1.47, amortized by content-hash cache (unchanged text is never re-billed) |
 
-## Projection model (to finalize Thursday with measured token counts)
-Assumptions to measure, not guess: avg AI questions/user/session, sessions/user/month, tokens per question type (retrieval-only vs grounded answer vs judged answer). Cost drivers at scale: generation tokens (dominant), embedding refresh on corpus updates (minor, cached by content hash), judge sampling rate (tunable — judge a %, not all).
+## Projection model (filled 2026-08-13 from measured per-query costs)
+
+Assumptions (stated, not hidden): 5 grounded answers/user/month (demo-stage
+engagement), 20 searches/user/month (lexical $0, semantic ≈$0.000004), judge
+sampling on 10% of answers, one corpus re-embed per quarter amortized. The
+dominant driver is generation ($0.028/answer measured); everything else is
+noise until ~100K users. The env-gated rate limiter
+(`ONRECORD_ANSWER_DAILY_CAP`, `ONRECORD_ANSWER_IP_HOURLY_CAP`) hard-caps the
+worst case regardless of traffic.
 
 | Scale | 100 users | 1K users | 10K users | 100K users |
 |---|---|---|---|---|
-| $/month (est.) | TBD | TBD | TBD | TBD |
+| Grounded answers (5/user/mo × $0.028) | $14 | $140 | $1,400 | $14,000 |
+| Searches + judge sampling + embed refresh | <$1 | ~$2 | ~$20 | ~$200 |
+| **$/month (est.)** | **~$15** | **~$142** | **~$1.4K** | **~$14.2K** |
 
-Method: measure real per-query token costs on the finished RAG pipeline Thursday night, then fill this table with the assumption block above it.
+Levers at scale, in order of impact: cheaper generator tier for routine
+questions (haiku-class ≈ 1/10th the cost), answer caching by
+question-hash (civic questions repeat), judge sampling rate, and prompt-
+cache reuse on the shared system/context prefix.
