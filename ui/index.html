@@ -32,7 +32,7 @@ input::placeholder{color:#B5B0A1}
         <a href="#ask" style="{{ navAsk }}">Ask</a>
         <a href="#tickers" style="{{ navTickers }}">Tickers</a>
         <a href="#scoreboard" style="{{ navScore }}">Scoreboard</a>
-        <a href="#ledger" style="{{ navLedger }}">Ledger <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#F0EEE4;border:1px solid #E7E4DA;border-radius:99px;padding:2px 8px;color:#8A8574;margin-left:5px">soon</span></a>
+        <a href="#ledger" style="{{ navLedger }}">Ledger</a>
       </nav>
     </sc-if>
     <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;display:flex;align-items:center;gap:7px"><span style="{{ engineDot }}"></span>{{ engineLabel }}<sc-if value="{{ apiDown }}" hint-placeholder-val="{{ false }}"><button onClick="{{ retryApi }}" style="all:unset;cursor:pointer;color:#0A7A43;text-decoration:underline;font-family:'IBM Plex Mono',monospace;font-size:11px">retry</button></sc-if></span>
@@ -471,9 +471,9 @@ input::placeholder{color:#B5B0A1}
     <section style="padding:36px 0 8px">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 13px">SHIPS THIS WEEKEND</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#075C32;background:#E4F3E9;border-radius:99px;padding:5px 13px">{{ promTotal }} COMMITMENTS · VERBATIM</span>
       </div>
-      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Claims made on the record, tracked to outcomes. Every row pairs the promise with its receipt — and with what actually happened. The rows below are illustrative.</p>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Commitments made on the record, extracted as verbatim quotes — every extraction is enforced to be an exact substring of its source document, and every row links to its receipt. Outcome tracking arrives as the record catches up to the promises.</p>
     </section>
     <sc-if value="{{ hasDodge }}" hint-placeholder-val="{{ false }}">
     <div style="padding:14px 0 4px">
@@ -495,25 +495,26 @@ input::placeholder{color:#B5B0A1}
       </div>
     </div>
     </sc-if>
+    <sc-if value="{{ hasProms }}" hint-placeholder-val="{{ false }}">
     <div style="padding:14px 0">
-      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease both">
-        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CEG</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">8-K · 2026-02-11</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
-        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“835 megawatts at Calvert Cliffs will reach commercial operation by June 2026.”</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: energized 2026-06-19, confirmed in Q2 call</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#075C32;background:#E4F3E9;border-radius:99px;padding:4px 13px">DELIVERED</span></div>
-      </div>
-      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
-      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .07s both">
-        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Loudoun County, VA</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Board hearing · 2025-11-18</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
-        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“The substation will be energized before the start of the school year — that is our commitment to this board.”</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://youtube.com/watch?v=5w_AQQ-bk30&t=2732s" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#16150F;color:#FAFAF7;border-radius:99px;padding:6px 13px" style-hover="background:#0A7A43;color:#fff;animation:pulse .9s ease-out infinite">▶ 1:02:14</a><span style="font-size:12px;color:#8A8574">Outcome: energization now filed for Q1 2027</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#9C3A24;background:#F7E4DE;border-radius:99px;padding:4px 13px">SLIPPED</span></div>
-      </div>
-      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
-      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .14s both">
-        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#8A6D1F;background:#F5EEDA;border-radius:4px;padding:2px 7px">COACHED</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CRWV</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Q1 call · 2026-05-08</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
-        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“We will have 1.2 gigawatts contracted and energized by year-end — the transformers are already sequenced.”</p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: 620 MW energized as of Q2 — watching Q3</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#8A6D1F;background:#F5EEDA;border-radius:99px;padding:4px 13px">PENDING</span></div>
-      </div>
+      <sc-for list="{{ promRows }}" as="pr" hint-placeholder-count="0">
+        <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:20px 24px;margin-bottom:10px;animation:fadeup .45s ease both">
+          <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap">
+            <span style="{{ pr.badgeStyle }}">{{ pr.badge }}</span>
+            <span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ pr.who }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">{{ pr.date }}</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A6D1F;background:#F5EEDA;border-radius:99px;padding:3px 10px">{{ pr.cat }}</span>
+          </div>
+          <p style="font-family:Fraunces,serif;font-size:clamp(15px,1.3vw,18px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:72ch">“{{ pr.quote }}”</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <a href="{{ pr.link }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">receipt ↗</a>
+            <sc-if value="{{ pr.hasVal }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#0A7A43">{{ pr.val }}</span></sc-if>
+          </div>
+        </div>
+      </sc-for>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;padding:6px 2px">showing {{ promShown }} of {{ promTotal }} · extraction provenance in evalsets/promises-provenance.json · quotes are enforced verbatim, never paraphrased</p>
     </div>
+    </sc-if>
   </div>
   </sc-if>
 
@@ -690,6 +691,7 @@ class Component extends DCLogic {
     this.setState({ apiDown: false, jurProbed: false, jurs: [] });
     this.loadTickers();
     this.loadDodge();
+    this.loadPromises();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -808,6 +810,11 @@ class Component extends DCLogic {
     this.fetchJson('/api/conduct/' + encodeURIComponent(sym)).then(r => {
       if (seq !== this._cseq) return;
       if (r.ok && r.body && typeof r.body.net_value === 'number') this.setState({ conduct: r.body });
+    });
+  }
+  loadPromises() {
+    this.fetchJson('/api/promises?k=30').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.rows)) this.setState({ proms: r.body });
     });
   }
   loadDodge() {
@@ -1136,6 +1143,16 @@ class Component extends DCLogic {
       footerStyle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '24px ' + px, borderTop: '1px solid #E7E4DA', marginTop: '32px', marginBottom: isMobile ? '52px' : '0' },
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
+      hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
+      promShown: s.proms ? Math.min(30, s.proms.rows.length) : 0,
+      promRows: (s.proms ? s.proms.rows.slice(0, 30) : []).map(r => ({
+        badge: (r.venue_type || r.source_type || '').toUpperCase(),
+        badgeStyle: r.venue_type === 'sworn' ? 'color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px' : 'color:#8A6D1F;background:#F5EEDA;border-radius:4px;padding:2px 7px',
+        who: r.jurisdiction || r.ticker || 'on the record',
+        date: r.date || '', cat: (r.category || 'other').toUpperCase(),
+        quote: r.quote, link: r.deep_link || '#',
+        hasVal: !!r.value_text, val: r.value_text || '',
+      })),
       dodgeRows: (s.dodge ? s.dodge.rows.slice(0, 10) : []).map((r, i) => ({
         rank: String(i + 1).padStart(2, '0'), jur: r.jurisdiction,
         per1000: r.per_1000.toFixed(1),
