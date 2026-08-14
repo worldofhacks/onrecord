@@ -662,6 +662,22 @@ def _boot(app: FastAPI) -> None:
     # warmed below on a best-effort basis.
     app.state.chunks = _identity_chunks(app.state.index)
     app.state.chunks_by_id = {chunk.chunk_id: chunk for chunk in app.state.chunks}
+
+    # T-060: the 8-K events feed, typed at boot from the loaded index's
+    # filing docs (871 rows on corpus-v2; <1s). An unknown item code raises
+    # in build_events — surfaced as a boot failure deliberately (a new SEC
+    # item deserves a human, not a dropped row); guarded so a corpus
+    # without filings just serves the endpoint's flat 503.
+    from onrecord.analysis.events8k import ITEM_LABELS, build_events
+
+    if app.state.index is not None:
+        _docs = [app.state.index.get_doc(i) for i in range(app.state.index.doc_count())]
+        _event_rows = build_events(_docs)
+        for _event in _event_rows:
+            _event["labels"] = [ITEM_LABELS[c] for c in _event["items"]]
+        app.state.events8k = _event_rows
+    else:
+        app.state.events8k = []
     app.state.embed_stores = {}
     _warm_embed_store()
 
@@ -1447,6 +1463,25 @@ def promised_endpoint(  # NOT `async` -- serves boot-precomputed rollups
         "rollups": selected,
         "n_quantified_total": sum(b["n_quantified"] for b in selected.values()),
     }
+
+
+@app.get("/api/events")
+def events_endpoint(  # NOT `async` -- serves boot-typed rows
+    ticker: str | None = None,
+    k: int = Query(default=50, ge=1, le=500),
+):
+    """T-060: material events per ticker from 8-K item typing. Date
+    descending; `total` counts the filtered set before truncation."""
+    rows = getattr(app.state, "events8k", [])
+    if not rows:
+        return _flat_error(
+            503,
+            "no 8-K events are typed -- the loaded index carries no filing "
+            "docs with Item headers",
+        )
+    if ticker is not None:
+        rows = [r for r in rows if r.get("ticker") == ticker]
+    return {"rows": rows[:k], "total": len(rows)}
 
 
 @app.get("/api/outcomes/summary")
