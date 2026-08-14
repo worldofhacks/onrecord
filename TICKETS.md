@@ -117,3 +117,6 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-048 | UX: warming page + rate-limit messaging | done | final-C | — | standard |
 | T-049 | Chart polish: ranges + insider dots | done | final-C | T-038 | standard |
 | T-050 | Search date filter + sort | done | final-C | — | standard |
+| T-051 | Hearings on air: live/upcoming stream tracking | done | living | T-036 | standard |
+| T-052 | Filings delta: EDGAR Atom poller | done | living | T-038 | standard |
+| T-053 | Refresh lanes + corpus-v3 runbook (swap on owner go) | done | living | T-051, T-052 | standard |
