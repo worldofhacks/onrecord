@@ -109,5 +109,8 @@ The Day-1 estimate was $20–50 for dev; landed inside it.
   disclosed here and in the artifact.
 - Verbatim promise quotes inherit caption dysfluencies ("the the the
   bonds…") — by design: the ledger quotes what the record says, exactly.
-- Prices are daily closes (stooq/yahoo keyless chain); mention-level
-  anchoring (T-033) remains backlog.
+- Prices are daily closes (stooq/yahoo keyless chain).
+- Receipt link-rot, measured by full census (11,004 videos, 2026-08-14):
+  **0.98%** (108 dead links; `evalsets/linkhealth-2026-08-14.jsonl`). The
+  captions remain in the corpus regardless; a 'source removed' UI
+  treatment is the documented follow-up (T-036).
