@@ -29,3 +29,49 @@
 ## Key Learnings
 - On a correctness-critical build, the highest-value prompt is not "write code" but "try to prove this wrong, against real data."
 - Frozen tests + independent review turned 6 confidently-wrong implementations into caught-and-fixed incidents instead of shipped bugs — none reached the integration branch.
+
+## Final-checkpoint addendum (2026-08-13/14)
+
+The last 48 hours compressed the full arc of AI-first development —
+including the failure modes the process exists to catch:
+
+7. **The eval slandered its own best mode.** The judgment pool (grep +
+   BM25 + random arms) never surfaced semantic retrieval's unique finds,
+   so semantic scored 0.135. The repair was methodological, not code: add
+   a semantic pooling arm, have the labeler judge its 886 unseen pairs,
+   re-measure. Semantic turned out to be the strongest single mode
+   (0.538), and BM25's earlier numbers were flattered by its own pooling
+   arm. Both readings are published.
+8. **The judge that never worked.** Validation of the faithfulness judge
+   found it had never produced a real verdict against the live API: the
+   gpt-5 family rejects the legacy `max_tokens` parameter (every call
+   400'd), and after that fix, the 64-token output cap was consumed
+   entirely by hidden reasoning (every verdict empty). Two latent defects,
+   both invisible while the judge was only exercised through mocks —
+   found the moment validation forced real calls. Validated at 0.944
+   agreement afterward.
+9. **Verbatim or nothing.** The Promise Ledger's extraction enforces in
+   code that every quote is an exact substring of its source document;
+   0.9% of model outputs violated it and were dropped, never repaired.
+   The same session earlier removed a design-phase demo corpus that had
+   rendered fabricated receipts during an outage — the platform now shows
+   engine truth or nothing.
+10. **Frozen contracts amended by evidence, not convenience.** Bounding
+    hybrid fusion depth (7.8s → ~2s/query) amended a frozen full-depth
+    design pin — shipped only after a 100-query differential against the
+    frozen behavior (99.5% top-20 overlap, NDCG unchanged) was committed
+    as the amendment's evidence.
+11. **Operational reality kept diverging from clean-room assumptions**:
+    stooq silently became a proof-of-work bot wall; EDGAR's
+    `primaryDocument` points at XSL-rendered HTML rather than the raw
+    XML; yahoo 429s a spoofed browser UA while accepting a bare one;
+    Railway's upload edge caps context far below the artifact weight;
+    macOS revoked the agent's file access mid-session (work continued via
+    the GitHub API and a scratchpad workspace, with CI as the test gate).
+    Every one of these was found live, fixed tests-first where code
+    changed, and recorded as a lesson.
+
+Labeling division of labor, disclosed throughout: the owner directed
+model labelers at each decision point (gpt-5.2, then gpt-5.6-sol) with
+provenance sidecars committed; the 65 session-1 hand labels remain the
+human anchor.
