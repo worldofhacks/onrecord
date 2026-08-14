@@ -120,3 +120,4 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-051 | Hearings on air: live/upcoming stream tracking | done | living | T-036 | standard |
 | T-052 | Filings delta: EDGAR Atom poller | done | living | T-038 | standard |
 | T-053 | Refresh lanes + corpus-v3 runbook (swap on owner go) | done | living | T-051, T-052 | standard |
+| T-054 | Embedding upgrade eval: 3-large @ 3072 vs baseline | in-progress | living | T-047 | standard |
