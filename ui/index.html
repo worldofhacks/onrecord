@@ -415,6 +415,18 @@ input::placeholder{color:#B5B0A1}
               </sc-for>
             </div>
           </sc-if>
+          <sc-if value="{{ hasConduct }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:16px;border-top:1px solid #F0EEE4;padding-top:12px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:8px">Insider conduct · trailing 365d · open-market only</div>
+              <div style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap">
+                <span style="font-family:Fraunces,serif;font-size:22px;font-weight:560;color:{{ cdNetColor }}">{{ cdNet }}</span>
+                <span style="font-size:12.5px;color:#6E6A5E">net insider flow</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#B8432C">{{ cdSells }} sold · {{ cdSellers }} insiders</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#0A7A43">{{ cdBuys }} bought · {{ cdBuyers }} insiders</span>
+              </div>
+              <p style="margin:8px 0 0;font-size:11px;color:#B5B0A1">SEC Form 4 filings · last transaction {{ cdLast }} · awards and option mechanics excluded · juxtaposition, not causation, and never advice.</p>
+            </div>
+          </sc-if>
         </div>
       </div>
     </sc-if>
@@ -463,6 +475,26 @@ input::placeholder{color:#B5B0A1}
       </div>
       <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Claims made on the record, tracked to outcomes. Every row pairs the promise with its receipt — and with what actually happened. The rows below are illustrative.</p>
     </section>
+    <sc-if value="{{ hasDodge }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:14px 0 4px">
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease both">
+        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+          <h2 style="font-family:Fraunces,serif;font-weight:560;font-size:22px;margin:0">The Dodge Index.</h2>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#0A7A43;background:#E4F3E9;border-radius:99px;padding:3px 10px">LIVE · DETERMINISTIC</span>
+        </div>
+        <p style="margin:0 0 12px;font-size:12.5px;color:#6E6A5E;max-width:70ch;line-height:1.5">Explicit deferral formulas (“no comment”, “get back to you”, “not at liberty”…) counted per 1,000 meeting documents, from a frozen public lexicon — no model anywhere, every score reproducible, every row backed by receipts. Minimum {{ dodgeFloor }} documents to qualify.</p>
+        <sc-for list="{{ dodgeRows }}" as="dj" hint-placeholder-count="0">
+          <div style="display:flex;gap:12px;align-items:baseline;padding:7px 0;border-top:1px solid #F0EEE4;font-size:13px;flex-wrap:wrap">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8A8574;min-width:24px">{{ dj.rank }}</span>
+            <span style="font-weight:600">{{ dj.jur }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#B8432C">{{ dj.per1000 }} / 1,000 docs</span>
+            <span style="font-size:11.5px;color:#8A8574">{{ dj.detail }}</span>
+            <a href="{{ dj.link }}" target="_blank" rel="noopener" style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">receipt ▸</a>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
     <div style="padding:14px 0">
       <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease both">
         <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CEG</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">8-K · 2026-02-11</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
@@ -657,6 +689,7 @@ class Component extends DCLogic {
   bootstrap() {
     this.setState({ apiDown: false, jurProbed: false, jurs: [] });
     this.loadTickers();
+    this.loadDodge();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -766,6 +799,20 @@ class Component extends DCLogic {
       const body = r.body;
       if (r.ok && body && Array.isArray(body.series) && body.series.length > 1) this.setState({ price: body, priceState: 'ready' });
       else this.setState({ price: null, priceState: 'unavailable' });
+    });
+  }
+
+  loadConduct(sym) {
+    const seq = (this._cseq = (this._cseq || 0) + 1);
+    this.setState({ conduct: null });
+    this.fetchJson('/api/conduct/' + encodeURIComponent(sym)).then(r => {
+      if (seq !== this._cseq) return;
+      if (r.ok && r.body && typeof r.body.net_value === 'number') this.setState({ conduct: r.body });
+    });
+  }
+  loadDodge() {
+    this.fetchJson('/api/dodge').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.rows)) this.setState({ dodge: r.body });
     });
   }
 
@@ -954,6 +1001,17 @@ class Component extends DCLogic {
         mkLink: mk ? (mk.deep_link || '#') : '#',
         mkCta: mk ? ctaFor(mk.source_type, mkTs) : '',
       };
+      const cd = s.conduct && s.conduct.ticker === s.detSym ? s.conduct : null;
+      const money = (v) => { const a = Math.abs(v); const f = a >= 1e9 ? (a / 1e9).toFixed(1) + 'B' : a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e3 ? (a / 1e3).toFixed(0) + 'K' : a.toFixed(0); return (v < 0 ? '−$' : '$') + f; };
+      Object.assign(det, {
+        hasConduct: !!(cd && cd.transactions > 0),
+        cdNet: cd ? money(cd.net_value) : '',
+        cdNetColor: cd && cd.net_value < 0 ? '#B8432C' : '#0A7A43',
+        cdSells: cd ? money(cd.sells_value) : '', cdSellers: cd ? cd.insiders_selling : 0,
+        cdBuys: cd ? money(cd.buys_value) : '', cdBuyers: cd ? cd.insiders_buying : 0,
+        cdLast: cd && cd.last_transaction_date ? cd.last_transaction_date : '—',
+      });
+
     }
 
     // --- Scoreboard: live /api/metrics rows (one per eval run, file order).
@@ -1077,6 +1135,13 @@ class Component extends DCLogic {
       headerStyle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: (isMobile ? '14px ' : '18px ') + px, borderBottom: '1px solid #E7E4DA', flexWrap: 'wrap' },
       footerStyle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '24px ' + px, borderTop: '1px solid #E7E4DA', marginTop: '32px', marginBottom: isMobile ? '52px' : '0' },
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
+      hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
+      dodgeRows: (s.dodge ? s.dodge.rows.slice(0, 10) : []).map((r, i) => ({
+        rank: String(i + 1).padStart(2, '0'), jur: r.jurisdiction,
+        per1000: r.per_1000.toFixed(1),
+        detail: r.markers + ' markers · ' + r.docs.toLocaleString() + ' docs',
+        link: (r.sample_receipts[0] || {}).deep_link || '#',
+      })),
       onNav: (e) => this.go(e.currentTarget.dataset.view),
       tabs,
       engineDot: { width: '7px', height: '7px', borderRadius: '99px', background: s.apiLive && !s.apiDown ? '#0A7A43' : '#C9A93E', display: 'inline-block' },
@@ -1184,7 +1249,7 @@ class Component extends DCLogic {
       noSectorsBody: s.apiDown
         ? 'The ticker universe comes from the live API, and it is not answering. Retry from the header once it is back.'
         : 'The registry defines the universe and the index supplies the receipts — neither has landed yet.',
-      openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); },
+      openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); this.loadConduct(sym); },
       closeDet: () => this.setState({ detSym: null, mkI: null }),
       stopIt: (e) => e.stopPropagation(),
       mkEnter: (e) => this.setState({ mkI: +e.currentTarget.dataset.i }),

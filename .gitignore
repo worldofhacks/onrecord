@@ -41,3 +41,9 @@ corpus/v2/corpus.jsonl
 
 # review-agent audit scratch (kept locally, like .tdd-swarm/)
 scratchpad/
+
+# T-039: the Form 4 artifact ships with the repo (small, public-data-derived,
+# refreshable via onrecord.ingest.form4.pull_form4)
+!artifacts/
+artifacts/*
+!artifacts/form4/
