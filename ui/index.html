@@ -468,6 +468,19 @@ input::placeholder{color:#B5B0A1}
               <p style="margin:8px 0 0;font-size:11px;color:#B5B0A1">SEC Form 4 filings · last transaction {{ cdLast }} · awards and option mechanics excluded · juxtaposition, not causation, and never advice.</p>
             </div>
           </sc-if>
+          <sc-if value="{{ hasEvents }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:16px;border-top:1px solid #F0EEE4;padding-top:12px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:8px">Material events · 8-K item typing · {{ eventsTotal }} filings</div>
+              <sc-for list="{{ eventRows }}" as="ev" hint-placeholder-count="0">
+                <div style="display:flex;gap:12px;align-items:baseline;padding:6px 0;border-top:1px solid #F6F5EF;font-size:12.5px;flex-wrap:wrap">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574">{{ ev.date }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.06em;color:#5B4A12;background:#F5EEDA;border-radius:4px;padding:1px 6px">{{ ev.codes }}</span>
+                  <span style="color:#3F3D36">{{ ev.what }}</span>
+                  <a href="{{ ev.link }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43;text-decoration:underline">filing ↗</a>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
         </div>
       </div>
     </sc-if>
@@ -855,6 +868,12 @@ class Component extends DCLogic {
     });
   }
 
+  loadEvents(sym) {
+    this.setState({ events: null });
+    this.fetchJson('/api/events?ticker=' + encodeURIComponent(sym) + '&k=8').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.rows)) this.setState({ events: { ticker: sym, rows: r.body.rows, total: r.body.total } });
+    });
+  }
   loadConduct(sym) {
     const seq = (this._cseq = (this._cseq || 0) + 1);
     this.setState({ conduct: null });
@@ -1230,6 +1249,14 @@ class Component extends DCLogic {
       headerStyle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: (isMobile ? '14px ' : '18px ') + px, borderBottom: '1px solid #E7E4DA', flexWrap: 'wrap' },
       footerStyle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '24px ' + px, borderTop: '1px solid #E7E4DA', marginTop: '32px', marginBottom: isMobile ? '52px' : '0' },
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
+      // T-060: material events for the open ticker detail.
+      hasEvents: !!(s.events && s.events.ticker === s.detSym && s.events.rows.length),
+      eventRows: (s.events && s.events.ticker === s.detSym ? s.events.rows : []).map(r => ({
+        date: r.date, link: r.deep_link,
+        what: r.labels.join(' · '),
+        codes: r.items.join(', '),
+      })),
+      eventsTotal: s.events ? s.events.total : 0,
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
       // T-056: the ledger in numbers — client-side sum of the boot-computed
@@ -1411,7 +1438,7 @@ class Component extends DCLogic {
       setDateFrom: (e) => { this.setState({ fDateFrom: e.currentTarget.value }); this.runSearch(true); },
       setDateTo: (e) => { this.setState({ fDateTo: e.currentTarget.value }); this.runSearch(true); },
       togSort: () => { this.setState({ fSort: this.state.fSort === 'score' ? 'date_desc' : 'score' }); this.runSearch(true); },
-      openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); this.loadConduct(sym); },
+      openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); this.loadConduct(sym); this.loadEvents(sym); },
       closeDet: () => this.setState({ detSym: null, mkI: null }),
       stopIt: (e) => e.stopPropagation(),
       mkEnter: (e) => this.setState({ mkI: +e.currentTarget.dataset.i }),

@@ -1610,3 +1610,41 @@ def test_outcomes_summary_503_when_absent(tmp_path, monkeypatch):
     assert "outcome" in summary.json()["error"].lower()
     assert promises.status_code == 200
     assert "outcome" not in promises.json()["rows"][0]
+
+
+# ==========================================================================
+# AMENDMENT — T-060 8-K event typing (2026-08-14): boot builds the events
+# feed from the loaded index's filing docs (line-anchored Item N.NN
+# grammar); GET /api/events serves it filtered by ticker. No filings in
+# the index -> flat 503.
+# ==========================================================================
+
+
+def test_events_endpoint_serves_typed_rows(tmp_path, monkeypatch):
+    """spec(T-060:AC-2, T-060:AC-4)"""
+    from onrecord.types import Doc as _Doc
+    api_module = _api_module()
+    filing = _Doc(id="edgar:NVDA:0001-26-000001:body",
+                  text="Item 1.01 Entry into a Material Definitive Agreement\ndetails",
+                  source_type="filing", venue_type="sworn", date="2026-03-01",
+                  deep_link="https://sec.gov/x", ticker="NVDA")
+    index_dir = _build_index(tmp_path, AC1_DOCS + [filing])
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/events").json()
+        filtered = client.get("/api/events", params={"ticker": "NVDA"}).json()
+        empty = client.get("/api/events", params={"ticker": "MSFT"}).json()
+    assert body["total"] == 1
+    row = body["rows"][0]
+    assert row["items"] == ["1.01"]
+    assert row["labels"] == ["Entry into a Material Definitive Agreement"]
+    assert filtered["total"] == 1 and empty["total"] == 0
+
+
+def test_events_503_when_no_filings(tmp_path, monkeypatch):
+    """spec(T-060:AC-4) — meeting-only index -> flat 503."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/events")
+    assert resp.status_code == 503
+    assert "8-k" in resp.json()["error"].lower()
