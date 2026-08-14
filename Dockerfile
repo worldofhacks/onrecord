@@ -65,6 +65,11 @@ ENV ONRECORD_INDEX=artifacts/index
 # embeds arrive at 1536 dims and semantic_search rejects the store.
 ENV ONRECORD_EMBED_STORE=artifacts/embeddings-3large
 ENV ONRECORD_EMBED_MODEL=text-embedding-3-large
+# The UI Score view's history: a curated, git-tracked lineage (day-1
+# boolean 0.000 through the deployed 3-large best-mode row) instead of the
+# legacy artifacts/scoreboard.jsonl, whose asset-baked copy went stale the
+# moment the store swapped (T-055 follow-up).
+ENV ONRECORD_SCOREBOARD=evalsets/scoreboard-ui.jsonl
 
 # Bind 0.0.0.0 (never 127.0.0.1 — Railway's proxy connects externally) on
 # $PORT, per tickets/T-015.md's Deploy contract (see also README.md).
