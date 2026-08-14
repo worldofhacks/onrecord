@@ -56,6 +56,25 @@ input::placeholder{color:#B5B0A1}
         </div>
       </sc-if>
     </section>
+    <sc-if value="{{ hasLive }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:4px 0 10px">
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:14px 20px;animation:fadeup .45s ease both">
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574">Hearings on air</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">tracked {{ liveChecked }} · {{ liveJurs }} jurisdictions</span>
+        </div>
+        <sc-for list="{{ liveRows }}" as="lv" hint-placeholder-count="0">
+          <div style="display:flex;gap:10px;align-items:baseline;padding:5px 0;border-top:1px solid #F0EEE4;font-size:12.5px;flex-wrap:wrap">
+            <span style="{{ lv.dotStyle }}"></span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ lv.tagColor }}">{{ lv.tag }}</span>
+            <span style="font-weight:600">{{ lv.jur }}</span>
+            <span style="color:#6E6A5E">{{ lv.title }}</span>
+            <a href="{{ lv.url }}" target="_blank" rel="noopener" style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">watch ▸</a>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
     <section>
       <div style="display:flex;align-items:center;gap:14px;border-bottom:2px solid #16150F;padding-bottom:12px;flex-wrap:wrap">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><circle cx="9" cy="9" r="6.5" stroke="#16150F" stroke-width="1.5"></circle><path d="M14 14l4 4" stroke="#16150F" stroke-width="1.5" stroke-linecap="round"></path></svg>
@@ -716,6 +735,7 @@ class Component extends DCLogic {
     this.loadDodge();
     this.loadPromises();
     this.loadMentions();
+    this.loadLive();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -837,6 +857,11 @@ class Component extends DCLogic {
     this.fetchJson('/api/conduct/' + encodeURIComponent(sym)).then(r => {
       if (seq !== this._cseq) return;
       if (r.ok && r.body && typeof r.body.net_value === 'number') this.setState({ conduct: r.body });
+    });
+  }
+  loadLive() {
+    this.fetchJson('/api/live').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.live)) this.setState({ liveData: r.body });
     });
   }
   loadMentions() {
@@ -1198,6 +1223,16 @@ class Component extends DCLogic {
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
+      hasLive: !!(s.liveData && (s.liveData.live.length || s.liveData.upcoming.length)),
+      liveChecked: s.liveData ? s.liveData.checked_at : '',
+      liveJurs: s.liveData ? s.liveData.jurisdictions_resolved : 0,
+      liveRows: (s.liveData ? s.liveData.live.map(e => ({ e, live: true }))
+        .concat(s.liveData.upcoming.slice(0, 6).map(e => ({ e, live: false }))) : [])
+        .map(({ e, live }) => ({
+          jur: e.jurisdiction, title: e.title, url: e.url,
+          tag: live ? 'LIVE' : 'UPCOMING', tagColor: live ? '#B8432C' : '#8A6D1F',
+          dotStyle: 'width:7px;height:7px;border-radius:99px;display:inline-block;background:' + (live ? '#B8432C;animation:pulse 1.6s ease infinite' : '#DDD9CC'),
+        })),
       hasMentions: !!(s.mentions && s.mentions.rows.length),
       mentionRows: (s.mentions ? s.mentions.rows.slice(0, 12) : []).map((r, i) => ({
         rank: String(i + 1).padStart(2, '0'), ticker: r.ticker,

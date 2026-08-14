@@ -28,3 +28,15 @@ harness:
 
 gate:
 	uv run python -m onrecord.eval.gate
+
+# The living platform (T-051/T-052/T-053): delta refresh lanes. The corpus
+# swap itself (corpus-v3) is a documented runbook in tickets/T-053.md and
+# runs only on owner go (it invalidates the demo-verified state).
+refresh-live:
+	uv run python -c "import json; from onrecord.ingest.build_corpus import load_corpus_snapshot; from onrecord.ingest.livestreams import track; from datetime import datetime, UTC; alive = {json.loads(l)['video_id'] for l in open('evalsets/linkhealth-2026-08-14.jsonl') if json.loads(l)['status']=='alive'}; track(load_corpus_snapshot('corpus/v2/corpus.jsonl.gz'), alive, checked_at=datetime.now(UTC).isoformat(timespec='minutes'))"
+
+refresh-form4:
+	uv run python -c "from onrecord import registry; from onrecord.ingest.form4 import pull_form4; pull_form4([t['symbol'] for t in registry.load()['tickers']])"
+
+refresh: refresh-live refresh-form4
+	@echo "deltas refreshed; filings delta + corpus-v3 swap: see tickets/T-053.md"
