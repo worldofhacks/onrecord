@@ -203,8 +203,8 @@ from pydantic import BaseModel, Field
 
 from onrecord import registry
 from onrecord.analysis import conduct as conduct_mod
-from onrecord.analysis import mentions as mentions_mod
 from onrecord.analysis import dodge as dodge_mod
+from onrecord.analysis import mentions as mentions_mod
 from onrecord.index.inverted import InvertedIndex
 from onrecord.ingest.build_corpus import load_corpus_snapshot, read_manifest
 from onrecord.ingest.prices import api_payload
