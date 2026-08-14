@@ -1,0 +1,41 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run pytest tests/ -q
+
+  eval:
+    # The presearch's regression surface: `make eval` appends a scoreboard
+    # row. The default boolean baseline is red BY DESIGN (exit 1, documented
+    # in README "Metrics report"), so this job is non-blocking; the uploaded
+    # artifact carries the scoreboard row for inspection.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: build index from the committed corpus-v1 snapshot
+        run: |
+          uv run python - <<'PY'
+          from onrecord.ingest.build_corpus import load_corpus_snapshot
+          from onrecord.index.inverted import InvertedIndex
+          docs = load_corpus_snapshot("corpus/v1/corpus.jsonl.gz")
+          InvertedIndex.build(docs).save("artifacts/index")
+          print(f"built index over {len(docs)} docs")
+          PY
+      - run: make eval || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scoreboard
+          path: artifacts/scoreboard.jsonl
+          if-no-files-found: ignore
