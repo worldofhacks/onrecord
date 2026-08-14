@@ -68,7 +68,7 @@ input::placeholder{color:#B5B0A1}
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;padding:14px 0 4px;font-size:12.5px;font-weight:500;flex-wrap:wrap">
-        <div style="position:relative"><button onClick="{{ togSource }}" style="{{ pillSource }}">{{ fSourceLabel }} ▾</button>
+        <input type="date" onChange="{{ setDateFrom }}" value="{{ fDateFrom }}" title="from date" style="font-family:'IBM Plex Mono',monospace;font-size:11px;border:1px solid #E7E4DA;border-radius:99px;padding:6px 12px;background:#fff;color:#6E6A5E"/><input type="date" onChange="{{ setDateTo }}" value="{{ fDateTo }}" title="to date" style="font-family:'IBM Plex Mono',monospace;font-size:11px;border:1px solid #E7E4DA;border-radius:99px;padding:6px 12px;background:#fff;color:#6E6A5E"/><button onClick="{{ togSort }}" style="{{ pillSort }}">{{ sortLabel }}</button><div style="position:relative"><button onClick="{{ togSource }}" style="{{ pillSource }}">{{ fSourceLabel }} ▾</button>
           <sc-if value="{{ openSource }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:180px;animation:pop .15s ease both"><sc-for list="{{ sourceOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickSource }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
         </div>
         <div style="position:relative"><button onClick="{{ togVenue }}" style="{{ pillVenue }}">{{ fVenueLabel }} ▾</button>
@@ -376,7 +376,7 @@ input::placeholder{color:#B5B0A1}
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
             <div>
               <div style="display:flex;align-items:baseline;gap:12px"><h2 style="margin:0;font-family:Fraunces,serif;font-weight:600;font-size:32px;letter-spacing:-0.01em">{{ detSym }}</h2><span style="font-size:13px;color:#6E6A5E">{{ detName }}</span></div>
-              <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span style="font-family:Fraunces,serif;font-size:26px;font-weight:560;font-variant-numeric:tabular-nums">{{ detPrice }}</span><span style="{{ detDeltaStyle }}">{{ detDelta }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">{{ detRangeLabel }}</span></div>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span style="font-family:Fraunces,serif;font-size:26px;font-weight:560;font-variant-numeric:tabular-nums">{{ detPrice }}</span><span style="{{ detDeltaStyle }}">{{ detDelta }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">{{ detRangeLabel }}</span><span style="margin-left:auto;display:flex;gap:4px"><button onClick="{{ setRange }}" data-days="90" style="{{ rangeBtn90 }}">3M</button><button onClick="{{ setRange }}" data-days="180" style="{{ rangeBtn180 }}">6M</button><button onClick="{{ setRange }}" data-days="365" style="{{ rangeBtn365 }}">1Y</button></span></div>
             </div>
             <button onClick="{{ closeDet }}" style="all:unset;cursor:pointer;font-size:20px;color:#8A8574;padding:4px 8px" style-hover="color:#16150F">✕</button>
           </div>
@@ -386,6 +386,7 @@ input::placeholder{color:#B5B0A1}
               <line x1="0" y1="120" x2="720" y2="120" stroke="#F0EEE4" stroke-width="1"></line>
               <line x1="0" y1="180" x2="720" y2="180" stroke="#F0EEE4" stroke-width="1"></line>
               <sc-for list="{{ detMoves }}" as="mv" hint-placeholder-count="0"><line x1="{{ mv.x }}" y1="18" x2="{{ mv.x }}" y2="228" stroke="{{ mv.color }}" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"></line></sc-for>
+              <sc-for list="{{ detInsiders }}" as="it" hint-placeholder-count="0"><rect x="{{ it.x }}" y="{{ it.y }}" width="7" height="7" fill="{{ it.color }}" stroke="#FAFAF7" stroke-width="1.2" transform="rotate(45 {{ it.cx }} {{ it.cy }})"></rect></sc-for>
               <path d="{{ detPath }}" fill="none" stroke="#16150F" stroke-width="1.6"></path>
               <sc-for list="{{ detMarks }}" as="m" hint-placeholder-count="0"><circle cx="{{ m.x }}" cy="{{ m.y }}" r="5.5" fill="#0A7A43" stroke="#FAFAF7" stroke-width="2" style="cursor:pointer" onMouseEnter="{{ mkEnter }}" data-i="{{ m.i }}"></circle></sc-for>
             </svg>
@@ -634,6 +635,7 @@ class Component extends DCLogic {
   state = {
     w: 1280, view: 'search', q: 'substation capacity', selIdx: 0,
     fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null,
+    fDateFrom: '', fDateTo: '', fSort: 'score',
     fMode: 'lexical', modeErr: null,
     apiLive: false, apiDown: false,
     hits: [], searchMs: 0, searching: true,
@@ -740,6 +742,9 @@ class Component extends DCLogic {
     const seq = (this._seq = (this._seq || 0) + 1);
     if (!q) { this.setState({ hits: [], searchMs: 0, searching: false, modeErr: null }); return; }
     const p = new URLSearchParams({ q, mode: s.fMode, op: 'OR', k: String(SEARCH_K) });
+    if (s.fDateFrom) p.set('date_from', s.fDateFrom);
+    if (s.fDateTo) p.set('date_to', s.fDateTo);
+    if (s.fSort !== 'score') p.set('sort', s.fSort);
     if (s.fSource !== 'All') p.set('source', s.fSource);
     if (s.fVenue !== 'All') p.set('venue', s.fVenue);
     if (s.fTicker !== 'All') p.set('ticker', s.fTicker);
@@ -949,10 +954,16 @@ class Component extends DCLogic {
     let det = {};
     if (s.detSym) {
       const priceReady = s.priceSym === s.detSym && s.priceState === 'ready' && s.price;
-      const series = priceReady && Array.isArray(s.price.series) ? s.price.series : [];
+      const fullSeries = priceReady && Array.isArray(s.price.series) ? s.price.series : [];
+      const rangeDays = s.detRange || 365;
+      const series = fullSeries.length > 1 && rangeDays < 365
+        ? fullSeries.slice(Math.max(0, fullSeries.length - rangeDays))
+        : fullSeries;
+      window.__chartSeries = series; // hover overlay reads the sliced view
       const n = series.length;
       const loading = s.priceSym !== s.detSym || s.priceState === 'loading';
       let path = '', marks = [], moveLines = [], movesList = [];
+      let insiderMarks = [];
       let priceStr = '—', deltaStr = '', deltaStyle = { display: 'none' };
       if (n > 1) {
         const closes = series.map(p => +p.close);
@@ -978,6 +989,17 @@ class Component extends DCLogic {
         const seenRec = {}, recs = [];
         moves.forEach(mv => (mv.nearby_receipts || []).forEach(rc => { if (rc && rc.id && !seenRec[rc.id]) { seenRec[rc.id] = 1; recs.push(rc); } }));
         marks = recs.map((rc, i) => { const ix = seriesIndexFor(series, rc.date); return { i, x: xOf(ix).toFixed(1), y: yOf(closes[ix]).toFixed(1), doc: rc }; });
+        const cdChart = s.conduct && s.conduct.ticker === s.detSym ? s.conduct : null;
+        if (cdChart) {
+          insiderMarks = (cdChart.recent || []).map(tr => {
+            const ix = seriesIndexFor(series, tr.transaction_date);
+            if (ix < 0 || ix >= n) return null;
+            const icx = xOf(ix), icy = yOf(closes[ix]);
+            return { x: (icx - 3.5).toFixed(1), y: (icy - 3.5).toFixed(1),
+                     cx: icx.toFixed(1), cy: icy.toFixed(1),
+                     color: tr.code === 'S' ? '#B8432C' : '#0A7A43' };
+          }).filter(Boolean);
+        }
         priceStr = '$' + closes[n - 1].toFixed(2);
         const delta = (closes[n - 1] - closes[0]) / closes[0] * 100;
         deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + '% 1Y';
@@ -988,11 +1010,12 @@ class Component extends DCLogic {
       det = {
         detOpen: true, detSym: s.detSym, detName: NAMES[s.detSym] || 'On the record', detPath: path,
         detPrice: priceStr, detDelta: deltaStr, detDeltaStyle: deltaStyle,
-        detRangeLabel: '1Y · daily close', detMoveLegend: 'significant daily move (±5%)',
+        detRangeLabel: (rangeDays === 90 ? '3M' : rangeDays === 180 ? '6M' : '1Y') + ' · daily close', detMoveLegend: 'significant daily move (±5%) · ◆ insider buy/sell (Form 4)',
         detPriceMsg: n > 1 ? '' : loading
           ? 'Fetching the price series…'
           : "Price data isn't on the record yet — the EOD series arrives with the prices route. Receipt counts stand on their own.",
         detMarks: marks.map(m => ({ i: m.i, x: m.x, y: m.y })),
+        detInsiders: insiderMarks,
         detMoves: moveLines, detMovesList: movesList,
         hasMoves: movesList.length > 0, detNoRec: n > 1 && marks.length === 0,
         mkOpenB: !!mk,
@@ -1016,7 +1039,11 @@ class Component extends DCLogic {
         cdNetColor: cd && cd.net_value < 0 ? '#B8432C' : '#0A7A43',
         cdSells: cd ? money(cd.sells_value) : '', cdSellers: cd ? cd.insiders_selling : 0,
         cdBuys: cd ? money(cd.buys_value) : '', cdBuyers: cd ? cd.insiders_buying : 0,
-        cdLast: cd && cd.last_transaction_date ? cd.last_transaction_date : '—',
+        cdLast: cd && cd.last_transaction_date ? cd.last_transaction_date : '—'
+        , rangeBtn90: ((days) => 'all:unset;cursor:pointer;font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;border-radius:99px;padding:4px 10px;border:1px solid ' + ((s.detRange || 365) === days ? '#16150F;background:#16150F;color:#FAFAF7' : '#E7E4DA;color:#6E6A5E'))(90)
+        , rangeBtn180: ((days) => 'all:unset;cursor:pointer;font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;border-radius:99px;padding:4px 10px;border:1px solid ' + ((s.detRange || 365) === days ? '#16150F;background:#16150F;color:#FAFAF7' : '#E7E4DA;color:#6E6A5E'))(180)
+        , rangeBtn365: ((days) => 'all:unset;cursor:pointer;font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;border-radius:99px;padding:4px 10px;border:1px solid ' + ((s.detRange || 365) === days ? '#16150F;background:#16150F;color:#FAFAF7' : '#E7E4DA;color:#6E6A5E'))(365)
+
       });
 
     }
@@ -1185,6 +1212,9 @@ class Component extends DCLogic {
       modeSemStyle: modePill(s.fMode === 'semantic', false),
       modeHybStyle: modePill(s.fMode === 'hybrid', true),
       searchNotProvisioned: !!s.modeErr, modeErr: s.modeErr || '',
+      fDateFrom: s.fDateFrom, fDateTo: s.fDateTo,
+      pillSort: filterPill(s.fSort !== 'score'),
+      sortLabel: s.fSort === 'date_desc' ? 'newest ✓' : 'newest',
       pillSource: filterPill(s.fSource !== 'All'), pillVenue: filterPill(s.fVenue !== 'All'), pillTicker: filterPill(s.fTicker !== 'All'), pillJur: filterPill(s.fJur !== 'All'),
       fSourceLabel: s.fSource === 'All' ? 'Source · All' : ({ county_meeting: 'County meetings', filing: 'SEC filings', docket: 'Dockets' })[s.fSource] || titleize(s.fSource),
       fVenueLabel: s.fVenue === 'All' ? 'Venue · All' : 'Venue · ' + s.fVenue,
@@ -1266,6 +1296,10 @@ class Component extends DCLogic {
       noSectorsBody: s.apiDown
         ? 'The ticker universe comes from the live API, and it is not answering. Retry from the header once it is back.'
         : 'The registry defines the universe and the index supplies the receipts — neither has landed yet.',
+      setRange: (e) => { this.setState({ detRange: +e.currentTarget.dataset.days }); },
+      setDateFrom: (e) => { this.setState({ fDateFrom: e.currentTarget.value }); this.runSearch(true); },
+      setDateTo: (e) => { this.setState({ fDateTo: e.currentTarget.value }); this.runSearch(true); },
+      togSort: () => { this.setState({ fSort: this.state.fSort === 'score' ? 'date_desc' : 'score' }); this.runSearch(true); },
       openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); this.loadConduct(sym); },
       closeDet: () => this.setState({ detSym: null, mkI: null }),
       stopIt: (e) => e.stopPropagation(),
@@ -1345,7 +1379,7 @@ class Component extends DCLogic {
     var svg = ev.target && ev.target.closest ? ev.target.closest('svg[viewBox="0 0 720 240"]') : null;
     var open = document.querySelector('svg[viewBox="0 0 720 240"]');
     if (!svg) { hide(open); return; }
-    var series = PRICES[CUR];
+    var series = window.__chartSeries || PRICES[CUR];
     if (!series || series.length < 2) return;
     var rect = svg.getBoundingClientRect();
     if (!rect.width) return;

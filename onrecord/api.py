@@ -468,8 +468,7 @@ def _warm_embed_store() -> None:
         )
 
 
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+def _boot(app: FastAPI) -> None:
     index_dir = Path(os.environ.get("ONRECORD_INDEX", DEFAULT_INDEX_DIR))
     app.state.ui_dir = Path(os.environ.get("ONRECORD_UI_DIR", DEFAULT_UI_DIR))
     # `/api/prices` always has a default corpus path, per the ticket.
@@ -570,7 +569,33 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.chunks_by_id = {chunk.chunk_id: chunk for chunk in app.state.chunks}
     app.state.embed_stores = {}
     _warm_embed_store()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """T-048 (2026-08-14): boot dispatch. Default (and every test):
+    synchronous — behavior identical to the pre-T-048 lifespan, every env
+    seam read at the same moment. With ONRECORD_ASYNC_BOOT set truthy
+    (production), the port binds immediately and `_boot` runs in a daemon
+    thread: `/` serves the UI at once, `/api/*` returns the ladder's
+    honest warming 503s, and the UI's 15s auto-reprobe (PR #17) picks the
+    moment readiness lands — a deploy never looks like an outage."""
+    if os.environ.get("ONRECORD_ASYNC_BOOT", "").strip().lower() in ("1", "true", "yes"):
+        app.state.warming = True
+        app.state.index = None
+
+        def _run() -> None:
+            try:
+                _boot(app)
+            finally:
+                app.state.warming = False
+
+        threading.Thread(target=_run, name="onrecord-boot", daemon=True).start()
+    else:
+        app.state.warming = False
+        _boot(app)
     yield
+
 
 
 app = FastAPI(title="onrecord API", lifespan=_lifespan)
@@ -840,6 +865,8 @@ def _apply_filters(
     venue: str | None,
     ticker: str | None,
     jurisdiction: str | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list:
     def _matches(doc: Doc) -> bool:
         if source is not None and doc.source_type != source:
@@ -849,6 +876,12 @@ def _apply_filters(
         if ticker is not None and doc.ticker != ticker:
             return False
         if jurisdiction is not None and doc.jurisdiction != jurisdiction:
+            return False
+        # T-050: ISO-string comparison; a doc with a blank/malformed date
+        # never matches a bounded query (absent evidence is not evidence).
+        if date_from is not None and not (doc.date or "") >= date_from:
+            return False
+        if date_to is not None and not (doc.date or "\uffff") <= date_to:
             return False
         return True
 
@@ -866,6 +899,9 @@ def _filtered_results(
     venue: str | None,
     ticker: str | None,
     jurisdiction: str | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sort: str = "score",
 ) -> dict:
     """The shared `/api/search` tail: AND-combined metadata filters, THEN
     truncation to `k`, then the locked 9-key result dicts. One tail for all
@@ -873,8 +909,13 @@ def _filtered_results(
     are pinned identically for every mode, so they must not be re-implemented
     per mode."""
     hits = _apply_filters(
-        hits, index, source=source, venue=venue, ticker=ticker, jurisdiction=jurisdiction
+        hits, index, source=source, venue=venue, ticker=ticker, jurisdiction=jurisdiction,
+        date_from=date_from, date_to=date_to,
     )
+    if sort == "date_desc":
+        # T-050: reorder the FILTERED set by doc date (stable on ties by the
+        # incoming rank) before the same truncation every mode shares.
+        hits = sorted(hits, key=lambda h: str(index.get_doc(h.doc_id).date or ""), reverse=True)
     hits = hits[:k]
 
     results = [
@@ -893,6 +934,9 @@ def search(  # NOT `async` -- see the module docstring's threadpool note
     venue: str | None = None,
     ticker: str | None = None,
     jurisdiction: str | None = None,
+    date_from: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date_to: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    sort: Literal["score", "date_desc"] = "score",
 ):
     index = _require_index()
     if index is None:
@@ -933,6 +977,9 @@ def search(  # NOT `async` -- see the module docstring's threadpool note
             venue=venue,
             ticker=ticker,
             jurisdiction=jurisdiction,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
         )
 
     ranked_search = _resolve_search_fn()
@@ -970,6 +1017,9 @@ def search(  # NOT `async` -- see the module docstring's threadpool note
         venue=venue,
         ticker=ticker,
         jurisdiction=jurisdiction,
+        date_from=date_from,
+        date_to=date_to,
+        sort=sort,
     )
 
 

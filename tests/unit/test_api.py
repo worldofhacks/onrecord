@@ -1359,3 +1359,49 @@ def test_promises_endpoint_503_when_absent(tmp_path, monkeypatch):
     assert resp.status_code == 503
     body = resp.json()
     assert set(body) == {"error"} and "promise" in body["error"].lower()
+
+
+# ==========================================================================
+# AMENDMENT — T-050 (2026-08-14): date-range filtering + sort on
+# /api/search. `date_from`/`date_to` are ISO dates (pattern-validated, 422
+# on junk), AND-combined with the existing metadata filters in the same
+# filter-then-truncate order; `sort=date_desc` reorders the FILTERED set
+# by doc date before truncation (default `score` preserves every existing
+# caller bit for bit).
+# ==========================================================================
+
+
+def test_search_date_range_filters(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        all_hits = client.get("/api/search", params={"q": "substation"}).json()["results"]
+        assert len(all_hits) >= 2  # fixture precondition
+        dates = sorted(h["date"] for h in all_hits)
+        cutoff = dates[-1]  # keep only the newest doc
+        newest_only = client.get(
+            "/api/search", params={"q": "substation", "date_from": cutoff}
+        ).json()["results"]
+        assert newest_only and all(h["date"] >= cutoff for h in newest_only)
+        oldest_only = client.get(
+            "/api/search", params={"q": "substation", "date_to": dates[0]}
+        ).json()["results"]
+        assert oldest_only and all(h["date"] <= dates[0] for h in oldest_only)
+
+
+def test_search_sort_date_desc(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/search", params={"q": "substation", "sort": "date_desc"})
+    hits = resp.json()["results"]
+    hit_dates = [h["date"] for h in hits]
+    assert hit_dates == sorted(hit_dates, reverse=True)
+
+
+def test_search_bad_date_and_sort_are_422(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        assert client.get("/api/search", params={"q": "x", "date_from": "junk"}).status_code == 422
+        assert client.get("/api/search", params={"q": "x", "sort": "sideways"}).status_code == 422
