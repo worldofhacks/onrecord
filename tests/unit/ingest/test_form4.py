@@ -139,3 +139,12 @@ def test_parse_form4_rejects_dtd_and_entity_declarations():
         "<ownershipDocument>&lol;</ownershipDocument>"
     )
     assert parse(laughs, "NVDA", "acc", "url") == []
+
+
+def test_raw_document_name_strips_xsl_wrapper_prefix():
+    # EDGAR serves the XSL-rendered HTML at the prefixed path; the raw XML
+    # is the bare filename at the accession root (found live: every filing
+    # parsed to zero rows through the wrapper).
+    fn = _attr("raw_document_name")
+    assert fn("xslF345X05/wk-form4_1686.xml") == "wk-form4_1686.xml"
+    assert fn("form4.xml") == "form4.xml"

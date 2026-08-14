@@ -130,6 +130,15 @@ def cik_for_ticker(ticker: str, mapping: dict) -> str | None:
 # --------------------------------------------------------------------------
 
 
+def raw_document_name(primary_document: str) -> str:
+    """EDGAR gotcha (found live, 2026-08-14): `primaryDocument` for
+    ownership forms usually points at the XSL-RENDERED wrapper
+    (`xslF345X05/wk-form4_123.xml`), which serves HTML that parses to zero
+    transactions. The raw ownershipDocument XML lives at the accession
+    root under the bare filename — strip any directory prefix."""
+    return primary_document.split("/")[-1]
+
+
 def _get(client: httpx.Client, url: str):
     time.sleep(REQUEST_GAP_S)
     response = client.get(url, headers=SEC_HEADERS, timeout=30.0)
@@ -181,7 +190,9 @@ def pull_form4(
                 if pulled >= max_filings_per_ticker:
                     break
                 url = SEC_ARCHIVE_URL.format(
-                    cik_int=int(cik), accession_nodash=accession.replace("-", ""), doc=doc
+                    cik_int=int(cik),
+                    accession_nodash=accession.replace("-", ""),
+                    doc=raw_document_name(doc),
                 )
                 try:
                     xml_text = _get(client, url).text

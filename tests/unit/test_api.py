@@ -1224,3 +1224,72 @@ def test_fusion_depth_env_parsing(monkeypatch):
 
     monkeypatch.setenv("ONRECORD_FUSION_DEPTH", "not-a-number")
     assert api_module._fusion_depth() == 2000
+
+
+# ==========================================================================
+# AMENDMENT — T-039/T-041 API endpoints (2026-08-14): GET /api/conduct/
+# {ticker} (insider net-flow over the T-038 artifact, env seam
+# ONRECORD_FORM4; absent artifact -> flat 503) and GET /api/dodge (startup-
+# computed deterministic evasion rows over the loaded index, floor via
+# ONRECORD_DODGE_MIN_DOCS). Same flat-error and def-handler conventions as
+# every other data endpoint.
+# ==========================================================================
+
+
+def _form4_fixture_jsonl(tmp_path):
+    import json as _json
+    rows = [
+        {"ticker": "VST", "cik": "1", "filer_name": "DOE JANE", "filer_title": "CEO",
+         "is_officer": True, "is_director": False, "transaction_date": "2026-06-01",
+         "code": "S", "shares": 1000.0, "price_per_share": 100.0, "value": 100000.0,
+         "shares_owned_after": 0.0, "filing_url": "https://sec.gov/x", "accession": "a1"},
+        {"ticker": "VST", "cik": "1", "filer_name": "ROE RICK", "filer_title": "",
+         "is_officer": False, "is_director": True, "transaction_date": "2026-07-01",
+         "code": "P", "shares": 50.0, "price_per_share": 90.0, "value": 4500.0,
+         "shares_owned_after": 50.0, "filing_url": "https://sec.gov/y", "accession": "a2"},
+    ]
+    path = tmp_path / "form4.jsonl"
+    path.write_text("\n".join(_json.dumps(r) for r in rows) + "\n")
+    return path
+
+
+def test_conduct_endpoint_net_flow_shape(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_FORM4", str(_form4_fixture_jsonl(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/conduct/VST")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ticker"] == "VST"
+    assert body["sells_value"] == 100000.0 and body["buys_value"] == 4500.0
+    assert body["net_value"] == -95500.0
+    assert body["insiders_selling"] == 1 and body["insiders_buying"] == 1
+    assert isinstance(body["by_month"], list) and isinstance(body["recent"], list)
+
+
+def test_conduct_endpoint_503_when_artifact_absent(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_FORM4", str(tmp_path / "does-not-exist.jsonl"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/conduct/VST")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert set(body) == {"error"} and "insider" in body["error"].lower()
+
+
+def test_dodge_endpoint_startup_computed_rows(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_DODGE_MIN_DOCS", "1")
+    monkeypatch.delenv("ONRECORD_FORM4", raising=False)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/dodge")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["rows"], list)
+    assert body["min_docs"] == 1
+    assert isinstance(body["markers"], list) and "no comment" in body["markers"]
+    for row in body["rows"]:
+        assert set(row) == {"jurisdiction", "docs", "markers", "per_1000", "sample_receipts"}

@@ -202,6 +202,8 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from onrecord import registry
+from onrecord.analysis import conduct as conduct_mod
+from onrecord.analysis import dodge as dodge_mod
 from onrecord.index.inverted import InvertedIndex
 from onrecord.ingest.build_corpus import load_corpus_snapshot, read_manifest
 from onrecord.ingest.prices import api_payload
@@ -521,6 +523,31 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.stats_cache = (
         _compute_stats(app.state.index, index_dir) if app.state.index is not None else None
     )
+
+    # T-039/T-041 (2026-08-14): insider-transaction rows (env seam
+    # ONRECORD_FORM4; empty list when the artifact is absent -> the conduct
+    # endpoint's flat 503) and the startup-computed Dodge Index (2.5s over
+    # the full corpus, measured -- computed once here like stats, never per
+    # request). Both best-effort: neither can fail startup.
+    try:
+        app.state.form4_rows = conduct_mod.load_transactions(
+            os.environ.get("ONRECORD_FORM4", str(conduct_mod.DEFAULT_TRANSACTIONS_PATH))
+        )
+    except Exception:
+        app.state.form4_rows = []
+    dodge_floor_raw = os.environ.get("ONRECORD_DODGE_MIN_DOCS", "").strip()
+    app.state.dodge_min_docs = int(dodge_floor_raw) if dodge_floor_raw.isdigit() else 200
+    try:
+        app.state.dodge_cache = (
+            dodge_mod.dodge_index(
+                [app.state.index.get_doc(i) for i in range(app.state.index.doc_count())],
+                min_docs=app.state.dodge_min_docs,
+            )
+            if app.state.index is not None
+            else None
+        )
+    except Exception:
+        app.state.dodge_cache = None
 
     # T-024: the RAG state. Chunks are derived from the index that was just
     # loaded (never from a separate corpus read), so the two can never
@@ -1169,6 +1196,35 @@ def answer(request: AnswerRequest, http_request: Request):  # NOT `async` -- see
 # --------------------------------------------------------------------------
 # GET /api/tickers
 # --------------------------------------------------------------------------
+
+
+@app.get("/api/conduct/{ticker}")
+def conduct_endpoint(ticker: str):  # NOT `async` -- T-024 convention
+    """T-039: trailing-365d open-market insider net flow for `ticker`,
+    from the T-038 Form 4 artifact. Juxtaposition data only."""
+    rows = getattr(app.state, "form4_rows", [])
+    if not rows:
+        return _flat_error(
+            503,
+            "insider data is not ingested -- run the Form 4 pull "
+            "(onrecord.ingest.form4.pull_form4, ticket T-038)",
+        )
+    since = (datetime.now(UTC) - timedelta(days=365)).date().isoformat()
+    return conduct_mod.net_flow(rows, ticker.upper(), since)
+
+
+@app.get("/api/dodge")
+def dodge_endpoint():  # NOT `async` -- serves the startup-computed cache
+    """T-041: deterministic per-jurisdiction evasion rows (computed once at
+    startup over the loaded index; lexicon published for reproducibility)."""
+    cache = getattr(app.state, "dodge_cache", None)
+    if cache is None:
+        return _missing_index_response()
+    return {
+        "rows": cache,
+        "min_docs": getattr(app.state, "dodge_min_docs", 200),
+        "markers": list(dodge_mod.DODGE_MARKERS),
+    }
 
 
 @app.get("/api/tickers")
