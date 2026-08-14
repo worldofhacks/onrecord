@@ -559,6 +559,59 @@ def _boot(app: FastAPI) -> None:
     except Exception:
         app.state.promises = []
 
+    # T-056: quantify the ledger at boot. Deterministic (<1s over 1,527
+    # quotes) and derived from promises.jsonl alone — computed rather than
+    # shipped as an artifact so it can never go stale against the ledger
+    # (the T-055 scoreboard lesson). Rows gain an additive `quantities`
+    # field only when extractions fired; rollups are precomputed once (the
+    # T-032 no-per-request-scans convention).
+    from onrecord.analysis.quantities import aggregate_quantities, extract_quantities
+
+    for _row in app.state.promises:
+        _extracted = extract_quantities(str(_row.get("quote", "")))
+        if _extracted:
+            _row["quantities"] = _extracted
+    app.state.promised_rollups = (
+        {
+            "jurisdiction": aggregate_quantities(app.state.promises, by="jurisdiction"),
+            "ticker": aggregate_quantities(app.state.promises, by="ticker"),
+        }
+        if app.state.promises
+        else {}
+    )
+
+    # T-057: the outcomes artifact (env seam ONRECORD_OUTCOMES; built by
+    # `make refresh-outcomes` — a full-corpus scan too heavy for boot).
+    # Absent/unreadable -> promises rows stay outcome-less and the summary
+    # endpoint 503s; the ledger itself is never degraded by a missing
+    # follow-up layer.
+    try:
+        outcomes_path = Path(os.environ.get("ONRECORD_OUTCOMES", "artifacts/promise_outcomes.json"))
+        outcomes_doc = (
+            json.loads(outcomes_path.read_text(encoding="utf-8"))
+            if outcomes_path.exists()
+            else {}
+        )
+    except Exception:
+        outcomes_doc = {}
+    outcome_rows = outcomes_doc.get("outcomes", {})
+    app.state.outcomes_generated_at = outcomes_doc.get("generated_at", "")
+    app.state.outcomes_by_jurisdiction = {}
+    for _row in app.state.promises:
+        outcome = outcome_rows.get(_row.get("promise_id"))
+        if outcome is None:
+            continue
+        _row["outcome"] = outcome
+        jur = _row.get("jurisdiction")
+        if jur:
+            bucket = app.state.outcomes_by_jurisdiction.setdefault(jur, {})
+            bucket[outcome["status"]] = bucket.get(outcome["status"], 0) + 1
+    app.state.outcomes_statuses = {}
+    for _o in outcome_rows.values():
+        status = _o.get("status", "")
+        if status:
+            app.state.outcomes_statuses[status] = app.state.outcomes_statuses.get(status, 0) + 1
+
     # T-033: mention-anchored performance cache. Env-gated
     # (ONRECORD_MENTIONS_BOOT) because building it fetches live price
     # series; the frozen suite stays zero-network with it unset. Prod sets
@@ -1372,6 +1425,46 @@ def promises_endpoint(  # NOT `async` -- serves startup-loaded rows
         cat = row.get("category", "other")
         categories[cat] = categories.get(cat, 0) + 1
     return {"rows": rows[:k], "total": len(rows), "categories": dict(sorted(categories.items()))}
+
+
+@app.get("/api/promised")
+def promised_endpoint(  # NOT `async` -- serves boot-precomputed rollups
+    by: str = Query(default="jurisdiction", pattern="^(jurisdiction|ticker)$"),
+):
+    """T-056: what the record promises, in numbers. Boot-precomputed
+    rollups of extracted quantities (MW / GPD / jobs / dollars) keyed by
+    jurisdiction or ticker."""
+    rollups = getattr(app.state, "promised_rollups", {})
+    if not rollups:
+        return _flat_error(
+            503,
+            "the promise ledger is not extracted -- run the T-040 extraction "
+            "to produce evalsets/promises.jsonl",
+        )
+    selected = rollups.get(by, {})
+    return {
+        "by": by,
+        "rollups": selected,
+        "n_quantified_total": sum(b["n_quantified"] for b in selected.values()),
+    }
+
+
+@app.get("/api/outcomes/summary")
+def outcomes_summary_endpoint():  # NOT `async` -- serves boot-loaded artifact
+    """T-057: follow-up status counts over the ledger. The record shows
+    followed-up or gone-quiet — it never adjudicates promises."""
+    statuses = getattr(app.state, "outcomes_statuses", {})
+    if not statuses:
+        return _flat_error(
+            503,
+            "promise outcome trails are not built -- run `make refresh-outcomes` "
+            "to produce artifacts/promise_outcomes.json",
+        )
+    return {
+        "statuses": statuses,
+        "generated_at": getattr(app.state, "outcomes_generated_at", ""),
+        "by_jurisdiction": getattr(app.state, "outcomes_by_jurisdiction", {}),
+    }
 
 
 @app.get("/api/conduct/{ticker}")

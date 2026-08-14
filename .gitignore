@@ -48,3 +48,4 @@ scratchpad/
 artifacts/*
 !artifacts/form4/
 !artifacts/livestreams.json
+!artifacts/promise_outcomes.json
