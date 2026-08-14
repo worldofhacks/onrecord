@@ -35,3 +35,9 @@ artifacts/
 # The manifest (committed) carries snapshot_sha256 for verification.
 corpus/v2/corpus.jsonl.gz
 corpus/v2/corpus.jsonl
+
+# session-local process bookkeeping -- never tracked
+.claude/scheduled_tasks.lock
+
+# review-agent audit scratch (kept locally, like .tdd-swarm/)
+scratchpad/
