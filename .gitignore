@@ -47,3 +47,4 @@ scratchpad/
 !artifacts/
 artifacts/*
 !artifacts/form4/
+!artifacts/livestreams.json

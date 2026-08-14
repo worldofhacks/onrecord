@@ -1448,3 +1448,45 @@ def test_mentions_endpoint_serves_windowed_cache(tmp_path, monkeypatch):
     body = resp.json()
     assert body["grain"] == "daily-close" and body["window_days"] == 30
     assert [r["doc_id"] for r in body["rows"]] == ["d1"]  # old row windowed out
+
+
+# ==========================================================================
+# AMENDMENT — T-051 (2026-08-14): GET /api/live serves the tracked
+# live/upcoming hearings artifact (env seam ONRECORD_LIVESTREAMS; flat 503
+# when absent; checked_at honesty in the payload).
+# ==========================================================================
+
+
+def test_live_endpoint_serves_artifact(tmp_path, monkeypatch):
+    import json as _json
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    artifact = tmp_path / "livestreams.json"
+    artifact.write_text(_json.dumps({
+        "checked_at": "2026-08-14T19:00Z", "jurisdictions_resolved": 51,
+        "live": [{"jurisdiction": "Alpha County, VA", "video_id": "v1",
+                  "title": "Board of Supervisors — Regular Session",
+                  "status": "is_live", "url": "https://www.youtube.com/watch?v=v1"}],
+        "upcoming": [{"jurisdiction": "Beta County, GA", "video_id": "v2",
+                      "title": "Planning Commission Hearing",
+                      "status": "is_upcoming", "url": "https://www.youtube.com/watch?v=v2"}],
+        "channels": {},
+    }))
+    monkeypatch.setenv("ONRECORD_LIVESTREAMS", str(artifact))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/live")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["checked_at"] == "2026-08-14T19:00Z"
+    assert body["live"][0]["status"] == "is_live"
+    assert body["upcoming"][0]["url"].startswith("https://www.youtube.com/watch")
+
+
+def test_live_endpoint_503_when_absent(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_LIVESTREAMS", str(tmp_path / "missing.json"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/live")
+    assert resp.status_code == 503
+    assert "live" in resp.json()["error"].lower()

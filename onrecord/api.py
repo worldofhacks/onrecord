@@ -536,6 +536,16 @@ def _boot(app: FastAPI) -> None:
         )
     except Exception:
         app.state.form4_rows = []
+    # T-051: the live/upcoming hearings artifact (env seam
+    # ONRECORD_LIVESTREAMS). Best-effort; absent -> None -> flat 503.
+    try:
+        live_path = Path(os.environ.get("ONRECORD_LIVESTREAMS", "artifacts/livestreams.json"))
+        app.state.livestreams = (
+            json.loads(live_path.read_text(encoding="utf-8")) if live_path.exists() else None
+        )
+    except Exception:
+        app.state.livestreams = None
+
     # T-040: the Promise Ledger artifact (env seam ONRECORD_PROMISES).
     # Best-effort at startup; absent/unreadable -> empty list -> the
     # endpoint's flat 503.
@@ -1291,6 +1301,25 @@ def answer(request: AnswerRequest, http_request: Request):  # NOT `async` -- see
 # --------------------------------------------------------------------------
 # GET /api/tickers
 # --------------------------------------------------------------------------
+
+
+@app.get("/api/live")
+def live_endpoint():  # NOT `async` -- serves the startup-loaded artifact
+    """T-051: live & upcoming hearings across the tracked jurisdictions.
+    Tracked at refresh time (`make refresh-live`); `checked_at` says when."""
+    payload = getattr(app.state, "livestreams", None)
+    if payload is None:
+        return _flat_error(
+            503,
+            "live hearing tracking is not refreshed -- run `make refresh-live` "
+            "to produce artifacts/livestreams.json (ticket T-051)",
+        )
+    return {
+        "checked_at": payload.get("checked_at", ""),
+        "jurisdictions_resolved": payload.get("jurisdictions_resolved", 0),
+        "live": payload.get("live", []),
+        "upcoming": payload.get("upcoming", [])[:20],
+    }
 
 
 @app.get("/api/mentions")
