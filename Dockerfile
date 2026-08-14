@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 RUN mkdir -p artifacts corpus/v2 \
  && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/index-v2.tar.gz \
  && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
- && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/embeddings-v2.tar.gz \
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/embeddings-3large.tar.gz \
  && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
  && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o corpus/v2/corpus.jsonl.gz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/corpus-v2.jsonl.gz
 
@@ -59,7 +59,12 @@ EXPOSE 8000
 # time (Railway env var) to point at a different snapshot if ever needed.
 ENV ONRECORD_CORPUS=corpus/v2/corpus.jsonl.gz
 ENV ONRECORD_INDEX=artifacts/index
-ENV ONRECORD_EMBED_STORE=artifacts/embeddings
+# T-054 embedding upgrade: the image ships the text-embedding-3-large @
+# 3072 store (semantic NDCG@10 0.5505 vs 0.4614 on the honest five-arm
+# pool). ONRECORD_EMBED_MODEL must match the store identity or query-time
+# embeds arrive at 1536 dims and semantic_search rejects the store.
+ENV ONRECORD_EMBED_STORE=artifacts/embeddings-3large
+ENV ONRECORD_EMBED_MODEL=text-embedding-3-large
 
 # Bind 0.0.0.0 (never 127.0.0.1 — Railway's proxy connects externally) on
 # $PORT, per tickets/T-015.md's Deploy contract (see also README.md).

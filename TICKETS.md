@@ -121,3 +121,4 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-052 | Filings delta: EDGAR Atom poller | done | living | T-038 | standard |
 | T-053 | Refresh lanes + corpus-v3 runbook (swap on owner go) | done | living | T-051, T-052 | standard |
 | T-054 | Embedding upgrade eval: 3-large @ 3072 vs baseline | done | living | T-047 | standard |
+| T-055 | Deploy 3-large store to production (owner go) | in-progress | living | T-054 | standard |
