@@ -122,8 +122,8 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-053 | Refresh lanes + corpus-v3 runbook (swap on owner go) | done | living | T-051, T-052 | standard |
 | T-054 | Embedding upgrade eval: 3-large @ 3072 vs baseline | done | living | T-047 | standard |
 | T-055 | Deploy 3-large store to production (owner go) | done | living | T-054 | standard |
-| T-056 | Quantified promises (MW/gallons/jobs/$ extraction) | planned | enrich-A | T-040 | standard |
-| T-057 | Promise -> outcome tracking (follow-up trails) | planned | enrich-A | T-056 | standard |
+| T-056 | Quantified promises (MW/gallons/jobs/$ extraction) | done | enrich-A | T-040 | standard |
+| T-057 | Promise -> outcome tracking (follow-up trails) | done | enrich-A | T-056 | standard |
 | T-058 | LLC shell resolution v1 (curated, receipted) | planned | enrich-B | T-033 | capable |
 | T-059 | Grid interconnection queues (iso_queue source) | planned | enrich-B | T-057, research | standard |
 | T-060 | 8-K event typing (material-events feed) | planned | enrich-A | T-052 | standard |

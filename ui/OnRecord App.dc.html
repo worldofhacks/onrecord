@@ -513,8 +513,9 @@ input::placeholder{color:#B5B0A1}
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#075C32;background:#E4F3E9;border-radius:99px;padding:5px 13px">{{ promTotal }} COMMITMENTS · VERBATIM</span>
+        <sc-if value="{{ hasPromised }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#5B4A12;background:#F5EEDA;border-radius:99px;padding:5px 13px">{{ promisedLine }}</span></sc-if>
       </div>
-      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Commitments made on the record, extracted as verbatim quotes — every extraction is enforced to be an exact substring of its source document, and every row links to its receipt. Outcome tracking arrives as the record catches up to the promises.</p>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Commitments made on the record, extracted as verbatim quotes — every extraction is enforced to be an exact substring of its source document, and every row links to its receipt. Follow-up trails show where the later record echoed a promise, and where it has gone quiet. The record observes; it never adjudicates.</p>
     </section>
     <sc-if value="{{ hasDodge }}" hint-placeholder-val="{{ false }}">
     <div style="padding:14px 0 4px">
@@ -550,6 +551,8 @@ input::placeholder{color:#B5B0A1}
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <a href="{{ pr.link }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">receipt ↗</a>
             <sc-if value="{{ pr.hasVal }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#0A7A43">{{ pr.val }}</span></sc-if>
+            <sc-if value="{{ pr.hasOutcome }}" hint-placeholder-val="{{ false }}"><span style="{{ pr.outcomeStyle }}">{{ pr.outcomeTag }}</span></sc-if>
+            <sc-if value="{{ pr.hasTrail }}" hint-placeholder-val="{{ false }}"><a href="{{ pr.trailLink }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43;text-decoration:underline">follow-up {{ pr.trailWhen }} ↗</a></sc-if>
           </div>
         </div>
       </sc-for>
@@ -736,6 +739,7 @@ class Component extends DCLogic {
     this.loadPromises();
     this.loadMentions();
     this.loadLive();
+    this.loadPromised();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -862,6 +866,11 @@ class Component extends DCLogic {
   loadLive() {
     this.fetchJson('/api/live').then(r => {
       if (r.ok && r.body && Array.isArray(r.body.live)) this.setState({ liveData: r.body });
+    });
+  }
+  loadPromised() {
+    this.fetchJson('/api/promised?by=jurisdiction').then(r => {
+      if (r.ok && r.body && r.body.rollups) this.setState({ promised: r.body });
     });
   }
   loadMentions() {
@@ -1223,6 +1232,24 @@ class Component extends DCLogic {
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
+      // T-056: the ledger in numbers — client-side sum of the boot-computed
+      // rollups; only segments the record actually quantifies are shown.
+      hasPromised: !!(s.promised && s.promised.rollups && Object.keys(s.promised.rollups).length),
+      promisedLine: (() => {
+        if (!s.promised || !s.promised.rollups) return '';
+        const t = { mw: 0, jobs: 0, yr: 0, tot: 0 };
+        Object.values(s.promised.rollups).forEach(b => {
+          t.mw += b.promised_mw; t.jobs += b.promised_jobs;
+          t.yr += b.promised_dollars_annual; t.tot += b.promised_dollars_total;
+        });
+        const money = v => v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : '$' + Math.round(v / 1e6) + 'M';
+        const seg = [];
+        if (t.mw) seg.push(Math.round(t.mw).toLocaleString() + ' MW');
+        if (t.jobs) seg.push(Math.round(t.jobs).toLocaleString() + ' JOBS');
+        if (t.yr) seg.push(money(t.yr) + '/YR');
+        if (t.tot) seg.push(money(t.tot) + ' PLEDGED');
+        return seg.length ? 'PROMISED ON THE RECORD · ' + seg.join(' · ') : '';
+      })(),
       hasLive: !!(s.liveData && (s.liveData.live.length || s.liveData.upcoming.length)),
       liveChecked: s.liveData ? s.liveData.checked_at : '',
       liveJurs: s.liveData ? s.liveData.jurisdictions_resolved : 0,
@@ -1250,6 +1277,19 @@ class Component extends DCLogic {
         date: r.date || '', cat: (r.category || 'other').toUpperCase(),
         quote: r.quote, link: r.deep_link || '#',
         hasVal: !!r.value_text, val: r.value_text || '',
+        // T-057: the record's follow-up, never a verdict. Copy is pinned:
+        // "followed up in the record" / "no further mention in the record".
+        hasOutcome: !!r.outcome,
+        outcomeTag: r.outcome ? (
+          r.outcome.status === 'followed_up' ? 'FOLLOWED UP IN THE RECORD · ' + r.outcome.trail.length + (r.outcome.trail.length === 1 ? ' RECEIPT' : ' RECEIPTS')
+          : r.outcome.status === 'quiet' ? 'NO FURTHER MENTION IN THE RECORD'
+          : 'RECORD STILL CATCHING UP') : '',
+        outcomeStyle: r.outcome && r.outcome.status === 'followed_up'
+          ? 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;letter-spacing:.08em;color:#075C32;background:#E4F3E9;border-radius:99px;padding:3px 10px'
+          : 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;letter-spacing:.08em;color:#6E6A5E;background:#EFEEE8;border-radius:99px;padding:3px 10px',
+        hasTrail: !!(r.outcome && r.outcome.trail.length),
+        trailLink: r.outcome && r.outcome.trail.length ? r.outcome.trail[0].deep_link : '#',
+        trailWhen: r.outcome && r.outcome.trail.length ? r.outcome.trail[0].date + ' · ' + r.outcome.trail[0].signal + ' echo' : '',
       })),
       dodgeRows: (s.dodge ? s.dodge.rows.slice(0, 10) : []).map((r, i) => ({
         rank: String(i + 1).padStart(2, '0'), jur: r.jurisdiction,

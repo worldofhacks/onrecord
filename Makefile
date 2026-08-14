@@ -40,3 +40,6 @@ refresh-form4:
 
 refresh: refresh-live refresh-form4
 	@echo "deltas refreshed; filings delta + corpus-v3 swap: see tickets/T-053.md"
+refresh-outcomes:
+	uv run python scripts/build_outcomes.py
+

@@ -1490,3 +1490,123 @@ def test_live_endpoint_503_when_absent(tmp_path, monkeypatch):
         resp = client.get("/api/live")
     assert resp.status_code == 503
     assert "live" in resp.json()["error"].lower()
+
+
+# ==========================================================================
+# AMENDMENT — T-056 quantified promises (2026-08-14): /api/promises rows
+# gain an additive `quantities` field (extracted at boot from the verbatim
+# quote; raw_span substring invariant); GET /api/promised serves boot-
+# precomputed rollups by jurisdiction|ticker. Absent artifact -> flat 503.
+# ==========================================================================
+
+
+def test_promises_rows_gain_quantities(tmp_path, monkeypatch):
+    """spec(T-056:AC-5) — additive field, spans verbatim in quotes."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/promises").json()
+    by_id = {r["promise_id"]: r for r in body["rows"]}
+    jobs = by_id["d1#p1"]["quantities"]
+    assert jobs == [{"kind": "jobs", "value": 300.0, "raw_span": "300 jobs"}]
+    assert jobs[0]["raw_span"] in by_id["d1#p1"]["quote"]
+    money = by_id["d2#p1"]["quantities"]
+    assert money[0]["kind"] == "money" and money[0]["value"] == 2_000_000_000.0
+    assert money[0]["cadence"] == "total"
+    # pre-T-056 keys all still present (backward compatibility)
+    assert {"promise_id", "doc_id", "deep_link", "date", "quote", "category"} <= set(by_id["d1#p1"])
+
+
+def test_promised_rollups_by_jurisdiction_and_ticker(tmp_path, monkeypatch):
+    """spec(T-056:AC-4, T-056:AC-5)"""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        default = client.get("/api/promised").json()
+        by_ticker = client.get("/api/promised", params={"by": "ticker"}).json()
+        bad = client.get("/api/promised", params={"by": "category"})
+    assert default["by"] == "jurisdiction"
+    assert default["rollups"]["Alpha County, VA"]["promised_jobs"] == 300.0
+    assert by_ticker["rollups"]["VST"]["promised_dollars_total"] == 2_000_000_000.0
+    assert bad.status_code == 422  # pattern-validated like T-050's date params
+
+
+def test_promised_503_when_ledger_absent(tmp_path, monkeypatch):
+    """spec(T-056:AC-5) — flat 503 naming the condition, /api/live convention."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.delenv("ONRECORD_PROMISES", raising=False)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(tmp_path / "nope.jsonl"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/promised")
+    assert resp.status_code == 503
+    assert "promise" in resp.json()["error"].lower()
+
+
+# ==========================================================================
+# AMENDMENT — T-057 promise outcomes (2026-08-14): boot loads the outcomes
+# artifact (env seam ONRECORD_OUTCOMES); /api/promises rows gain an
+# additive `outcome` {status, trail}; GET /api/outcomes/summary serves
+# status counts + per-jurisdiction rollup. Absent artifact -> promises
+# unchanged, summary flat 503.
+# ==========================================================================
+
+
+def _outcomes_fixture(tmp_path):
+    import json as _json
+    payload = {
+        "generated_at": "2026-08-14T22:00:00Z",
+        "outcomes": {
+            "d1#p1": {"status": "followed_up", "trail": [
+                {"doc_id": "d9", "date": "2026-02-01", "signal": "quantity",
+                 "matched_span": "300 jobs", "deep_link": "https://youtube.com/watch?v=z&t=5s"}]},
+            "d2#p1": {"status": "quiet", "trail": []},
+        },
+    }
+    path = tmp_path / "promise_outcomes.json"
+    path.write_text(_json.dumps(payload))
+    return path
+
+
+def test_promises_rows_gain_outcome(tmp_path, monkeypatch):
+    """spec(T-057:AC-5) — additive field; statuses from the frozen enum."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    monkeypatch.setenv("ONRECORD_OUTCOMES", str(_outcomes_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/promises").json()
+    by_id = {r["promise_id"]: r for r in body["rows"]}
+    assert by_id["d1#p1"]["outcome"]["status"] == "followed_up"
+    assert by_id["d1#p1"]["outcome"]["trail"][0]["matched_span"] == "300 jobs"
+    assert by_id["d2#p1"]["outcome"]["status"] == "quiet"
+
+
+def test_outcomes_summary_endpoint(tmp_path, monkeypatch):
+    """spec(T-057:AC-5)"""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    monkeypatch.setenv("ONRECORD_OUTCOMES", str(_outcomes_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/outcomes/summary").json()
+    assert body["statuses"] == {"followed_up": 1, "quiet": 1}
+    assert body["generated_at"] == "2026-08-14T22:00:00Z"
+    assert body["by_jurisdiction"]["Alpha County, VA"]["followed_up"] == 1
+
+
+def test_outcomes_summary_503_when_absent(tmp_path, monkeypatch):
+    """spec(T-057:AC-5) — flat 503 convention; promises endpoint unaffected."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    monkeypatch.setenv("ONRECORD_OUTCOMES", str(tmp_path / "nope.json"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        summary = client.get("/api/outcomes/summary")
+        promises = client.get("/api/promises")
+    assert summary.status_code == 503
+    assert "outcome" in summary.json()["error"].lower()
+    assert promises.status_code == 200
+    assert "outcome" not in promises.json()["rows"][0]
