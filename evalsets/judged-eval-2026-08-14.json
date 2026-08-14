@@ -1,0 +1,161 @@
+{
+  "generator": "claude-opus-5",
+  "judge": "gpt-5-mini",
+  "judge_validation_ref": "evalsets/judge-validation-2026-08-13.json",
+  "retrieval": "hybrid k=8 fusion_depth=2000 (deployed config)",
+  "per_qa": [
+    {
+      "qa_id": "q1",
+      "faithfulness": 0.818,
+      "claims": 11,
+      "secs": 13.9,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q2",
+      "faithfulness": 1.0,
+      "claims": 7,
+      "secs": 11.8,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q3",
+      "faithfulness": 1.0,
+      "claims": 9,
+      "secs": 13.2,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q4",
+      "faithfulness": 0.9,
+      "claims": 10,
+      "secs": 14.1,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q5",
+      "faithfulness": 1.0,
+      "claims": 8,
+      "secs": 9.9,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q6",
+      "faithfulness": 0.929,
+      "claims": 14,
+      "secs": 15.0,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q7",
+      "faithfulness": 0.727,
+      "claims": 11,
+      "secs": 13.1,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q8",
+      "faithfulness": 1.0,
+      "claims": 13,
+      "secs": 13.4,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q12",
+      "faithfulness": 1.0,
+      "claims": 12,
+      "secs": 15.7,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q13",
+      "faithfulness": 0.889,
+      "claims": 9,
+      "secs": 12.4,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q14",
+      "faithfulness": 1.0,
+      "claims": 9,
+      "secs": 12.0,
+      "grounding": "partial"
+    },
+    {
+      "qa_id": "q15",
+      "faithfulness": 0.9,
+      "claims": 10,
+      "secs": 12.3,
+      "grounding": "partial"
+    }
+  ],
+  "unanswerable": [
+    {
+      "id": "un01",
+      "refused": true,
+      "secs": 2.7
+    },
+    {
+      "id": "un02",
+      "refused": true,
+      "secs": 2.3
+    },
+    {
+      "id": "un03",
+      "refused": true,
+      "secs": 1.5
+    },
+    {
+      "id": "un04",
+      "refused": true,
+      "secs": 1.6
+    },
+    {
+      "id": "un05",
+      "refused": true,
+      "secs": 2.1
+    },
+    {
+      "id": "un06",
+      "refused": true,
+      "secs": 1.6
+    },
+    {
+      "id": "un07",
+      "refused": true,
+      "secs": 2.6
+    },
+    {
+      "id": "un08",
+      "refused": true,
+      "secs": 1.6
+    },
+    {
+      "id": "un09",
+      "refused": true,
+      "secs": 1.6
+    },
+    {
+      "id": "un10",
+      "refused": true,
+      "secs": 1.8
+    },
+    {
+      "id": "un11",
+      "refused": true,
+      "secs": 1.9
+    },
+    {
+      "id": "un12",
+      "refused": true,
+      "secs": 1.7
+    }
+  ],
+  "summary": {
+    "faithfulness_mean": 0.9302,
+    "answered_qa": 12,
+    "qa_total": 12,
+    "false_refusal_rate": 0.0,
+    "refusal_rate_on_unanswerable": 1.0
+  }
+}
