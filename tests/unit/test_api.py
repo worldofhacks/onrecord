@@ -1197,3 +1197,30 @@ def test_answer_rate_counters_reset_on_asgi_startup(tmp_path, monkeypatch):
     # A fresh ASGI startup (new deployment / restart) must begin at zero.
     with _client(api_module, monkeypatch, index_dir) as client:
         assert client.post("/api/answer", json=ANSWER_BODY).status_code != 429
+
+
+# ==========================================================================
+# AMENDMENT — T-037 (2026-08-14): `_fusion_depth()` env parsing. Hybrid
+# search runs at ONRECORD_FUSION_DEPTH (default 2000, differentially
+# verified); 0/negative restores frozen full depth (None); junk falls back
+# to the default rather than crashing a request.
+# ==========================================================================
+
+
+def test_fusion_depth_env_parsing(monkeypatch):
+    api_module = _api_module()
+
+    monkeypatch.delenv("ONRECORD_FUSION_DEPTH", raising=False)
+    assert api_module._fusion_depth() == 2000
+
+    monkeypatch.setenv("ONRECORD_FUSION_DEPTH", "350")
+    assert api_module._fusion_depth() == 350
+
+    monkeypatch.setenv("ONRECORD_FUSION_DEPTH", "0")
+    assert api_module._fusion_depth() is None
+
+    monkeypatch.setenv("ONRECORD_FUSION_DEPTH", "-5")
+    assert api_module._fusion_depth() is None
+
+    monkeypatch.setenv("ONRECORD_FUSION_DEPTH", "not-a-number")
+    assert api_module._fusion_depth() == 2000
