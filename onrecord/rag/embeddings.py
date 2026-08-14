@@ -195,6 +195,12 @@ class EmbeddingRequestError(RuntimeError):
 
 _OPENAI_URL = "https://api.openai.com/v1/embeddings"
 _OPENAI_BATCH_SIZE = 512
+# T-031: OpenAI enforces an aggregate ~300K-token cap per embeddings request
+# (found live: 512-count batches of filing sections tripped it). Requests
+# are greedily packed under this ESTIMATED budget (chars/4) as well as the
+# count cap; a single over-budget text still travels alone (per-input
+# truncation is T-030's, upstream).
+_OPENAI_REQUEST_TOKEN_BUDGET = 250_000
 _OPENAI_MAX_RETRIES = 3  # retries beyond the initial attempt (2-5 total requests)
 _OPENAI_BACKOFF_BASE = 0.05  # seconds; tests that don't monkeypatch time.sleep still run fast
 
@@ -269,9 +275,21 @@ class OpenAIEmbeddingProvider:
     def embed(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        batches = [
-            texts[i : i + _OPENAI_BATCH_SIZE] for i in range(0, len(texts), _OPENAI_BATCH_SIZE)
-        ]
+        batches: list[list[str]] = []
+        current: list[str] = []
+        current_tokens = 0.0
+        for text in texts:
+            est = len(text) / 4.0
+            if current and (
+                len(current) >= _OPENAI_BATCH_SIZE
+                or current_tokens + est > _OPENAI_REQUEST_TOKEN_BUDGET
+            ):
+                batches.append(current)
+                current, current_tokens = [], 0.0
+            current.append(text)
+            current_tokens += est
+        if current:
+            batches.append(current)
         with httpx.Client(transport=self._transport) as client:
             rows = [
                 self._embed_batch(client, batch, batch_index)
@@ -322,7 +340,16 @@ class OpenAIEmbeddingProvider:
                 if (response.status_code == 429 or response.status_code >= 500) and (
                     more_retries_left
                 ):
-                    time.sleep(_OPENAI_BACKOFF_BASE * (2**attempt))
+                    delay = _OPENAI_BACKOFF_BASE * (2**attempt)
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            # Honor the server's own pacing (T-031), bounded so a
+                            # hostile header cannot park the run for hours.
+                            delay = min(max(delay, float(retry_after)), 120.0)
+                        except ValueError:
+                            pass
+                    time.sleep(delay)
                     continue
 
                 raise EmbeddingRequestError(

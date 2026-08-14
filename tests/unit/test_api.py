@@ -1405,3 +1405,46 @@ def test_search_bad_date_and_sort_are_422(tmp_path, monkeypatch):
     with _client(api_module, monkeypatch, index_dir) as client:
         assert client.get("/api/search", params={"q": "x", "date_from": "junk"}).status_code == 422
         assert client.get("/api/search", params={"q": "x", "sort": "sideways"}).status_code == 422
+
+
+# ==========================================================================
+# AMENDMENT — T-033 endpoint (2026-08-14): GET /api/mentions serves the
+# startup-computed mention-performance cache (env-gated build; the frozen
+# suite stays zero-network). 503 when not computed; window/k filtering on
+# the cached rows.
+# ==========================================================================
+
+
+def test_mentions_endpoint_503_when_not_computed(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.delenv("ONRECORD_MENTIONS_BOOT", raising=False)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/mentions")
+    assert resp.status_code == 503
+    assert "mention" in resp.json()["error"].lower()
+
+
+def test_mentions_endpoint_serves_windowed_cache(tmp_path, monkeypatch):
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    today = _dt.now(_UTC).date().isoformat()
+    with _client(api_module, monkeypatch, index_dir) as client:
+        api_module.app.state.mentions_cache = [
+            {"ticker": "VST", "doc_id": "d1", "date": today, "deep_link": "https://x",
+             "venue_type": "sworn", "source_type": "filing", "snippet": "s",
+             "entry_close": 100.0, "latest_close": 120.0, "return_pct": 20.0,
+             "peak_pct": 25.0, "co_mentions": 0},
+            {"ticker": "NVDA", "doc_id": "d2", "date": "2020-01-01", "deep_link": "https://y",
+             "venue_type": "sworn", "source_type": "filing", "snippet": "s",
+             "entry_close": 50.0, "latest_close": 40.0, "return_pct": -20.0,
+             "peak_pct": 0.0, "co_mentions": 0},
+        ]
+        resp = client.get("/api/mentions", params={"window": 30, "k": 10})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["grain"] == "daily-close" and body["window_days"] == 30
+    assert [r["doc_id"] for r in body["rows"]] == ["d1"]  # old row windowed out

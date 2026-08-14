@@ -348,6 +348,27 @@ input::placeholder{color:#B5B0A1}
       <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The universe.</h1>
       <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">{{ tickerTotal }} tickers across the buildout's supply chain. Receipt counts are documents on the record; click a ticker for the price-and-receipts timeline.</p>
     </section>
+    <sc-if value="{{ hasMentions }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:10px 0 4px">
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:20px 24px;animation:fadeup .45s ease both">
+        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+          <h2 style="font-family:Fraunces,serif;font-weight:560;font-size:20px;margin:0">The record's calls.</h2>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574">WHEN THE RECORD MENTIONS A TICKER, THE PRICE IS PINNED · TRAILING 90D · DAILY CLOSE</span>
+        </div>
+        <sc-for list="{{ mentionRows }}" as="mn" hint-placeholder-count="0">
+          <div style="display:flex;gap:12px;align-items:baseline;padding:7px 0;border-top:1px solid #F0EEE4;font-size:13px;flex-wrap:wrap">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8A8574;min-width:22px">{{ mn.rank }}</span>
+            <span style="font-weight:700;border:1px solid #16150F;border-radius:4px;padding:1px 7px">{{ mn.ticker }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:{{ mn.retColor }}">{{ mn.ret }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574">peak {{ mn.peak }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">{{ mn.date }} · entry {{ mn.entry }}</span>
+            <sc-if value="{{ mn.hasCo }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#075C32;background:#E4F3E9;border-radius:99px;padding:2px 8px">+{{ mn.co }}</span></sc-if>
+            <a href="{{ mn.link }}" target="_blank" rel="noopener" style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">receipt ▸</a>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
     <sc-if value="{{ noSectors }}" hint-placeholder-val="{{ false }}">
       <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
         <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">{{ noSectorsTitle }}</p>
@@ -694,6 +715,7 @@ class Component extends DCLogic {
     this.loadTickers();
     this.loadDodge();
     this.loadPromises();
+    this.loadMentions();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -815,6 +837,11 @@ class Component extends DCLogic {
     this.fetchJson('/api/conduct/' + encodeURIComponent(sym)).then(r => {
       if (seq !== this._cseq) return;
       if (r.ok && r.body && typeof r.body.net_value === 'number') this.setState({ conduct: r.body });
+    });
+  }
+  loadMentions() {
+    this.fetchJson('/api/mentions?window=90&k=12').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.rows)) this.setState({ mentions: r.body });
     });
   }
   loadPromises() {
@@ -1171,6 +1198,15 @@ class Component extends DCLogic {
       navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
+      hasMentions: !!(s.mentions && s.mentions.rows.length),
+      mentionRows: (s.mentions ? s.mentions.rows.slice(0, 12) : []).map((r, i) => ({
+        rank: String(i + 1).padStart(2, '0'), ticker: r.ticker,
+        ret: (r.return_pct > 0 ? '+' : '') + r.return_pct.toFixed(1) + '%',
+        retColor: r.return_pct < 0 ? '#B8432C' : '#0A7A43',
+        peak: (r.peak_pct > 0 ? '+' : '') + r.peak_pct.toFixed(1) + '%',
+        date: r.date, entry: '$' + r.entry_close.toFixed(2),
+        hasCo: r.co_mentions > 0, co: r.co_mentions, link: r.deep_link || '#',
+      })),
       promShown: s.proms ? Math.min(30, s.proms.rows.length) : 0,
       promRows: (s.proms ? s.proms.rows.slice(0, 30) : []).map(r => ({
         badge: (r.venue_type || r.source_type || '').toUpperCase(),
