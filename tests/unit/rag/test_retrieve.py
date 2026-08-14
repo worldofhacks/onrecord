@@ -2087,6 +2087,10 @@ def test_hybrid_search_signature_is_frozen():
         ("provider", POS_OR_KW, inspect.Parameter.empty),
         ("k", POS_OR_KW, 10),
         ("rrf_k", POS_OR_KW, 60),
+        # T-037 AMENDMENT (2026-08-14): additive keyword with a None default
+        # that preserves the frozen full-depth behavior bit for bit — see the
+        # amendment banner at the end of this file.
+        ("fusion_depth", POS_OR_KW, None),
     ]
 
 
@@ -2216,3 +2220,63 @@ def test_modes_imports_no_web_framework():
     imported = _imported_module_names(_module_ast(_modes_module()))
 
     assert not any(name.split(".")[0] in {"fastapi", "starlette", "uvicorn"} for name in imported)
+
+
+# ==========================================================================
+# AMENDMENT — T-037 (2026-08-14): bounded fusion depth. On the production
+# corpus (289,536 chunks) full-depth fusion costs 7.8s/query on deploy
+# hardware — full lexical materialization, a per-row hash verification for
+# every returned semantic row, and a full-sort tail — which made hybrid
+# time out in every interactive client. `fusion_depth` bounds both arms to
+# their top max(k, fusion_depth). Additive only: `None` (every call above)
+# is pinned bit-identical to the frozen full-depth behavior; N=2000 was
+# differentially verified against full depth on the 100-query judgment set
+# before shipping (tickets/T-037.md).
+# ==========================================================================
+
+
+def test_hybrid_fusion_depth_none_matches_frozen_full_depth_bit_for_bit():
+    index, store, chunks, provider = _full_depth_fixture()
+    frozen = _retrieve_attr("hybrid_search")(index, store, chunks, QUERY, provider, k=2)
+    explicit = _retrieve_attr("hybrid_search")(
+        index, store, chunks, QUERY, provider, k=2, fusion_depth=None
+    )
+    assert [(r.doc_id, r.score, r.snippet) for r in frozen] == [
+        (r.doc_id, r.score, r.snippet) for r in explicit
+    ]
+
+
+def test_hybrid_fusion_depth_covering_the_corpus_equals_full_depth():
+    # depth 12 == the fixture's full lexical depth, so the bounded run must
+    # reproduce the frozen full-depth pin exactly (FD_Q found at lexical
+    # rank 12, fused to second place).
+    index, store, chunks, provider = _full_depth_fixture()
+    results = _retrieve_attr("hybrid_search")(
+        index, store, chunks, QUERY, provider, k=2, fusion_depth=12
+    )
+    assert [r.doc_id for r in results] == [FD_P, FD_Q]
+    assert [r.score for r in results] == pytest.approx([R_1_PLUS_1, R_2_PLUS_12], rel=1e-12)
+
+
+def test_hybrid_fusion_depth_is_floored_at_k_and_returns_k_results():
+    # fusion_depth=1 with k=2 must still fuse at depth max(k, fusion_depth)=2
+    # and return 2 well-formed, score-descending results drawn from the
+    # bounded arms' union.
+    index, store, chunks, provider = _full_depth_fixture()
+    results = _retrieve_attr("hybrid_search")(
+        index, store, chunks, QUERY, provider, k=2, fusion_depth=1
+    )
+    assert len(results) == 2
+    assert results[0].doc_id == FD_P  # rank 1 on both arms; unbeatable
+    assert results[0].score >= results[1].score
+    lexical_top2 = {r.doc_id for r in ranked_search(index, QUERY, k=2)}
+    assert {r.doc_id for r in results} <= lexical_top2 | {FD_P, FD_Q}
+
+
+def test_hybrid_fusion_depth_nonpositive_raises():
+    index, store, chunks, provider = _full_depth_fixture()
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            _retrieve_attr("hybrid_search")(
+                index, store, chunks, QUERY, provider, k=2, fusion_depth=bad
+            )

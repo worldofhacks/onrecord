@@ -1,0 +1,12 @@
+{
+  "n_queries": 100,
+  "top20_overlap_mean": 0.995,
+  "top20_overlap_min": 0.9,
+  "exact_top10_matches": 98,
+  "ndcg10_full_mean": 0.4309,
+  "ndcg10_bounded_mean": 0.4315,
+  "latency_full_mean_s": 2.609,
+  "latency_bounded_mean_s": 0.631,
+  "fusion_depth": 2000,
+  "hardware_note": "dev M-series; prod vCPU is ~4-8x slower per measured ratios"
+}

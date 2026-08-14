@@ -108,7 +108,8 @@ PINNED" and the ladder table) before touching the code below. Summary:
   ladder's store rung — startup itself never raises, so a corrupt store can
   never crash-loop the deploy (the T-015 bootstrap lesson).
 - `GET /api/search?mode=semantic|hybrid` runs T-022's `semantic_search` /
-  `hybrid_search` at FULL corpus depth, projects every hit's chunk_id
+  `hybrid_search` (hybrid at `ONRECORD_FUSION_DEPTH`, default 2000 — T-037;
+  `0` restores full depth) — historically at FULL corpus depth, projects every hit's chunk_id
   through the EXPLICIT `chunk.doc_ids[0]` projection, and then takes the
   same filter-then-truncate tail as `mode=lexical`, so all three modes
   share one 9-key result shape and one filter order. `op` stays whitelisted
@@ -677,6 +678,21 @@ def _embedding_context() -> tuple[embeddings.EmbeddingStore, embeddings.Embeddin
     return store, provider
 
 
+def _fusion_depth() -> int | None:
+    """T-037: hybrid fusion depth. Default 2000 (differentially verified
+    against full depth on the 100-query judgment set); `ONRECORD_FUSION_DEPTH=0`
+    (or negative) restores the frozen full-depth behavior; junk falls back to
+    the default rather than crashing a request."""
+    raw = os.environ.get("ONRECORD_FUSION_DEPTH", "").strip()
+    if not raw:
+        return 2000
+    try:
+        value = int(raw)
+    except ValueError:
+        return 2000
+    return value if value > 0 else None
+
+
 def _embedding_hits(index: InvertedIndex, mode: str, query: str, k: int) -> list[SearchResult]:
     """T-022 retrieval for `mode`, with every typed error mapped onto its OWN
     rung (AMENDMENT per T-022's test review I-2, extended by code review I-2):
@@ -688,7 +704,9 @@ def _embedding_hits(index: InvertedIndex, mode: str, query: str, k: int) -> list
     try:
         if mode == "semantic":
             return retrieve.semantic_search(store, chunks, query, provider, k=k)
-        return retrieve.hybrid_search(index, store, chunks, query, provider, k=k)
+        return retrieve.hybrid_search(
+            index, store, chunks, query, provider, k=k, fusion_depth=_fusion_depth()
+        )
     except retrieve.MissingEmbeddings as exc:
         raise _Degradation(
             f"corpus chunks are not embedded in the configured store ({_safe_echo(exc)}) — "

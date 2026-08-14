@@ -63,6 +63,15 @@ file. Summary of what's implemented here:
     receipt with no error), which this ticket refuses to ship silently.
   * Lexical ranking at FULL DEPTH — `ranked_search(index, query,
     k=index.doc_count())` — RRF needs deep rankings.
+    [T-037 AMENDMENT 2026-08-14: full depth is the DEFAULT, not the only
+    mode. `fusion_depth=N` bounds both arms to their top max(k, N) — on the
+    production corpus (289,536 chunks) full depth costs 7.8s/query on
+    deploy hardware (full lexical materialization + a per-row hash
+    verification for every returned semantic row + full-sort tail), which
+    made hybrid time out in every interactive client. Bounded fusion at
+    N=2000 was differentially verified against full depth on the 100-query
+    judgment set before shipping (see tickets/T-037.md). `None` preserves
+    the frozen behavior bit for bit.]
   * Semantic ranking = `_semantic_ranking(..., k=len(chunks))`, consumed as
     an ID SEQUENCE — every chunk is hash-verified (result-scoped
     verification at `k=len(chunks)` covers everything), but NO
@@ -246,22 +255,42 @@ def hybrid_search(
     provider: EmbeddingProvider,
     k: int = 10,
     rrf_k: int = 60,
+    fusion_depth: int | None = None,
 ) -> list[SearchResult]:
-    """RRF-fuse a full-depth lexical ranking with a semantic ranking over
-    `chunks`, both keyed by chunk_id under the identity-chunking invariant.
-    See module docstring for the frozen contract."""
+    """RRF-fuse a lexical ranking with a semantic ranking over `chunks`,
+    both keyed by chunk_id under the identity-chunking invariant.
+
+    `fusion_depth=None` (the default, and every pre-T-037 caller) fuses at
+    FULL depth — the frozen T-022 behavior, bit for bit. A positive
+    `fusion_depth` bounds both arms to their top `max(k, fusion_depth)`
+    entries, which bounds the semantic arm's per-row hash verification and
+    the lexical materialization to the fused window instead of the whole
+    corpus (T-037; measured 7.8s -> ~2s per query on the production
+    corpus). See module docstring for the contract."""
     if k <= 0:
         raise ValueError(f"hybrid_search: k must be positive, got k={k!r}")
     if rrf_k <= 0:
         raise ValueError(f"hybrid_search: rrf_k must be positive, got rrf_k={rrf_k!r}")
+    if fusion_depth is not None and fusion_depth <= 0:
+        raise ValueError(
+            f"hybrid_search: fusion_depth must be positive or None, got {fusion_depth!r}"
+        )
 
     _guard_identity_chunking(chunks)
 
-    lexical_results = ranked_search(index, query, k=index.doc_count())
+    if fusion_depth is None:
+        lexical_depth = index.doc_count()
+        semantic_depth = len(chunks)
+    else:
+        depth = max(k, fusion_depth)
+        lexical_depth = min(depth, index.doc_count())
+        semantic_depth = min(depth, len(chunks))
+
+    lexical_results = ranked_search(index, query, k=lexical_depth)
     lexical_by_id = {result.doc_id: result for result in lexical_results}
     lexical_ranking = [result.doc_id for result in lexical_results]
 
-    semantic_ranking_pairs = _semantic_ranking(store, chunks, query, provider, len(chunks))
+    semantic_ranking_pairs = _semantic_ranking(store, chunks, query, provider, semantic_depth)
     semantic_ranking = [chunk.chunk_id for chunk, _score in semantic_ranking_pairs]
 
     fused = rrf_fuse([lexical_ranking, semantic_ranking], k=rrf_k)
