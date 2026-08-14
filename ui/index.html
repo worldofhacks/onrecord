@@ -1,1 +1,1276 @@
-��⽫^�٩��Z�׹�_Ա��螶��.����7����W�i�ڝǝ��?��6km6����n�m���N��s_;��+j�!���,(�F�
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#FAFAF7;color:#16150F;font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#0A7A43;text-decoration:none}a:hover{color:#075C32}
+input::placeholder{color:#B5B0A1}
+::selection{background:#DFF0E5}
+@keyframes fadeup{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(10,122,67,.35)}100%{box-shadow:0 0 0 9px rgba(10,122,67,0)}}
+</style>
+</helmet>
+<div data-screen-label="OnRecord" style="min-height:100vh;display:flex;flex-direction:column" onClick="{{ rootClick }}">
+  <header style="{{ headerStyle }}">
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onClick="{{ onNav }}" data-view="search">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 1h16v17l-2-1.6L15 18l-2-1.6L11 18l-2-1.6L7 18l-2-1.6L3 18V1Z" stroke="#16150F" stroke-width="1.5" stroke-linejoin="round"></path><path d="M7 6.5h8M7 10h8" stroke="#16150F" stroke-width="1.5"></path></svg>
+      <span style="font-family:Fraunces,serif;font-weight:600;font-size:19px;letter-spacing:-0.01em">OnRecord</span>
+    </div>
+    <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}">
+      <nav style="display:flex;gap:26px;align-items:center;font-size:13.5px;font-weight:500">
+        <a href="#search" style="{{ navSearch }}">Search</a>
+        <a href="#ask" style="{{ navAsk }}">Ask</a>
+        <a href="#tickers" style="{{ navTickers }}">Tickers</a>
+        <a href="#scoreboard" style="{{ navScore }}">Scoreboard</a>
+        <a href="#ledger" style="{{ navLedger }}">Ledger <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#F0EEE4;border:1px solid #E7E4DA;border-radius:99px;padding:2px 8px;color:#8A8574;margin-left:5px">soon</span></a>
+      </nav>
+    </sc-if>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;display:flex;align-items:center;gap:7px"><span style="{{ engineDot }}"></span>{{ engineLabel }}<sc-if value="{{ apiDown }}" hint-placeholder-val="{{ false }}"><button onClick="{{ retryApi }}" style="all:unset;cursor:pointer;color:#0A7A43;text-decoration:underline;font-family:'IBM Plex Mono',monospace;font-size:11px">retry</button></sc-if></span>
+  </header>
+
+  <sc-if value="{{ vSearch }}" hint-placeholder-val="{{ true }}">
+  <div style="{{ padX }}">
+    <section style="{{ heroGrid }}">
+      <div>
+        <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(34px,4.6vw,62px);line-height:1.04;letter-spacing:-0.02em;margin:0;text-wrap:balance">Ask the record.</h1>
+        <p style="margin:14px 0 0;font-size:clamp(13.5px,1.1vw,15.5px);line-height:1.55;color:#6E6A5E;max-width:520px;text-wrap:pretty">The public paper trail of the AI-datacenter buildout — county hearings, SEC filings, regulator dockets. Every answer carries a receipt.</p>
+      </div>
+      <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #E7E4DA;padding-left:32px;align-self:end">
+          <div style="grid-column:1/-1;padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid #E7E4DA">
+            <div style="font-family:Fraunces,serif;font-size:36px;font-weight:560;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">{{ heroDocuments }}</div>
+            <div style="font-size:11px;color:#6E6A5E;letter-spacing:.06em;text-transform:uppercase;margin-top:2px">documents indexed</div>
+          </div>
+          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">{{ heroJurisdictions }}</div><div style="font-size:11px;color:#6E6A5E">jurisdictions</div></div>
+          <div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:560;font-variant-numeric:tabular-nums">{{ tickerTotal }}</div><div style="font-size:11px;color:#6E6A5E">tickers</div></div>
+        </div>
+      </sc-if>
+    </section>
+    <section>
+      <div style="display:flex;align-items:center;gap:14px;border-bottom:2px solid #16150F;padding-bottom:12px;flex-wrap:wrap">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><circle cx="9" cy="9" r="6.5" stroke="#16150F" stroke-width="1.5"></circle><path d="M14 14l4 4" stroke="#16150F" stroke-width="1.5" stroke-linecap="round"></path></svg>
+        <input ref="{{ searchRef }}" value="{{ q }}" onChange="{{ setQ }}" onKeyDown="{{ qKey }}" style="flex:1;min-width:160px;border:0;background:transparent;outline:0;font-family:Fraunces,serif;font-size:clamp(19px,2vw,26px);font-weight:480;color:#16150F;padding:0" placeholder="Ask the record…">
+        <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;border:1px solid #E7E4DA;border-radius:5px;padding:3px 7px">/</span></sc-if>
+        <div style="display:flex;border:1px solid #E7E4DA;border-radius:99px;overflow:hidden;font-size:12px;font-weight:500;background:#fff">
+          <button onClick="{{ setMode }}" data-mode="lexical" style="{{ modeLexStyle }}">Lexical</button>
+          <button onClick="{{ setMode }}" data-mode="semantic" style="{{ modeSemStyle }}">Semantic</button>
+          <button onClick="{{ setMode }}" data-mode="hybrid" style="{{ modeHybStyle }}">Hybrid</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;padding:14px 0 4px;font-size:12.5px;font-weight:500;flex-wrap:wrap">
+        <div style="position:relative"><button onClick="{{ togSource }}" style="{{ pillSource }}">{{ fSourceLabel }} ▾</button>
+          <sc-if value="{{ openSource }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:180px;animation:pop .15s ease both"><sc-for list="{{ sourceOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickSource }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togVenue }}" style="{{ pillVenue }}">{{ fVenueLabel }} ▾</button>
+          <sc-if value="{{ openVenue }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:160px;animation:pop .15s ease both"><sc-for list="{{ venueOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickVenue }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togTicker }}" style="{{ pillTicker }}">{{ fTickerLabel }} ▾</button>
+          <sc-if value="{{ openTickerF }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:140px;max-height:280px;overflow-y:auto;animation:pop .15s ease both"><sc-for list="{{ tickerOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickTicker }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px;font-variant-numeric:tabular-nums" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <div style="position:relative"><button onClick="{{ togJur }}" style="{{ pillJur }}">{{ fJurLabel }} ▾</button>
+          <sc-if value="{{ openJur }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:36px;left:0;z-index:30;background:#fff;border:1px solid #E7E4DA;border-radius:10px;box-shadow:0 10px 30px rgba(22,21,15,.12);padding:6px;min-width:210px;max-height:280px;overflow-y:auto;animation:pop .15s ease both"><sc-for list="{{ jurOpts }}" as="o" hint-placeholder-count="0"><button onClick="{{ pickJur }}" data-val="{{ o.val }}" style="all:unset;cursor:pointer;display:block;width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;font-size:12.5px" style-hover="background:#F2F0E8">{{ o.label }}</button></sc-for></div></sc-if>
+        </div>
+        <sc-if value="{{ anyFilter }}" hint-placeholder-val="{{ false }}"><button onClick="{{ clearFilters }}" style="all:unset;cursor:pointer;color:#9C3A24;font-size:12px;padding:6px 4px">clear ✕</button></sc-if>
+        <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574;font-variant-numeric:tabular-nums">{{ countLine }}</span>
+      </div>
+    </section>
+    <main style="flex:1;padding-bottom:8px">
+      <sc-if value="{{ searchNotProvisioned }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+          <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">Not provisioned yet.</p>
+          <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0">{{ modeErr }}</p>
+        </div>
+      </sc-if>
+      <sc-if value="{{ !searchNotProvisioned }}" hint-placeholder-val="{{ true }}">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8A8574;padding:14px 0 2px">{{ listLabel }}</div>
+      <sc-for list="{{ results }}" as="r" hint-placeholder-count="4">
+        <article style="{{ r.rowStyle }}" onMouseEnter="{{ hoverRow }}" data-i="{{ r.i }}">
+          <sc-if value="{{ notMobile }}" hint-placeholder-val="{{ true }}"><time style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8A8574;padding-top:3px">{{ r.dateStr }}</time></sc-if>
+          <div style="padding-top:1px">
+            <sc-if value="{{ r.isVideo }}" hint-placeholder-val="{{ true }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="#0A7A43" stroke-width="1.4"></circle><path d="M9 7.5l5 3.5-5 3.5v-7Z" stroke="#0A7A43" stroke-width="1.4" stroke-linejoin="round"></path></svg></sc-if>
+            <sc-if value="{{ r.isFiling }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="4" y="2.5" width="14" height="17" rx="1.5" stroke="#0A7A43" stroke-width="1.4"></rect><path d="M7.5 7h7M7.5 10.5h7M7.5 14h4.5" stroke="#0A7A43" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+            <sc-if value="{{ r.isDocket }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="4" width="16" height="14" rx="1.5" stroke="#0A7A43" stroke-width="1.4"></rect><circle cx="8" cy="11" r="2.2" stroke="#0A7A43" stroke-width="1.4"></circle><path d="M13 8.5h3.5M13 13.5h3.5" stroke="#0A7A43" stroke-width="1.4" stroke-linecap="round"></path></svg></sc-if>
+          </div>
+          <div style="min-width:0">
+            <div style="display:flex;gap:7px;align-items:center;margin-bottom:8px;font-size:11px;font-weight:600;letter-spacing:.04em;flex-wrap:wrap">
+              <span style="{{ r.venueStyle }}">{{ r.venueLabel }}</span>
+              <span style="{{ r.refStyle }}">{{ r.refChip }}</span>
+              <span style="color:#B5B0A1;font-weight:400;font-size:11.5px">{{ r.meta }}</span>
+            </div>
+            <p style="margin:0;font-size:clamp(14px,1.1vw,16px);line-height:1.6;max-width:760px;text-wrap:pretty"><sc-for list="{{ r.segs }}" as="s" hint-placeholder-count="1"><span style="{{ s.style }}">{{ s.t }}</span></sc-for></p>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:11px">
+              <a href="{{ r.link }}" target="_blank" rel="noopener" style="{{ r.ctaStyle }}" style-hover="{{ r.ctaHover }}">{{ r.cta }}</a>
+              <span style="font-size:12px;color:#8A8574;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.line }}</span>
+              <sc-if value="{{ showScores }}" hint-placeholder-val="{{ true }}"><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;color:#DDD9CC;font-size:17px;font-variant-numeric:tabular-nums">{{ r.score }}</span></sc-if>
+            </div>
+          </div>
+        </article>
+      </sc-for>
+      <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+          <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">{{ emptyTitle }}</p>
+          <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0 0 16px">{{ emptyBody }}</p>
+          <div style="display:flex;gap:7px;justify-content:center;flex-wrap:wrap">
+            <button onClick="{{ trySuggest }}" data-q="substation" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">substation</button>
+            <button onClick="{{ trySuggest }}" data-q="water" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">water</button>
+            <button onClick="{{ trySuggest }}" data-q="rezoning" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">rezoning</button>
+            <button onClick="{{ trySuggest }}" data-q="megawatts" style="{{ suggestStyle }}" style-hover="{{ suggestHover }}">megawatts</button>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ hasResults }}" hint-placeholder-val="{{ true }}"><p style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;padding:14px 0 0;text-align:center">↑↓ navigate · Enter opens the receipt · / focuses search</p></sc-if>
+      </sc-if>
+    </main>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vAsk }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padX }}">
+    <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
+    <div style="display:flex;justify-content:center;padding:14px 0 0">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 14px;text-align:center">Demo data · API unreachable — illustrative answers below</span>
+    </div>
+    </sc-if>
+    <main style="{{ askGrid }}">
+      <div style="display:flex;flex-direction:column;gap:34px;min-width:0">
+        <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
+        <section style="animation:fadeup .45s ease both">
+          <div style="display:flex;gap:14px;align-items:baseline">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·1</span>
+            <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">Which utilities admitted to regulators that data-center demand might not materialize?</h2>
+          </div>
+          <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap">
+              <span style="display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:#075C32;background:#E4F3E9;border-radius:99px;padding:4px 12px">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5.2" stroke="#075C32" stroke-width="1.3"></circle><path d="M3.8 6.2l1.5 1.5 2.9-3" stroke="#075C32" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                Grounded · 6 of 6 claims checked
+              </span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">hybrid · k 8 · 2026-08-11</span>
+            </div>
+            <div style="font-family:Fraunces,serif;font-size:clamp(16.5px,1.3vw,18.5px);line-height:1.72;font-weight:420;text-wrap:pretty;max-width:66ch">
+              <p style="margin:0 0 14px">Three utilities have hedged, on the record, in the past two quarters. In sworn testimony before the Georgia PSC, Georgia Power's load-forecast witness conceded that the 6,600 MW of pending data-center requests include inquiries that are <em>“speculative and duplicative,”</em> with only about a third holding executed service agreements<span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="1"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">1</a><sc-if value="{{ pop1 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">GA PSC 44280</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-08-04</span></span>…6,600 MW of pending requests, of which 2,100 MW hold executed service agreements; the remainder characterized as speculative and duplicative…</span></sc-if></span>. AEP Ohio went further: its data-center tariff requires minimum demand charges on 85 percent of contracted load for twelve years — an explicit hedge against demand that never shows up<span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="2"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">2</a><sc-if value="{{ pop2 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">PUCO 24-508</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-07-17</span></span>…minimum demand payments of 85% of contracted capacity for a 12-year term, citing risk of stranded distribution investment…</span></sc-if></span>.</p>
+              <p style="margin:0">The coached venues echo it more quietly. Vistra's latest 10-K cautions that <em>“anticipated data center demand may not develop on the timelines or in the amounts projected”</em><span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="3"><a href="#ask" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">3</a><sc-if value="{{ pop3 }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">VST</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">2026-02-27 · 10-K</span></span>…demand may not develop on the timelines or in the amounts projected, and queue positions may not convert to executed agreements…</span></sc-if></span> — language absent from the prior year's filing. No hyperscaler filing in the corpus makes an equivalent admission.</p>
+            </div>
+            <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#F6F5EF;overflow:hidden">
+              <button onClick="{{ toggleDrawer }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;padding:11px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6E6A5E">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style="{{ chev }}"><path d="M3 4.5l3 3 3-3" stroke="#6E6A5E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                HOW THIS WAS ANSWERED
+              </button>
+              <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:4px 16px 16px;border-top:1px solid #E7E4DA;background:#fff">
+                  <div style="display:flex;gap:26px;padding:12px 0;font-size:12.5px;flex-wrap:wrap">
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">MODE</div><strong>hybrid</strong> <span style="color:#8A8574">(lexical + semantic, RRF)</span></div>
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">RETRIEVED</div><strong style="font-variant-numeric:tabular-nums">8</strong> passages</div>
+                    <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">CITED</div><strong style="font-variant-numeric:tabular-nums">3</strong> of 8</div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">7.42</span><span style="flex:1;min-width:0">GA PSC 44280 — direct testimony, load forecast</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [1]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">7.10</span><span style="flex:1;min-width:0">PUCO 24-508 — data-center tariff settlement</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [2]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center"><span style="width:8px;height:8px;border-radius:99px;background:#0A7A43;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">6.88</span><span style="flex:1;min-width:0">VST 10-K — risk factors, demand development</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32">CITED [3]</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#8A8574"><span style="width:8px;height:8px;border-radius:99px;border:1.5px solid #DDD9CC;box-sizing:border-box;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;width:30px">6.31</span><span style="flex:1;min-width:0">CEG Q2 call — analyst Q&A on contracted load</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px">retrieved</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#8A8574"><span style="width:8px;height:8px;border-radius:99px;border:1.5px solid #DDD9CC;box-sizing:border-box;flex-shrink:0"></span><span style="font-family:'IBM Plex Mono',monospace;width:30px">5.94</span><span style="flex:1;min-width:0">Loudoun BOS 2026-08-06 — substation hearing</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px">retrieved</span></div>
+                    <div style="display:flex;gap:10px;align-items:center;color:#B5B0A1"><span style="width:8px;height:8px;flex-shrink:0"></span><span style="width:30px"></span><span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:10.5px">+ 3 more retrieved, not cited</span></div>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </section>
+        <section style="animation:fadeup .45s ease .08s both">
+          <div style="display:flex;gap:14px;align-items:baseline">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">Q·2</span>
+            <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">Did Oracle sign a power purchase agreement with Oklo in Ohio?</h2>
+          </div>
+          <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+            <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:22px 24px;max-width:560px">
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.8" stroke="#8A8574" stroke-width="1.3"></circle><path d="M5.5 8h5" stroke="#8A8574" stroke-width="1.3" stroke-linecap="round"></path></svg>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NOT IN THE RECORD</span>
+              </div>
+              <p style="font-family:Fraunces,serif;font-size:19px;font-weight:480;line-height:1.5;margin:0 0 8px;letter-spacing:-0.01em">The record doesn't cover this.</p>
+              <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0 0 16px;text-wrap:pretty">No documents in the corpus link Oracle and Oklo in Ohio — no filing, docket entry, or meeting transcript mentions both parties. Rather than guess, here's what the record can answer:</p>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <button onClick="{{ askSuggest }}" data-q="What capacity has Oklo actually contracted, versus announced?" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">What capacity has Oklo actually contracted, versus announced?</button>
+                <button onClick="{{ askSuggest }}" data-q="Which Ohio dockets involve data-center load this year?" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">Which Ohio dockets involve data-center load this year?</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        </sc-if>
+        <sc-if value="{{ askQueued }}" hint-placeholder-val="{{ false }}">
+          <section style="animation:pop .25s ease both">
+            <div style="display:flex;gap:14px;align-items:baseline">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1;flex-shrink:0">{{ askQLabel }}</span>
+              <h2 style="margin:0;font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-0.01em">{{ askQueued }}</h2>
+            </div>
+            <div style="margin-top:16px;border-left:2px solid #E7E4DA;padding-left:22px">
+              <sc-if value="{{ askLoading }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;color:#8A8574;font-size:13.5px;padding:4px 0 8px">
+                  <span style="width:7px;height:7px;border-radius:99px;background:#0A7A43;animation:pulse .9s ease-out infinite;flex-shrink:0"></span>
+                  Reading the record…
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsAnswer }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap">
+                  <span style="{{ groundingStyle }}">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5.2" stroke="{{ groundingIconColor }}" stroke-width="1.3"></circle><path d="M3.8 6.2l1.5 1.5 2.9-3" stroke="{{ groundingIconColor }}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    {{ groundingLabel }} · {{ groundingSupported }} of {{ groundingTotal }} claims checked
+                  </span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">{{ askModeLabel }} · k {{ askKLabel }}</span>
+                </div>
+                <div style="font-family:Fraunces,serif;font-size:clamp(16.5px,1.3vw,18.5px);line-height:1.72;font-weight:420;text-wrap:pretty;max-width:66ch">
+                  <p style="margin:0">
+                    <sc-for list="{{ answerSegs }}" as="sg" hint-placeholder-count="1">
+                      <sc-if value="{{ sg.isCite }}" hint-placeholder-val="{{ false }}"><span style="position:relative;display:inline-block" onMouseEnter="{{ enterCite }}" onMouseLeave="{{ leaveCite }}" data-n="{{ sg.n }}"><a href="{{ sg.link }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-style:normal;font-size:10.5px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px;margin:0 3px;vertical-align:2px">{{ sg.n }}</a><sc-if value="{{ sg.open }}" hint-placeholder-val="{{ false }}"><span style="{{ popStyle }}"><span style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px"><span style="{{ sg.popVenueStyle }}">{{ sg.popVenue }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ sg.popRef }}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">{{ sg.popDate }}</span></span>{{ sg.popSnip }}</span></sc-if></span></sc-if>
+                      <sc-if value="{{ !sg.isCite }}" hint-placeholder-val="{{ true }}">{{ sg.t }}</sc-if>
+                    </sc-for>
+                  </p>
+                </div>
+                <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#F6F5EF;overflow:hidden">
+                  <button onClick="{{ toggleDrawer }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;padding:11px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6E6A5E">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style="{{ chev }}"><path d="M3 4.5l3 3 3-3" stroke="#6E6A5E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    HOW THIS WAS ANSWERED
+                  </button>
+                  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding:4px 16px 16px;border-top:1px solid #E7E4DA;background:#fff">
+                      <div style="display:flex;gap:26px;padding:12px 0;font-size:12.5px;flex-wrap:wrap">
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">MODE</div><strong>{{ askModeLabel }}</strong></div>
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">RETRIEVED</div><strong style="font-variant-numeric:tabular-nums">{{ askRetrievedTotal }}</strong> passages</div>
+                        <div><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574;margin-bottom:3px">CITED</div><strong style="font-variant-numeric:tabular-nums">{{ askCitedCount }}</strong> of {{ askRetrievedTotal }}</div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+                        <sc-for list="{{ askRetrievedRows }}" as="rr" hint-placeholder-count="3">
+                          <div style="{{ rr.rowStyle }}"><span style="{{ rr.dotStyle }}"></span><span style="font-family:'IBM Plex Mono',monospace;color:#8A8574;width:30px">{{ rr.score }}</span><span style="flex:1;min-width:0">{{ rr.line }}</span><span style="{{ rr.citedLabelStyle }}">{{ rr.citedLabel }}</span></div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsRefusal }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:22px 24px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.8" stroke="#8A8574" stroke-width="1.3"></circle><path d="M5.5 8h5" stroke="#8A8574" stroke-width="1.3" stroke-linecap="round"></path></svg>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NOT IN THE RECORD</span>
+                  </div>
+                  <p style="font-family:Fraunces,serif;font-size:19px;font-weight:480;line-height:1.5;margin:0 0 8px;letter-spacing:-0.01em">The record doesn't cover this.</p>
+                  <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0 0 16px;text-wrap:pretty">{{ refusalReason }}</p>
+                  <sc-if value="{{ hasAskSuggestions }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:7px">
+                      <sc-for list="{{ askSuggestions }}" as="sug" hint-placeholder-count="2">
+                        <button onClick="{{ askSuggest }}" data-q="{{ sug }}" style="{{ askSugStyle }}" style-hover="{{ suggestHover }}">{{ sug }}</button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px dashed #DDD9CC;border-radius:14px;background:#F6F5EF;padding:18px 22px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#8A8574"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574">NO ANSWER TEXT</span></div>
+                  <p style="font-size:13.5px;line-height:1.6;color:#6E6A5E;margin:0;text-wrap:pretty">The record retrieved passages but the pipeline produced no answer text for this question. Try rephrasing it, or run it as a <a href="#search">Search</a> instead.</p>
+                </div>
+              </sc-if>
+              <sc-if value="{{ askIsError }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px dashed #E3B8AE;border-radius:14px;background:#F7E4DE;padding:18px 22px;max-width:560px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:7px;height:7px;border-radius:99px;background:#9C3A24"></span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#7A2E1B">NOT AVAILABLE YET</span></div>
+                  <p style="font-size:13.5px;line-height:1.6;color:#7A2E1B;margin:0;text-wrap:pretty">{{ askErr }}</p>
+                </div>
+              </sc-if>
+            </div>
+          </section>
+        </sc-if>
+      </div>
+      <aside style="{{ railStyle }}">
+        <sc-if value="{{ demoAskVisible }}" hint-placeholder-val="{{ false }}">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources · Q·1 (demo)</div>
+        <div style="{{ srcCards }}">
+          <a href="#ask" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">1</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Bartow County, GA</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…6,600 MW of pending requests, of which 2,100 MW hold executed service agreements…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">GA PSC 44280 · 2026-08-04</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">Docket ↗</span></div>
+          </a>
+          <a href="#ask" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">2</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Franklin County, OH</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…minimum demand payments of 85% of contracted capacity for a 12-year term…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">PUCO 24-508 · 2026-07-17</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">Docket ↗</span></div>
+          </a>
+          <a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+            <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">3</span><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">VST</span></div>
+            <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">…demand may not develop on the timelines or in the amounts projected…</p>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">10-K · 2026-02-27</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">EDGAR ↗</span></div>
+          </a>
+        </div>
+        </sc-if>
+        <sc-if value="{{ hasAskCitations }}" hint-placeholder-val="{{ false }}">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:12px">Sources</div>
+        <div style="{{ srcCards }}">
+          <sc-for list="{{ askCitations }}" as="c" hint-placeholder-count="3">
+            <a href="{{ c.link }}" target="_blank" rel="noopener" style="display:block;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 16px;color:#16150F" style-hover="border-color:#CFE8DA;box-shadow:0 6px 18px rgba(10,122,67,.07);color:#16150F">
+              <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:8px"><span style="font-family:'IBM Plex Mono',monospace;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 6px">{{ c.n }}</span><span style="{{ c.venueStyle }}">{{ c.venueLabel }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ c.refChip }}</span></div>
+              <p style="margin:0 0 9px;font-size:12.5px;line-height:1.55;color:#3D3B33">{{ c.snippet }}</p>
+              <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#B5B0A1">{{ c.metaLine }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0A7A43">{{ c.cta }}</span></div>
+            </a>
+          </sc-for>
+        </div>
+        <p style="font-size:11.5px;line-height:1.55;color:#8A8574;margin:14px 2px 0;text-wrap:pretty">Every claim is composed from these passages only. Hover a <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#E4F3E9;color:#075C32;border-radius:4px;padding:1px 5px">n</span> to preview; click to open the receipt.</p>
+        </sc-if>
+      </aside>
+    </main>
+    <div style="position:sticky;bottom:0;background:linear-gradient(180deg,rgba(250,250,247,0) 0,#FAFAF7 24px);padding:22px 0 18px">
+      <div style="max-width:760px;margin:0 auto">
+        <div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap">
+          <button onClick="{{ askSuggest }}" data-q="What has Loudoun County approved this year, and for whom?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">What has Loudoun approved this year?</button>
+          <button onClick="{{ askSuggest }}" data-q="Where is water usage contested in permitting?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">Where is water usage contested?</button>
+          <button onClick="{{ askSuggest }}" data-q="Which neocloud promises have slipped?" style="{{ chipStyle }}" style-hover="{{ suggestHover }}">Which neocloud promises slipped?</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #E7E4DA;border-radius:14px;box-shadow:0 2px 6px rgba(22,21,15,.04),0 12px 32px rgba(22,21,15,.06);padding:14px 18px">
+          <svg width="19" height="19" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><path d="M10 2.5c3.6 0 6.5 2.6 6.5 5.9 0 3.2-2.9 5.8-6.5 5.8-.7 0-1.4-.1-2-.3L4 16l.9-3.1c-.9-1-1.4-2.2-1.4-3.5 0-3.3 2.9-5.9 6.5-5.9Z" stroke="#0A7A43" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+          <input ref="{{ askRef }}" value="{{ askQ }}" onChange="{{ setAsk }}" onKeyDown="{{ askKey }}" style="flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:15.5px;font-weight:500;color:#16150F;font-family:Inter,sans-serif" placeholder="Ask the record a question…">
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vTickers }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 8px">
+      <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The universe.</h1>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">{{ tickerTotal }} tickers across the buildout's supply chain. Receipt counts are documents on the record; click a ticker for the price-and-receipts timeline.</p>
+    </section>
+    <sc-if value="{{ noSectors }}" hint-placeholder-val="{{ false }}">
+      <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+        <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">{{ noSectorsTitle }}</p>
+        <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0">{{ noSectorsBody }}</p>
+      </div>
+    </sc-if>
+    <sc-for list="{{ sectors }}" as="sec" hint-placeholder-count="2">
+      <section style="padding:18px 0 6px;animation:fadeup .45s ease both">
+        <div style="display:flex;align-items:baseline;gap:12px;border-bottom:1px solid #E7E4DA;padding-bottom:9px;margin-bottom:14px">
+          <h3 style="margin:0;font-family:Fraunces,serif;font-weight:560;font-size:19px;letter-spacing:-0.01em">{{ sec.name }}</h3>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8A8574;font-variant-numeric:tabular-nums">{{ sec.countLine }}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px">
+          <sc-for list="{{ sec.list }}" as="t" hint-placeholder-count="4">
+            <button onClick="{{ openTicker }}" data-sym="{{ t.sym }}" style="all:unset;cursor:pointer;box-sizing:border-box;background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:14px 15px;display:flex;flex-direction:column;gap:6px;min-height:76px" style-hover="border-color:#0A7A43;box-shadow:0 6px 18px rgba(10,122,67,.08)">
+              <span style="display:flex;justify-content:space-between;align-items:baseline;width:100%"><strong style="font-family:Fraunces,serif;font-weight:600;font-size:18px;letter-spacing:0">{{ t.sym }}</strong><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#075C32;background:#E4F3E9;border-radius:4px;padding:1px 7px;font-variant-numeric:tabular-nums">{{ t.count }}</span></span>
+              <span style="font-size:10.5px;color:#8A8574;line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ t.teaser }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+    <sc-if value="{{ detOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;inset:0;background:rgba(22,21,15,.32);z-index:50;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box" onClick="{{ closeDet }}">
+        <div style="{{ detPanel }}" onClick="{{ stopIt }}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+            <div>
+              <div style="display:flex;align-items:baseline;gap:12px"><h2 style="margin:0;font-family:Fraunces,serif;font-weight:600;font-size:32px;letter-spacing:-0.01em">{{ detSym }}</h2><span style="font-size:13px;color:#6E6A5E">{{ detName }}</span></div>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px"><span style="font-family:Fraunces,serif;font-size:26px;font-weight:560;font-variant-numeric:tabular-nums">{{ detPrice }}</span><span style="{{ detDeltaStyle }}">{{ detDelta }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">{{ detRangeLabel }}</span></div>
+            </div>
+            <button onClick="{{ closeDet }}" style="all:unset;cursor:pointer;font-size:20px;color:#8A8574;padding:4px 8px" style-hover="color:#16150F">✕</button>
+          </div>
+          <div style="margin-top:16px;border:1px solid #E7E4DA;border-radius:12px;background:#FDFDFB;padding:16px 16px 10px">
+            <svg viewBox="0 0 720 240" style="width:100%;height:auto;display:block">
+              <line x1="0" y1="60" x2="720" y2="60" stroke="#F0EEE4" stroke-width="1"></line>
+              <line x1="0" y1="120" x2="720" y2="120" stroke="#F0EEE4" stroke-width="1"></line>
+              <line x1="0" y1="180" x2="720" y2="180" stroke="#F0EEE4" stroke-width="1"></line>
+              <sc-for list="{{ detMoves }}" as="mv" hint-placeholder-count="0"><line x1="{{ mv.x }}" y1="18" x2="{{ mv.x }}" y2="228" stroke="{{ mv.color }}" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"></line></sc-for>
+              <path d="{{ detPath }}" fill="none" stroke="#16150F" stroke-width="1.6"></path>
+              <sc-for list="{{ detMarks }}" as="m" hint-placeholder-count="0"><circle cx="{{ m.x }}" cy="{{ m.y }}" r="5.5" fill="#0A7A43" stroke="#FAFAF7" stroke-width="2" style="cursor:pointer" onMouseEnter="{{ mkEnter }}" data-i="{{ m.i }}"></circle></sc-for>
+            </svg>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 2px 4px;flex-wrap:wrap;gap:8px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8A8574"><span style="color:#0A7A43">●</span> receipt on the record · <span style="color:#B8432C">┆</span> {{ detMoveLegend }}</span>
+              <span style="font-family:Fraunces,serif;font-style:italic;font-size:12.5px;color:#6E6A5E">Receipts vs. price — context, not causation.</span>
+            </div>
+          </div>
+          <sc-if value="{{ detPriceMsg }}" hint-placeholder-val="{{ false }}">
+            <p style="margin:14px 2px 0;font-size:13px;color:#8A8574;line-height:1.55">{{ detPriceMsg }}</p>
+          </sc-if>
+          <sc-if value="{{ mkOpenB }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:12px;border:1px solid #CFE8DA;border-radius:12px;background:#fff;padding:14px 16px;animation:pop .18s ease both">
+              <div style="display:flex;gap:7px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:7px;flex-wrap:wrap"><span style="{{ mkVenueStyle }}">{{ mkVenue }}</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">{{ mkRef }}</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">{{ mkDate }}</span></div>
+              <p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:#3D3B33">{{ mkSnip }}</p>
+              <a href="{{ mkLink }}" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px;display:inline-block" style-hover="background:#16150F;color:#FAFAF7">{{ mkCta }}</a>
+            </div>
+          </sc-if>
+          <sc-if value="{{ detNoRec }}" hint-placeholder-val="{{ false }}">
+            <p style="margin:14px 2px 0;font-size:13px;color:#8A8574;line-height:1.55">No receipts on this timeline yet — the corpus indexes filings and hearings as they land. Counts above are corpus-wide document totals.</p>
+          </sc-if>
+          <sc-if value="{{ hasMoves }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:14px">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8A8574;margin-bottom:8px">Significant moves</div>
+              <sc-for list="{{ detMovesList }}" as="mv" hint-placeholder-count="0">
+                <div style="display:flex;gap:12px;align-items:baseline;padding:7px 0;border-top:1px solid #F0EEE4;font-size:13px;flex-wrap:wrap"><span style="{{ mv.pctStyle }}">{{ mv.pct }}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574">{{ mv.date }}</span><span style="color:#6E6A5E">{{ mv.note }}</span></div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vScore }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 10px">
+      <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The scoreboard.</h1>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">IR metrics against pooled judgments, straight from the eval harness. This system publishes its own report card — red numbers and all.</p>
+    </section>
+    <sc-if value="{{ noMetrics }}" hint-placeholder-val="{{ false }}">
+      <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;padding:28px;max-width:560px;margin:24px auto;text-align:center;animation:fadeup .4s ease both">
+        <p style="font-family:Fraunces,serif;font-size:21px;font-weight:480;margin:0 0 6px;letter-spacing:-0.01em">{{ noMetricsTitle }}</p>
+        <p style="font-size:13.5px;color:#6E6A5E;line-height:1.6;margin:0">{{ noMetricsBody }}</p>
+      </div>
+    </sc-if>
+    <sc-if value="{{ hasMetrics }}" hint-placeholder-val="{{ true }}">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:12px 0">
+      <sc-for list="{{ tiles }}" as="t" hint-placeholder-count="4">
+        <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:20px 22px;animation:fadeup .45s ease both">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;color:#8A8574">{{ t.name }}</div>
+          <div style="{{ t.valStyle }}">{{ t.val }}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px"><span style="{{ t.deltaStyle }}">{{ t.delta }}</span><span style="font-size:11px;color:#8A8574">vs {{ t.prevV }}</span></div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="border:1px solid #E7E4DA;border-radius:14px;background:#fff;overflow:hidden;margin-top:8px">
+      <div style="display:grid;grid-template-columns:90px 110px repeat(4,1fr);gap:8px;padding:11px 20px;background:#F6F5EF;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#8A8574"><span>VERSION</span><span>DATE</span><span>P@10</span><span>R@50</span><span>MRR</span><span>NDCG@10</span></div>
+      <sc-for list="{{ metricRows }}" as="m" hint-placeholder-count="2">
+        <div style="display:grid;grid-template-columns:90px 110px repeat(4,1fr);gap:8px;padding:13px 20px;border-top:1px solid #F0EEE4;font-size:13px;font-variant-numeric:tabular-nums"><strong>{{ m.v }}</strong><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574">{{ m.date }}</span><span>{{ m.p }}</span><span>{{ m.r }}</span><span>{{ m.mrr }}</span><span>{{ m.n }}</span></div>
+      </sc-for>
+    </div>
+    </sc-if>
+    <p style="font-family:Fraunces,serif;font-style:italic;font-size:14px;color:#6E6A5E;text-align:center;padding:26px 0 10px">Measured, not vibed.</p>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ vLedger }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ padXBlock }}">
+    <section style="padding:36px 0 8px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#8A8574;background:#F0EEE4;border:1px dashed #DDD9CC;border-radius:99px;padding:5px 13px">SHIPS THIS WEEKEND</span>
+      </div>
+      <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Claims made on the record, tracked to outcomes. Every row pairs the promise with its receipt — and with what actually happened. The rows below are illustrative.</p>
+    </section>
+    <div style="padding:14px 0">
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CEG</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">8-K · 2026-02-11</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“835 megawatts at Calvert Cliffs will reach commercial operation by June 2026.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: energized 2026-06-19, confirmed in Q2 call</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#075C32;background:#E4F3E9;border-radius:99px;padding:4px 13px">DELIVERED</span></div>
+      </div>
+      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .07s both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#075C32;background:#E4F3E9;border-radius:4px;padding:2px 7px">SWORN</span><span style="border:1px solid #E7E4DA;border-radius:4px;padding:2px 7px;color:#6E6A5E">Loudoun County, VA</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Board hearing · 2025-11-18</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“The substation will be energized before the start of the school year — that is our commitment to this board.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://youtube.com/watch?v=5w_AQQ-bk30&t=2732s" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;background:#16150F;color:#FAFAF7;border-radius:99px;padding:6px 13px" style-hover="background:#0A7A43;color:#fff;animation:pulse .9s ease-out infinite">▶ 1:02:14</a><span style="font-size:12px;color:#8A8574">Outcome: energization now filed for Q1 2027</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#9C3A24;background:#F7E4DE;border-radius:99px;padding:4px 13px">SLIPPED</span></div>
+      </div>
+      <svg width="100%" height="10" preserveAspectRatio="none" viewBox="0 0 1200 10" style="display:block;margin:4px 0"><path d="M0 5 l15 -4 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8 15 -8 15 8" stroke="#DDD9CC" stroke-width="1" fill="none"></path></svg>
+      <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:22px 24px;animation:fadeup .45s ease .14s both">
+        <div style="display:flex;gap:8px;align-items:center;font-size:10.5px;font-weight:600;margin-bottom:10px;flex-wrap:wrap"><span style="color:#8A6D1F;background:#F5EEDA;border-radius:4px;padding:2px 7px">COACHED</span><span style="border:1px solid #16150F;border-radius:4px;padding:2px 7px">CRWV</span><span style="font-family:'IBM Plex Mono',monospace;font-weight:400;color:#B5B0A1">Q1 call · 2026-05-08</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#B5B0A1">ILLUSTRATIVE</span></div>
+        <p style="font-family:Fraunces,serif;font-size:clamp(16px,1.4vw,19px);font-weight:460;line-height:1.55;margin:0 0 12px;max-width:64ch">“We will have 1.2 gigawatts contracted and energized by year-end — the transformers are already sequenced.”</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><a href="https://www.sec.gov/cgi-bin/browse-edgar" target="_blank" rel="noopener" style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;border:1.5px solid #16150F;color:#16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">EDGAR ↗</a><span style="font-size:12px;color:#8A8574">Outcome: 620 MW energized as of Q2 — watching Q3</span><span style="margin-left:auto;font-size:11px;font-weight:600;color:#8A6D1F;background:#F5EEDA;border-radius:99px;padding:4px 13px">PENDING</span></div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <footer style="{{ footerStyle }}">
+    <span style="font-family:Fraunces,serif;font-style:italic;font-size:13px;color:#6E6A5E">OnRecord — every megawatt promised, permitted, and powered.</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#B5B0A1">corpus v2 · measured, not vibed</span>
+  </footer>
+
+  <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+    <nav style="position:fixed;bottom:0;left:0;right:0;z-index:40;background:#FFFFFF;border-top:1px solid #E7E4DA;display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom))">
+      <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="5">
+        <button onClick="{{ onNav }}" data-view="{{ tb.v }}" style="{{ tb.style }}"><span style="{{ tb.dot }}"></span>{{ tb.label }}</button>
+      </sc-for>
+    </nav>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:960},&quot;apiBase&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Wiring&quot;},&quot;showScores&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Search&quot;}}">
+const MARK = { background: 'linear-gradient(0deg,rgba(23,168,91,.22) 0 36%,transparent 36%)', fontWeight: 600 };
+const VENUES = {
+  sworn: { label: 'SWORN', style: { color: '#075C32', background: '#E4F3E9', borderRadius: '4px', padding: '3px 8px' } },
+  coached: { label: 'COACHED', style: { color: '#8A6D1F', background: '#F5EEDA', borderRadius: '4px', padding: '3px 8px' } },
+  candid: { label: 'CANDID', style: { color: '#9C3A24', background: '#F7E4DE', borderRadius: '4px', padding: '3px 8px' } },
+};
+// T-035 (owner directive 2026-08-13): the studio's sample corpus is GONE.
+// A receipts platform must never render fabricated receipts; when the
+// engine is unreachable the Search view now shows the truth (no results,
+// 'engine unreachable' status, retry in the header) instead of fake rows.
+// Company display names — kept as a DISPLAY FALLBACK only (T-016 wiring map
+// item 3): /api/tickers carries symbol/receipt_count/last_receipt, no name.
+const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo Inc.', CRWV: 'CoreWeave', IREN: 'IREN Ltd.', MSFT: 'Microsoft', GOOGL: 'Alphabet', AMZN: 'Amazon', DLR: 'Digital Realty', VRT: 'Vertiv', GEV: 'GE Vernova', AEP: 'American Electric Power', SO: 'Southern Company' };
+
+// ---------------------------------------------------------------------------
+// Live API wiring (T-016). Contracts pinned in tests/unit/test_api.py and
+// tests/unit/ingest/test_prices.py module docstrings.
+//   GET  /api/search?q=&mode=lexical&op=OR&k=&source=&venue=&ticker=&jurisdiction=
+//   GET  /api/tickers        -> {sectors:[{sector, tickers:[{symbol,receipt_count,last_receipt}]}]}
+//   GET  /api/prices/{sym}?range=365 -> {ticker, series:[{date,close}], significant_moves:[...]}
+//   GET  /api/metrics        -> [ {timestamp, git_sha, corpus_version, metrics:{per_query, mean}} ]
+//   POST /api/answer         <- {question, mode, k}   -> pinned shape {answer_id, text,
+//                                citations[{n,doc_id,deep_link,snippet}], retrieved[9-key+cited],
+//                                grounding{status,supported_claims,total_claims}, refusal|null}
+//                                (T-028) | 503 flat {"error": ...} when unprovisioned
+//   GET  /api/stats          -> {documents, jurisdictions, tickers, sources, corpus_version} (T-017)
+// ---------------------------------------------------------------------------
+const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, ASK_MODE = 'hybrid', PRICE_RANGE = 365, JUR_PROBE_K = 150;
+const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 120000; // SLOW: /api/answer generation measured at 12-19s live (opus-5, hybrid); 120s matches the server-side generator timeout
+const JUR_PROBE_Q = 'data center county city water power substation zoning';
+
+const SOURCE_LABELS = { county_meeting: 'county meeting', filing: 'SEC filing', docket: 'regulatory docket', earnings_call: 'earnings call' };
+// /api/tickers groups by the registry's sector SLUG; these are the design's
+// own section headings for the same ten sectors, in the design's order.
+const SECTOR_LABELS = { utilities_ipp: 'Utilities & IPPs', hyperscaler_ai: 'Hyperscalers & AI', neocloud_miner_pivot: 'Neoclouds & Miner Pivots', dc_reit_land: 'Data-center REITs & Land', builders_ec: 'Builders & E&C', power_equipment_cooling: 'Power Equipment & Cooling', gas_midstream_fuel: 'Gas, Midstream & Fuel', nuclear_smr_uranium: 'Nuclear, SMR & Uranium', grid_copper_fiber_materials: 'Grid, Copper, Fiber & Materials', servers_networking: 'Servers & Networking' };
+const SECTOR_ORDER = ['utilities_ipp', 'hyperscaler_ai', 'neocloud_miner_pivot', 'dc_reit_land', 'builders_ec', 'power_equipment_cooling', 'gas_midstream_fuel', 'nuclear_smr_uranium', 'grid_copper_fiber_materials', 'servers_networking'];
+const NEUTRAL_CHIP = { color: '#6E6A5E', background: '#F0EEE4', borderRadius: '4px', padding: '3px 8px' };
+// Grounding badge palette reuses the venue chip tokens already in the design
+// (sworn-green/coached-amber/candid-red) rather than inventing new colors.
+const GROUNDING_STYLE = {
+  grounded: { color: '#075C32', background: '#E4F3E9' },
+  partial: { color: '#8A6D1F', background: '#F5EEDA' },
+  ungrounded: { color: '#9C3A24', background: '#F7E4DE' },
+};
+
+function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function titleize(slug) { return String(slug || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()); }
+// Thousands-separated integer for the hero strip (e.g. 24115 -> "24,115").
+function fmtCount(n) { return typeof n === 'number' ? n.toLocaleString('en-US') : ''; }
+function srcLabel(s) { return SOURCE_LABELS[s] || (s ? String(s).replace(/_/g, ' ') : 'record'); }
+function venueOf(v) { return VENUES[v] || { label: v ? String(v).toUpperCase() : 'ON RECORD', style: NEUTRAL_CHIP }; }
+function hms(total) { const n = Math.max(0, Math.round(total)), h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), x = n % 60, p = (v) => String(v).padStart(2, '0'); return h ? h + ':' + p(m) + ':' + p(x) : m + ':' + p(x); }
+// Deep links carry the receipt's offset as `&t=NNNs` — the design's ▶ mm:ss.
+function tsOf(link) { const m = /[?&]t=(\d+)s?\b/.exec(String(link || '')); return m ? hms(+m[1]) : null; }
+function ctaFor(src, ts) { return src === 'county_meeting' ? (ts ? '▶ ' + ts : '▶ Watch') : src === 'filing' ? 'EDGAR ↗' : src === 'docket' ? 'Docket ↗' : 'Open ↗'; }
+function stripTags(s) { return String(s).replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&'); }
+// Jurisdictions have no endpoint of their own — accumulate the ones the live
+// results actually name, so the pill only ever offers real filter values.
+function mergeJurs(prev, results) {
+  const seen = new Set(prev || []);
+  (results || []).forEach(r => { if (r && r.jurisdiction) seen.add(r.jurisdiction); });
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+// Last series index dated on-or-before `date` (weekends/holidays have no close).
+function seriesIndexFor(series, date) {
+  let idx = 0;
+  for (let i = 0; i < series.length; i++) { if (String(series[i].date) <= String(date)) idx = i; else break; }
+  return idx;
+}
+
+// The API's `snippet` is the highlight carrier: matched terms arrive wrapped in
+// <mark>…</mark>. Parse those spans into the design's {t, style} segments.
+// DOCUMENTED FALLBACK: today's /api/search snippets carry no <mark> at all
+// (verified by curl, see ui/WIRING.md) — when a snippet has none, highlight the
+// query terms client-side so the design's highlight treatment stays visible
+// instead of silently degrading every row to flat text. Segments render as
+// React text nodes, so nothing here is ever interpreted as markup.
+function segsFromSnippet(snippet, terms) {
+  const text = String(snippet == null ? '' : snippet);
+  if (/<mark\b/i.test(text)) {
+    const out = []; const re = /<mark\b[^>]*>([\s\S]*?)<\/mark>/gi;
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ t: stripTags(text.slice(last, m.index)), style: {} });
+      out.push({ t: stripTags(m[1]), style: MARK });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ t: stripTags(text.slice(last)), style: {} });
+    const kept = out.filter((sg) => sg.t);
+    return kept.length ? kept : [{ t: stripTags(text), style: {} }];
+  }
+  const ts = (terms || []).filter(Boolean);
+  if (!ts.length) return [{ t: text, style: {} }];
+  const re = new RegExp('(' + ts.map(escRe).join('|') + ')', 'ig');
+  return text.split(re).filter(Boolean).map((part) => ({ t: part, style: ts.some((t) => part.toLowerCase() === t.toLowerCase()) ? MARK : {} }));
+}
+
+class Component extends DCLogic {
+  state = {
+    w: 1280, view: 'search', q: 'substation capacity', selIdx: 0,
+    fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', openFilter: null,
+    fMode: 'lexical', modeErr: null,
+    apiLive: false, apiDown: false,
+    hits: [], searchMs: 0, searching: true,
+    tickers: null, metrics: null, jurs: [], jurProbed: false, stats: null,
+    priceSym: null, price: null, priceState: 'idle',
+    detSym: null, mkI: null, openCite: null, drawerOpen: false, askQ: '', askQueued: null,
+    askStatus: 'idle', askResp: null, askErr: null,
+  };
+  componentDidMount() {
+    this.onResize = () => this.setState({ w: window.innerWidth });
+    this.onResize(); window.addEventListener('resize', this.onResize);
+    const applyHash = () => { const h = (location.hash || '').replace('#', ''); if (['search','ask','tickers','scoreboard','ledger'].includes(h) && h !== this.state.view) this.setState({ view: h, detSym: null }); };
+    applyHash(); this.onHash = applyHash; window.addEventListener('hashchange', this.onHash);
+    this.onKey = (e) => {
+      const typing = /INPUT|TEXTAREA/.test((e.target && e.target.tagName) || '');
+      if (e.key === 'Escape') { this.setState({ detSym: null, openFilter: null }); if (typing) e.target.blur(); return; }
+      if (typing) return;
+      if (e.key === '/') { e.preventDefault(); this.go('search'); setTimeout(() => this.searchEl && this.searchEl.focus(), 50); }
+      else if (e.key === '?') { e.preventDefault(); this.go('ask'); setTimeout(() => this.askEl && this.askEl.focus(), 50); }
+      else if (this.state.view === 'search') {
+        const n = this.currentResults().length;
+        if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ selIdx: Math.min(n - 1, s.selIdx + 1) })); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ selIdx: Math.max(0, s.selIdx - 1) })); }
+        else if (e.key === 'Enter') { const r = this.currentResults()[this.state.selIdx]; if (r) window.open(r.link, '_blank'); }
+      }
+    };
+    window.addEventListener('keydown', this.onKey);
+    this.bootstrap();
+  }
+  componentWillUnmount() { window.removeEventListener('resize', this.onResize); window.removeEventListener('hashchange', this.onHash); window.removeEventListener('keydown', this.onKey); clearTimeout(this._deb); }
+
+  // --- transport ------------------------------------------------------------
+  // Default '' == same-origin: the API serves this UI. The `apiBase` prop still
+  // overrides it (e.g. 'http://localhost:8000' when serving ui/ separately).
+  apiBase() { return String(this.props.apiBase ?? '').replace(/\/+$/, ''); }
+  fetchJson(path, opts, timeoutMs) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs || REQ_TIMEOUT_MS);
+    return fetch(this.apiBase() + path, Object.assign({ signal: ctl.signal }, opts || {}))
+      .then(r => { clearTimeout(t); return r.json().catch(() => null).then(body => ({ ok: r.ok, status: r.status, body })); })
+      .catch(() => { clearTimeout(t); return { ok: false, status: 0, body: null }; });
+  }
+  bootstrap() {
+    this.setState({ apiDown: false, jurProbed: false, jurs: [] });
+    this.loadTickers();
+    this.loadMetrics();
+    this.loadStats();
+    this.runSearch(true);
+  }
+
+  // --- /api/tickers ---------------------------------------------------------
+  // Doubles as the liveness probe: it 503s on a missing/unloadable index, the
+  // same "data endpoint" boundary /api/search sits behind.
+  loadTickers() {
+    this.fetchJson('/api/tickers').then(r => {
+      if (r.ok && r.body && Array.isArray(r.body.sectors)) this.setState({ tickers: r.body.sectors, apiLive: true, apiDown: false });
+      else this.setState({ tickers: null, apiLive: false, apiDown: true });
+    });
+  }
+
+  // --- /api/stats (T-017) ----------------------------------------------------
+  // Hero-strip live corpus numbers. Not a liveness probe (unlike /api/tickers
+  // above) -- loading or a 503/unreachable failure both just leave `stats`
+  // `null`, and the render step below falls back to the designer's own hero
+  // copy ("24,412" / "31") so the strip is never blank.
+  loadStats() {
+    this.fetchJson('/api/stats').then(r => {
+      const ok = r.ok && r.body && typeof r.body.documents === 'number' && typeof r.body.jurisdictions === 'number';
+      this.setState({ stats: ok ? r.body : null });
+    });
+  }
+
+  // --- /api/metrics ---------------------------------------------------------
+  loadMetrics() {
+    this.fetchJson('/api/metrics').then(r => {
+      this.setState({ metrics: r.ok && Array.isArray(r.body) ? r.body : null });
+    });
+  }
+
+  // --- /api/search (debounced) ---------------------------------------------
+  runSearch(immediate) {
+    clearTimeout(this._deb);
+    if (immediate) { this.doSearch(); return; }
+    // Enter the "searching" state for the debounce window too, so the empty
+    // state can never flash between a keystroke and the request it schedules.
+    this.setState({ searching: !!String(this.state.q || '').trim() });
+    this._deb = setTimeout(() => this.doSearch(), DEBOUNCE_MS);
+  }
+  doSearch() {
+    const s = this.state, q = String(s.q || '').trim();
+    const seq = (this._seq = (this._seq || 0) + 1);
+    if (!q) { this.setState({ hits: [], searchMs: 0, searching: false, modeErr: null }); return; }
+    const p = new URLSearchParams({ q, mode: s.fMode, op: 'OR', k: String(SEARCH_K) });
+    if (s.fSource !== 'All') p.set('source', s.fSource);
+    if (s.fVenue !== 'All') p.set('venue', s.fVenue);
+    if (s.fTicker !== 'All') p.set('ticker', s.fTicker);
+    if (s.fJur !== 'All') p.set('jurisdiction', s.fJur);
+    const t0 = (window.performance && performance.now()) || Date.now();
+    this.setState({ searching: true });
+    this.fetchJson('/api/search?' + p.toString()).then(r => {
+      if (seq !== this._seq) return;
+      const ms = Math.round(((window.performance && performance.now()) || Date.now()) - t0);
+      if (r.ok && r.body && Array.isArray(r.body.results)) {
+        this.setState(st => ({
+          hits: r.body.results, searchMs: ms, searching: false, selIdx: 0,
+          apiLive: true, apiDown: false, modeErr: null, jurs: mergeJurs(st.jurs, r.body.results),
+        }));
+        return;
+      }
+      // A non-lexical mode that 503s (embeddings/generator not provisioned)
+      // degrades to an honest "not provisioned" card scoped to search alone --
+      // it does NOT pull the whole app into demo-data/apiDown, since lexical
+      // search, tickers and metrics may still be fully live (T-028 wiring map
+      // item 5). A true network outage (status 0) or a lexical-mode failure
+      // (the keyless-lexical guarantee means that should always work) is the
+      // pre-existing whole-app apiDown signal instead.
+      if (s.fMode !== 'lexical' && r.status !== 0) {
+        const msg = r.body && typeof r.body.error === 'string' ? r.body.error : null;
+        this.setState({ hits: [], searchMs: ms, searching: false, modeErr: msg || (titleize(s.fMode) + ' search is not provisioned yet.') });
+        return;
+      }
+      this.setState({ hits: [], searchMs: ms, searching: false, apiLive: false, apiDown: true, modeErr: null });
+    });
+  }
+  // The jurisdiction pill has no dedicated endpoint; harvest the universe from
+  // one broad search the first time the user opens the dropdown (kept off the
+  // mount path so it never competes with the real query).
+  probeJurs() {
+    if (this.state.jurProbed) return;
+    this.setState({ jurProbed: true });
+    this.fetchJson('/api/search?q=' + encodeURIComponent(JUR_PROBE_Q) + '&op=OR&k=' + JUR_PROBE_K, null, SLOW_TIMEOUT_MS)
+      .then(r => { if (r.ok && r.body && Array.isArray(r.body.results)) this.setState(st => ({ jurs: mergeJurs(st.jurs, r.body.results) })); });
+  }
+
+  // --- /api/prices/{sym} ----------------------------------------------------
+  // The route lands with the prices ticket; until then it 404s and the panel
+  // shows its "price data isn't on the record yet" state. Same code path serves
+  // both, so nothing changes here when the route appears.
+  loadPrices(sym) {
+    const seq = (this._pseq = (this._pseq || 0) + 1);
+    this.setState({ priceSym: sym, price: null, priceState: 'loading' });
+    this.fetchJson('/api/prices/' + encodeURIComponent(sym) + '?range=' + PRICE_RANGE, null, SLOW_TIMEOUT_MS).then(r => {
+      if (seq !== this._pseq) return;
+      const body = r.body;
+      if (r.ok && body && Array.isArray(body.series) && body.series.length > 1) this.setState({ price: body, priceState: 'ready' });
+      else this.setState({ price: null, priceState: 'unavailable' });
+    });
+  }
+
+  // --- POST /api/answer (T-028) ----------------------------------------------
+  // Contract: {question, mode, k} -> the PINNED-FOR-THURSDAY shape (answer_id/
+  // text/citations/retrieved/grounding/refusal) on 200, or a flat 503
+  // {"error": ...} when embeddings/generator aren't provisioned. Ask has no
+  // per-view mode control today, so mode is always ASK_MODE ("hybrid" -- the
+  // wiring map's documented default when no mode control is present); k stays
+  // ASK_K (8). The full response body is RETAINED in state -- it used to be
+  // discarded (plan-review C-5).
+  askSend(question) {
+    const qn = String(question || '').trim();
+    if (!qn) return;
+    const seq = (this._askSeq = (this._askSeq || 0) + 1);
+    this.setState({ askQueued: qn, askQ: '', askStatus: 'loading', askResp: null, askErr: null, openCite: null, drawerOpen: false });
+    this.fetchJson('/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: qn, mode: ASK_MODE, k: ASK_K }),
+    }, SLOW_TIMEOUT_MS).then(r => {
+      if (seq !== this._askSeq) return;
+      const body = r.body;
+      const shapeOk = r.ok && body && typeof body.text === 'string'
+        && Array.isArray(body.citations) && Array.isArray(body.retrieved)
+        && body.grounding && typeof body.grounding === 'object';
+      if (shapeOk) {
+        // Whitespace-only text is treated as EMPTY (T-023 review note: a
+        // fully-dangling generation -- every [n] marker stripped as invalid --
+        // yields a lone space, not an absent string).
+        const hasText = body.text.trim().length > 0;
+        const refusal = body.refusal || null;
+        this.setState({ askStatus: refusal ? 'refusal' : hasText ? 'answer' : 'empty', askResp: body, askErr: null });
+        return;
+      }
+      // Flat {"error": ...} (503 -- embeddings/generator/index not
+      // provisioned) or a true network failure both land here; the flat
+      // shape's message names the missing condition when present.
+      const msg = body && typeof body.error === 'string' ? body.error : null;
+      this.setState({ askStatus: 'error', askResp: null, askErr: msg || 'The answering engine is not reachable right now.' });
+    });
+  }
+
+  go(v) { if (location.hash !== '#' + v) location.hash = v; this.setState({ view: v, detSym: null, openFilter: null }); }
+
+  // Rows for the results list. Live /api/search normally; the studio's sample
+  currentResults() {
+    const s = this.state;
+    if (s.apiDown) return [];
+    const terms = String(s.q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    return (s.hits || []).map(h => {
+      const ts = tsOf(h.deep_link);
+      return {
+        id: h.doc_id, date: h.date || '', source: h.source_type, venue: h.venue_type,
+        ticker: h.ticker, jur: h.jurisdiction, link: h.deep_link || '#', ts,
+        score: typeof h.score === 'number' ? h.score : 0,
+        segs: segsFromSnippet(h.snippet, terms),
+        line: [h.jurisdiction || h.ticker, srcLabel(h.source_type), h.date].filter(Boolean).join(' · '),
+      };
+    });
+  }
+  renderVals() {
+    const s = this.state;
+    const isMobile = s.w < 640, isTablet = s.w >= 640 && s.w < 1024, notMobile = !isMobile;
+    const px = isMobile ? '18px' : isTablet ? '32px' : '56px';
+    const qTrim = String(s.q || '').trim();
+    const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+    const raw = this.currentResults();
+    const results = raw.map((d, i) => {
+      const sel = i === s.selIdx;
+      const vn = venueOf(d.venue);
+      return {
+        i, key: d.id,
+        dateStr: d.date,
+        isVideo: d.source === 'county_meeting', isFiling: d.source === 'filing', isDocket: d.source === 'docket',
+        venueLabel: vn.label, venueStyle: vn.style,
+        refChip: d.ticker || d.jur || '—',
+        refStyle: d.ticker ? { border: '1px solid #16150F', borderRadius: '4px', padding: '3px 8px', fontVariantNumeric: 'tabular-nums' } : { border: '1px solid #E7E4DA', borderRadius: '4px', padding: '3px 8px', color: '#6E6A5E' },
+        meta: d.date + ' · ' + srcLabel(d.source),
+        segs: d.segs,
+        line: d.line, score: d.score ? d.score.toFixed(2) : '—',
+        link: d.link,
+        cta: ctaFor(d.source, d.ts),
+        ctaStyle: d.source === 'county_meeting'
+          ? { display: 'inline-flex', alignItems: 'center', gap: '7px', fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', background: '#16150F', color: '#FAFAF7', borderRadius: '99px', padding: '7px 14px', whiteSpace: 'nowrap', flexShrink: 0 }
+          : { display: 'inline-flex', alignItems: 'center', gap: '7px', fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', border: '1.5px solid #16150F', color: '#16150F', borderRadius: '99px', padding: '6px 14px', whiteSpace: 'nowrap', flexShrink: 0 },
+        ctaHover: d.source === 'county_meeting'
+          ? { background: '#0A7A43', color: '#FAFAF7', animation: 'pulse .9s ease-out infinite' }
+          : { borderColor: '#0A7A43', color: '#075C32', background: '#E4F3E9' },
+        rowStyle: {
+          display: notMobile ? 'grid' : 'flex', gridTemplateColumns: '96px 26px minmax(0,1fr)', flexDirection: 'column', gap: notMobile ? '18px' : '10px',
+          alignItems: 'start', padding: '18px 8px', margin: '0 -8px', borderTop: '1px solid #E7E4DA', borderRadius: '4px',
+          background: sel ? '#F4F2E9' : 'transparent', animation: 'fadeup .45s ease ' + Math.min(i * 0.06, 0.4) + 's both', cursor: 'default',
+        },
+      };
+    });
+    const filterPill = (active) => ({ all: 'unset', cursor: 'pointer', boxSizing: 'border-box', border: active ? '1px solid #0A7A43' : '1px solid #E7E4DA', borderRadius: '99px', padding: '6px 14px', background: active ? '#E4F3E9' : '#fff', color: active ? '#075C32' : '#16150F', fontSize: '12.5px', fontWeight: 500 });
+    // Lexical/Semantic/Hybrid segmented control (T-028): a real toggle now --
+    // doSearch() sends whichever mode is active, instead of every request
+    // going out hardcoded 'lexical' underneath a static "Lexical" label.
+    const modePill = (active, sep) => Object.assign({
+      all: 'unset', cursor: 'pointer', padding: '7px 15px', fontSize: '12px', fontWeight: 500,
+      background: active ? '#16150F' : 'transparent', color: active ? '#FAFAF7' : '#B5B0A1',
+    }, sep ? { borderLeft: '1px solid #F0EEE4' } : {});
+    // --- Tickers view: live /api/tickers, ordered by the design's own sector
+    // sequence (the endpoint groups by registry slug and sorts alphabetically).
+    const secRaw = Array.isArray(s.tickers) ? s.tickers : [];
+    const secRank = (slug) => { const i = SECTOR_ORDER.indexOf(slug); return i < 0 ? 999 : i; };
+    const sectors = secRaw.slice()
+      .sort((a, b) => secRank(a.sector) - secRank(b.sector) || String(a.sector).localeCompare(String(b.sector)))
+      .map(sec => {
+        const list = (sec.tickers || []).map(t => ({
+          sym: t.symbol,
+          count: t.receipt_count,
+          teaser: t.last_receipt ? 'latest receipt · ' + t.last_receipt : 'no receipts on the record yet',
+        }));
+        return { name: SECTOR_LABELS[sec.sector] || titleize(sec.sector), list, countLine: list.reduce((a, t) => a + t.count, 0) + ' receipts · ' + list.length + ' tickers' };
+      });
+    const tickerTotal = sectors.reduce((a, sec) => a + sec.list.length, 0) || 102;
+    const liveTickers = [];
+    sectors.forEach(sec => sec.list.forEach(t => { if (t.count > 0) liveTickers.push(t); }));
+    liveTickers.sort((a, b) => b.count - a.count || a.sym.localeCompare(b.sym));
+
+    // --- Detail pane: live /api/prices/{sym}. The route lands with the prices
+    // ticket; loading / 404 / empty-series all resolve to the same graceful
+    // "not on the record yet" treatment, so this works before and after.
+    let det = {};
+    if (s.detSym) {
+      const priceReady = s.priceSym === s.detSym && s.priceState === 'ready' && s.price;
+      const series = priceReady && Array.isArray(s.price.series) ? s.price.series : [];
+      const n = series.length;
+      const loading = s.priceSym !== s.detSym || s.priceState === 'loading';
+      let path = '', marks = [], moveLines = [], movesList = [];
+      let priceStr = '—', deltaStr = '', deltaStyle = { display: 'none' };
+      if (n > 1) {
+        const closes = series.map(p => +p.close);
+        const mn = Math.min(...closes), mx = Math.max(...closes), pad = (mx - mn) * 0.1 || 1;
+        const yOf = (p) => 228 - ((p - mn + pad) / (mx - mn + 2 * pad)) * 210;
+        const xOf = (i) => (i / (n - 1)) * 720;
+        path = closes.map((p, i) => (i ? 'L' : 'M') + xOf(i).toFixed(1) + ' ' + yOf(p).toFixed(1)).join(' ');
+        // Rank moves by "does the record explain this?" first, magnitude second —
+        // same visual density as the design (6 rules, 4 listed rows).
+        const moves = (Array.isArray(s.price.significant_moves) ? s.price.significant_moves : []).slice()
+          .sort((a, b) => ((b.nearby_receipts || []).length > 0) - ((a.nearby_receipts || []).length > 0) || Math.abs(b.return_pct) - Math.abs(a.return_pct));
+        moveLines = moves.slice(0, 6).map(mv => ({ x: xOf(seriesIndexFor(series, mv.date)).toFixed(1), color: mv.return_pct < 0 ? '#B8432C' : '#0A7A43' }));
+        movesList = moves.slice(0, 4).map(mv => {
+          const near = (mv.nearby_receipts || []).length;
+          return {
+            pct: (mv.return_pct > 0 ? '+' : '') + Number(mv.return_pct).toFixed(1) + '%',
+            pctStyle: { fontFamily: "'IBM Plex Mono',monospace", fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: mv.return_pct < 0 ? '#9C3A24' : '#075C32', minWidth: '52px' },
+            date: mv.date,
+            note: near ? near + ' receipt' + (near > 1 ? 's' : '') + ' in the days before' : 'no receipts nearby',
+          };
+        });
+        // Receipt markers = the nearby_receipts the moves carry, deduped by id.
+        const seenRec = {}, recs = [];
+        moves.forEach(mv => (mv.nearby_receipts || []).forEach(rc => { if (rc && rc.id && !seenRec[rc.id]) { seenRec[rc.id] = 1; recs.push(rc); } }));
+        marks = recs.map((rc, i) => { const ix = seriesIndexFor(series, rc.date); return { i, x: xOf(ix).toFixed(1), y: yOf(closes[ix]).toFixed(1), doc: rc }; });
+        priceStr = '$' + closes[n - 1].toFixed(2);
+        const delta = (closes[n - 1] - closes[0]) / closes[0] * 100;
+        deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1) + '% 1Y';
+        deltaStyle = { fontFamily: "'IBM Plex Mono',monospace", fontSize: '12.5px', fontWeight: 600, color: delta >= 0 ? '#075C32' : '#9C3A24', background: delta >= 0 ? '#E4F3E9' : '#F7E4DE', borderRadius: '99px', padding: '3px 11px' };
+      }
+      const mk = s.mkI != null && marks[s.mkI] ? marks[s.mkI].doc : null;
+      const mkTs = mk ? tsOf(mk.deep_link) : null;
+      det = {
+        detOpen: true, detSym: s.detSym, detName: NAMES[s.detSym] || 'On the record', detPath: path,
+        detPrice: priceStr, detDelta: deltaStr, detDeltaStyle: deltaStyle,
+        detRangeLabel: '1Y · daily close', detMoveLegend: 'significant daily move (±5%)',
+        detPriceMsg: n > 1 ? '' : loading
+          ? 'Fetching the price series…'
+          : "Price data isn't on the record yet — the EOD series arrives with the prices route. Receipt counts stand on their own.",
+        detMarks: marks.map(m => ({ i: m.i, x: m.x, y: m.y })),
+        detMoves: moveLines, detMovesList: movesList,
+        hasMoves: movesList.length > 0, detNoRec: n > 1 && marks.length === 0,
+        mkOpenB: !!mk,
+        // nearby_receipts carries six keys per AMENDMENT-2 (tests/unit/ingest/
+        // test_prices.py): {id, date, source_type, deep_link, venue_type,
+        // snippet}. The chip shows the real venue badge and the body quotes the
+        // receipt's 160-char snippet; the neutral source chip and the
+        // stated-fact line survive solely as pre-amendment-payload fallbacks.
+        mkVenue: mk ? (mk.venue_type ? venueOf(mk.venue_type).label : srcLabel(mk.source_type).toUpperCase()) : '',
+        mkVenueStyle: mk ? (mk.venue_type ? venueOf(mk.venue_type).style : NEUTRAL_CHIP) : {},
+        mkRef: mk ? s.detSym : '', mkDate: mk ? mk.date : '',
+        mkSnip: mk ? (mk.snippet || 'Receipt on the record inside this move’s window — open the source to read the passage in context.') : '',
+        mkLink: mk ? (mk.deep_link || '#') : '#',
+        mkCta: mk ? ctaFor(mk.source_type, mkTs) : '',
+      };
+    }
+
+    // --- Scoreboard: live /api/metrics rows (one per eval run, file order).
+    const metricRaw = Array.isArray(s.metrics) ? s.metrics : [];
+    const runs = metricRaw.map(row => {
+      const mean = (row && row.metrics && row.metrics.mean) || {};
+      const num = (k) => (typeof mean[k] === 'number' ? mean[k] : 0);
+      const cv = row && row.corpus_version, sha = row && row.git_sha ? String(row.git_sha).slice(0, 7) : '';
+      return {
+        v: cv && cv !== 'unversioned' ? String(cv) : sha || '—',
+        date: row && row.timestamp ? String(row.timestamp).slice(0, 10) : '—',
+        p: num('P@10'), r: num('R@50'), mrr: num('MRR'), n: num('NDCG@10'),
+      };
+    });
+    const cur = runs[runs.length - 1] || null, prev = runs[runs.length - 2] || null;
+    const tile = (name, k) => {
+      const v = cur[k], d = prev ? v - prev[k] : 0;
+      return { name, val: v.toFixed(2), prevV: prev ? prev.v : 'first run',
+        valStyle: { fontFamily: 'Fraunces,serif', fontWeight: 560, fontSize: 'clamp(40px,3.6vw,56px)', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', lineHeight: 1.15, color: v < 0.5 ? '#B8432C' : '#075C32', marginTop: '6px' },
+        delta: (d >= 0 ? '+' : '') + d.toFixed(2),
+        deltaStyle: { fontFamily: "'IBM Plex Mono',monospace", fontSize: '12px', fontWeight: 600, color: d >= 0 ? '#075C32' : '#9C3A24', background: d >= 0 ? '#E4F3E9' : '#F7E4DE', borderRadius: '99px', padding: '2px 10px', fontVariantNumeric: 'tabular-nums' } };
+    };
+    const navSt = (v) => s.view === v ? { color: '#16150F', borderBottom: '2px solid #0A7A43', paddingBottom: '3px' } : { color: '#6E6A5E' };
+    const tabs = [['search','Search'],['ask','Ask'],['tickers','Tickers'],['scoreboard','Score'],['ledger','Ledger']].map(([v, label]) => ({ v, label,
+      style: { all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '7px 0 5px', fontSize: '10.5px', fontWeight: 600, color: s.view === v ? '#0A7A43' : '#8A8574', letterSpacing: '.02em' },
+      dot: { width: '5px', height: '5px', borderRadius: '99px', background: s.view === v ? '#0A7A43' : 'transparent' } }));
+
+    // --- Ask answer view-model (T-028). Built entirely from the retained
+    // /api/answer response (`s.askResp`) -- the pinned shape's verbatim keys
+    // (answer_id/text/citations/retrieved/grounding/refusal). citations[] only
+    // carries {n, doc_id, deep_link, snippet}; venue/ticker/jurisdiction/date
+    // metadata for the popover + sidebar cards is joined in from retrieved[]
+    // by doc_id (retrieved always carries every cited doc_id per the pinned
+    // contract's own `cited` definition), with the same neutral-chip fallback
+    // used elsewhere (venueOf) if a join ever misses.
+    const ar = s.askResp;
+    const retrievedById = {};
+    (ar && Array.isArray(ar.retrieved) ? ar.retrieved : []).forEach(rr => { if (rr && rr.doc_id) retrievedById[rr.doc_id] = rr; });
+    const citeNByDoc = {};
+    (ar && Array.isArray(ar.citations) ? ar.citations : []).forEach(c => { citeNByDoc[c.doc_id] = c.n; });
+
+    // `text` -> segments with inline "[n]" markers turned into interactive
+    // chips. Every segment (cite or plain) renders as a React text node via
+    // {{ }} interpolation -- never innerHTML -- exactly like segsFromSnippet's
+    // search-result path (T-014R XSS note).
+    const answerSegs = [];
+    if (ar && s.askStatus === 'answer') {
+      const text = String(ar.text || '');
+      const re = /\[(\d+)\]/g;
+      let last = 0, m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) answerSegs.push({ isCite: false, t: text.slice(last, m.index) });
+        const n = m[1];
+        const cit = (ar.citations || []).find(c => String(c.n) === n);
+        if (cit) {
+          const rr = retrievedById[cit.doc_id] || null;
+          const vn = rr && rr.venue_type ? venueOf(rr.venue_type) : { label: 'ON RECORD', style: NEUTRAL_CHIP };
+          answerSegs.push({
+            isCite: true, n, link: cit.deep_link || '#',
+            open: String(s.openCite) === String(n),
+            popVenue: vn.label, popVenueStyle: vn.style,
+            popRef: rr ? (rr.ticker || rr.jurisdiction || '—') : '—',
+            popDate: rr ? rr.date : '',
+            popSnip: cit.snippet || '',
+          });
+        } else {
+          // "[n]" with no matching citations[] entry -- render as plain text
+          // rather than a dangling, non-functional chip.
+          answerSegs.push({ isCite: false, t: '[' + n + ']' });
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) answerSegs.push({ isCite: false, t: text.slice(last) });
+      if (!answerSegs.length) answerSegs.push({ isCite: false, t: text });
+    }
+
+    const groundingStatus = ar && ar.grounding ? String(ar.grounding.status || '') : '';
+    const gStyle = GROUNDING_STYLE[groundingStatus] || { color: '#6E6A5E', background: '#F0EEE4' };
+
+    // Sidebar "Sources" cards -- one per citation, real deep_link + snippet.
+    const askCitations = (ar && Array.isArray(ar.citations) ? ar.citations : []).map(c => {
+      const rr = retrievedById[c.doc_id] || null;
+      const vn = rr && rr.venue_type ? venueOf(rr.venue_type) : { label: 'ON RECORD', style: NEUTRAL_CHIP };
+      return {
+        n: c.n, snippet: c.snippet || '', link: c.deep_link || '#',
+        venueLabel: vn.label, venueStyle: vn.style,
+        refChip: rr ? (rr.ticker || rr.jurisdiction || '—') : '—',
+        metaLine: rr ? [rr.date, srcLabel(rr.source_type)].filter(Boolean).join(' · ') : '',
+        cta: rr ? ctaFor(rr.source_type, tsOf(c.deep_link)) : 'Open ↗',
+      };
+    });
+
+    // "HOW THIS WAS ANSWERED" drawer rows -- retrieved[], cited rows visually
+    // distinguished (filled green dot + "CITED [n]" vs. an outline dot +
+    // "retrieved"), same design language as the drawer's original mock.
+    const askRetrievedRows = (ar && Array.isArray(ar.retrieved) ? ar.retrieved : []).map(rr => {
+      const cited = !!rr.cited;
+      const n = citeNByDoc[rr.doc_id];
+      return {
+        key: rr.doc_id, cited,
+        score: typeof rr.score === 'number' ? rr.score.toFixed(2) : '—',
+        line: [rr.jurisdiction || rr.ticker, srcLabel(rr.source_type), rr.date].filter(Boolean).join(' · '),
+        rowStyle: Object.assign({ display: 'flex', gap: '10px', alignItems: 'center' }, cited ? {} : { color: '#8A8574' }),
+        dotStyle: cited
+          ? { width: '8px', height: '8px', borderRadius: '99px', background: '#0A7A43', flexShrink: 0 }
+          : { width: '8px', height: '8px', borderRadius: '99px', border: '1.5px solid #DDD9CC', boxSizing: 'border-box', flexShrink: 0 },
+        citedLabel: cited ? ('CITED' + (n != null ? ' [' + n + ']' : '')) : 'retrieved',
+        citedLabelStyle: cited
+          ? { fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px', color: '#075C32' }
+          : { fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px' },
+      };
+    });
+    const askCitedCount = askRetrievedRows.filter(r => r.cited).length;
+
+    const askSuggestions = ar && ar.refusal && Array.isArray(ar.refusal.suggestions) ? ar.refusal.suggestions : [];
+
+    return {
+      isMobile, notMobile,
+      padX: { padding: '0 ' + px, paddingBottom: isMobile ? '64px' : '0', flex: 1, display: 'flex', flexDirection: 'column' },
+      padXBlock: { padding: '0 ' + px, paddingBottom: isMobile ? '64px' : '0', flex: 1 },
+      headerStyle: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: (isMobile ? '14px ' : '18px ') + px, borderBottom: '1px solid #E7E4DA', flexWrap: 'wrap' },
+      footerStyle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '24px ' + px, borderTop: '1px solid #E7E4DA', marginTop: '32px', marginBottom: isMobile ? '52px' : '0' },
+      navSearch: navSt('search'), navAsk: navSt('ask'), navTickers: navSt('tickers'), navScore: navSt('scoreboard'), navLedger: navSt('ledger'),
+      onNav: (e) => this.go(e.currentTarget.dataset.view),
+      tabs,
+      engineDot: { width: '7px', height: '7px', borderRadius: '99px', background: s.apiLive && !s.apiDown ? '#0A7A43' : '#C9A93E', display: 'inline-block' },
+      engineLabel: s.apiDown ? 'engine unreachable' : s.apiLive ? 'live engine' : 'connecting…',
+      apiDown: s.apiDown, retryApi: (e) => { e.stopPropagation(); this.bootstrap(); },
+      vSearch: s.view === 'search', vAsk: s.view === 'ask', vTickers: s.view === 'tickers', vScore: s.view === 'scoreboard', vLedger: s.view === 'ledger',
+      rootClick: () => { if (s.openFilter) this.setState({ openFilter: null }); },
+      heroGrid: { display: 'grid', gridTemplateColumns: notMobile ? '1fr 280px' : '1fr', gap: '48px', alignItems: 'end', padding: (isMobile ? '30px' : '48px') + ' 0 30px' },
+      // Live /api/stats (T-017). While loading (`stats` still null on first
+      // paint) or on failure (loadStats' own fetch never sets it), keep the
+      // designer's own hero copy -- the strip must never go blank.
+      heroDocuments: s.stats ? fmtCount(s.stats.documents) : '24,412',
+      heroJurisdictions: s.stats ? fmtCount(s.stats.jurisdictions) : '31',
+      q: s.q, setQ: (e) => { this.setState({ q: e.target.value, selIdx: 0 }); this.runSearch(); },
+      qKey: (e) => { if (e.key === 'Enter') { e.target.blur(); this.runSearch(true); } },
+      searchRef: (el) => { this.searchEl = el; },
+      setMode: (e) => {
+        const m = e.currentTarget.dataset.mode;
+        if (m === s.fMode) return;
+        this.setState({ fMode: m, modeErr: null, selIdx: 0 });
+        this.runSearch(true);
+      },
+      modeLexStyle: modePill(s.fMode === 'lexical', false),
+      modeSemStyle: modePill(s.fMode === 'semantic', false),
+      modeHybStyle: modePill(s.fMode === 'hybrid', true),
+      searchNotProvisioned: !!s.modeErr, modeErr: s.modeErr || '',
+      pillSource: filterPill(s.fSource !== 'All'), pillVenue: filterPill(s.fVenue !== 'All'), pillTicker: filterPill(s.fTicker !== 'All'), pillJur: filterPill(s.fJur !== 'All'),
+      fSourceLabel: s.fSource === 'All' ? 'Source · All' : ({ county_meeting: 'County meetings', filing: 'SEC filings', docket: 'Dockets' })[s.fSource] || titleize(s.fSource),
+      fVenueLabel: s.fVenue === 'All' ? 'Venue · All' : 'Venue · ' + s.fVenue,
+      fTickerLabel: s.fTicker === 'All' ? 'Ticker · All' : s.fTicker,
+      fJurLabel: s.fJur === 'All' ? 'Jurisdiction · All' : s.fJur,
+      openSource: s.openFilter === 'source', openVenue: s.openFilter === 'venue', openTickerF: s.openFilter === 'ticker', openJur: s.openFilter === 'jur',
+      togSource: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'source' ? null : 'source' }); },
+      togVenue: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'venue' ? null : 'venue' }); },
+      togTicker: (e) => { e.stopPropagation(); this.setState({ openFilter: s.openFilter === 'ticker' ? null : 'ticker' }); },
+      togJur: (e) => { e.stopPropagation(); const open = s.openFilter !== 'jur'; this.setState({ openFilter: open ? 'jur' : null }); if (open) this.probeJurs(); },
+      sourceOpts: [{ val: 'All', label: 'All sources' }, { val: 'county_meeting', label: 'County meetings' }, { val: 'filing', label: 'SEC filings' }, { val: 'docket', label: 'Regulatory dockets' }],
+      venueOpts: [{ val: 'All', label: 'All venues' }, { val: 'sworn', label: 'Sworn' }, { val: 'coached', label: 'Coached' }, { val: 'candid', label: 'Candid' }],
+      // Ticker options come from the live universe (symbols that actually have
+      // receipts, busiest first); jurisdictions from the ones live results name.
+      tickerOpts: [{ val: 'All', label: 'All tickers' }]
+        .concat(s.apiDown ? [] : liveTickers.map(t => ({ val: t.sym, label: t.sym })))
+        .concat(s.fTicker !== 'All' && !liveTickers.some(t => t.sym === s.fTicker) ? [{ val: s.fTicker, label: s.fTicker }] : []),
+      jurOpts: [{ val: 'All', label: 'All jurisdictions' }]
+        .concat((s.apiDown ? [] : s.jurs).map(j => ({ val: j, label: j })))
+        .concat(s.fJur !== 'All' && (s.jurs || []).indexOf(s.fJur) < 0 ? [{ val: s.fJur, label: s.fJur }] : []),
+      pickSource: (e) => { e.stopPropagation(); this.setState({ fSource: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
+      pickVenue: (e) => { e.stopPropagation(); this.setState({ fVenue: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
+      pickTicker: (e) => { e.stopPropagation(); this.setState({ fTicker: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
+      pickJur: (e) => { e.stopPropagation(); this.setState({ fJur: e.currentTarget.dataset.val, openFilter: null, selIdx: 0 }); this.runSearch(true); },
+      anyFilter: s.fSource !== 'All' || s.fVenue !== 'All' || s.fTicker !== 'All' || s.fJur !== 'All',
+      clearFilters: () => { this.setState({ fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All', selIdx: 0 }); this.runSearch(true); },
+      countLine: s.searching ? 'searching…' : s.apiDown ? 'engine unreachable — retry (top right)' : raw.length + ' receipts · ' + s.searchMs + ' ms',
+      listLabel: s.apiDown ? 'Engine unreachable' : qTrim ? 'Ranked results' : 'The record awaits a query',
+      results, hasResults: results.length > 0, noResults: results.length === 0 && !s.searching,
+      emptyTitle: qTrim ? 'The record is silent on this.' : 'Start with a term.',
+      emptyBody: qTrim ? 'No indexed document matches every term. Try fewer terms, or one of these:' : 'The record answers questions, not silence. Try one of these:',
+      hoverRow: (e) => this.setState({ selIdx: +e.currentTarget.dataset.i }),
+      trySuggest: (e) => { this.setState({ q: e.currentTarget.dataset.q, selIdx: 0, fSource: 'All', fVenue: 'All', fTicker: 'All', fJur: 'All' }); this.runSearch(true); },
+      suggestStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12.5px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#FAFAF7', borderRadius: '99px', padding: '6px 14px' },
+      suggestHover: { borderColor: '#0A7A43', background: '#E4F3E9', color: '#075C32' },
+      showScores: (this.props.showScores ?? true) && notMobile,
+      askGrid: { display: 'grid', gridTemplateColumns: s.w >= 1024 ? 'minmax(0,1fr) 320px' : 'minmax(0,1fr)', gap: s.w >= 1024 ? '48px' : '30px', padding: '28px 0 10px', flex: 1, maxWidth: '1140px', margin: '0 auto', width: '100%', boxSizing: 'border-box' },
+      railStyle: s.w >= 1024 ? { position: 'sticky', top: '24px', alignSelf: 'start' } : {},
+      srcCards: s.w >= 1024 ? { display: 'flex', flexDirection: 'column', gap: '10px' } : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: '10px' },
+      popStyle: { position: 'absolute', bottom: '26px', left: isMobile ? '-120px' : '-12px', width: 'min(320px,78vw)', background: '#fff', border: '1px solid #E7E4DA', borderRadius: '12px', boxShadow: '0 10px 30px rgba(22,21,15,.12)', padding: '13px 15px', zIndex: 20, animation: 'pop .18s ease both', fontFamily: 'Inter,sans-serif', fontSize: '12.5px', fontStyle: 'normal', lineHeight: 1.55, display: 'block' },
+      pop1: s.openCite === '1', pop2: s.openCite === '2', pop3: s.openCite === '3',
+      enterCite: (e) => this.setState({ openCite: e.currentTarget.dataset.n }),
+      leaveCite: () => this.setState({ openCite: null }),
+      drawerOpen: s.drawerOpen, toggleDrawer: () => this.setState(x => ({ drawerOpen: !x.drawerOpen })),
+      chev: { transform: s.drawerOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s ease' },
+      askRef: (el) => { this.askEl = el; },
+      askQ: s.askQ, setAsk: (e) => this.setState({ askQ: e.target.value }),
+      askKey: (e) => { if (e.key === 'Enter') this.askSend(s.askQ); },
+      askQueued: s.askQueued,
+      // Both illustrative examples are demo-gated; when they're hidden the
+      // real exchange is the first one on the page, so it reads "Q·1" -- it
+      // only falls back to "Q·3" in the rare case a question was asked while
+      // apiDown (demo Q·1/Q·2 are visible at the same time as the real one).
+      askQLabel: s.apiDown ? 'Q·3' : 'Q·1',
+      askLoading: s.askStatus === 'loading',
+      askIsAnswer: s.askStatus === 'answer',
+      askIsRefusal: s.askStatus === 'refusal',
+      askIsEmpty: s.askStatus === 'empty',
+      askIsError: s.askStatus === 'error',
+      askErr: s.askErr || '',
+      answerSegs,
+      groundingLabel: groundingStatus ? titleize(groundingStatus) : '',
+      groundingStyle: { display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11.5px', fontWeight: 600, color: gStyle.color, background: gStyle.background, borderRadius: '99px', padding: '4px 12px' },
+      groundingIconColor: gStyle.color,
+      groundingSupported: ar && ar.grounding ? ar.grounding.supported_claims : 0,
+      groundingTotal: ar && ar.grounding ? ar.grounding.total_claims : 0,
+      askModeLabel: ASK_MODE, askKLabel: ASK_K,
+      refusalReason: ar && ar.refusal ? ar.refusal.reason : '',
+      askSuggestions, hasAskSuggestions: askSuggestions.length > 0,
+      askCitations, hasAskCitations: askCitations.length > 0,
+      askRetrievedRows, askCitedCount, askRetrievedTotal: askRetrievedRows.length,
+      demoAskVisible: false, // T-035: illustrative answers are permanently off -- a receipts platform renders engine truth or nothing
+      askSuggest: (e) => { this.askSend(e.currentTarget.dataset.q); },
+      askSugStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', display: 'block', border: '1px solid #E7E4DA', borderRadius: '9px', padding: '9px 13px', fontSize: '13px', color: '#16150F', background: '#FAFAF7', lineHeight: 1.4 },
+      chipStyle: { all: 'unset', cursor: 'pointer', boxSizing: 'border-box', fontSize: '12px', fontWeight: 500, color: '#16150F', border: '1px solid #E7E4DA', background: '#fff', borderRadius: '99px', padding: '6px 13px' },
+      sectors, tickerTotal,
+      noSectors: !sectors.length,
+      noSectorsTitle: s.apiDown ? 'The universe is offline.' : 'No tickers on the record yet.',
+      noSectorsBody: s.apiDown
+        ? 'The ticker universe comes from the live API, and it is not answering. Retry from the header once it is back.'
+        : 'The registry defines the universe and the index supplies the receipts — neither has landed yet.',
+      openTicker: (e) => { const sym = e.currentTarget.dataset.sym; this.setState({ detSym: sym, mkI: null }); this.loadPrices(sym); },
+      closeDet: () => this.setState({ detSym: null, mkI: null }),
+      stopIt: (e) => e.stopPropagation(),
+      mkEnter: (e) => this.setState({ mkI: +e.currentTarget.dataset.i }),
+      detPanel: { background: '#FAFAF7', border: '1px solid #E7E4DA', borderRadius: isMobile ? '16px' : '18px', boxShadow: '0 24px 80px rgba(22,21,15,.25)', padding: isMobile ? '18px' : '26px 30px', width: 'min(880px,100%)', maxHeight: '92vh', overflowY: 'auto', boxSizing: 'border-box', animation: 'pop .22s ease both' },
+      detOpen: false, mkOpenB: false, hasMoves: false, detNoRec: false, detMarks: [], detMoves: [], detMovesList: [], detPath: '', detSym: '', detName: '', detPrice: '', detDelta: '', detDeltaStyle: {}, detRangeLabel: '1Y · daily close', detMoveLegend: 'significant daily move (±5%)', detPriceMsg: '', mkVenue: '', mkVenueStyle: {}, mkRef: '', mkDate: '', mkSnip: '', mkLink: '#', mkCta: '',
+      ...det,
+      hasMetrics: runs.length > 0, noMetrics: runs.length === 0,
+      noMetricsTitle: s.metrics === null ? 'The scoreboard is out of reach.' : 'No eval runs yet.',
+      noMetricsBody: s.metrics === null
+        ? 'These numbers come from the live API, and it is not answering. Retry from the header once it is back.'
+        : 'The red harness is pending labels. `make eval` writes every run to artifacts/scoreboard.jsonl and this board fills itself in — nothing here is ever hand-typed.',
+      tiles: cur ? [tile('P@10', 'p'), tile('R@50', 'r'), tile('MRR', 'mrr'), tile('NDCG@10', 'n')] : [],
+      metricRows: runs.slice().reverse().map(m => ({ v: m.v, date: m.date, p: m.p.toFixed(2), r: m.r.toFixed(2), mrr: m.mrr.toFixed(2), n: m.n.toFixed(2) })),
+    };
+  }
+}
+</script>
+<script>
+// Chart hover crosshair (2026-08-14, owner request): shows the close price
+// and date under the cursor on the ticker detail chart. Deliberately OUTSIDE
+// the template engine: it caches series off the fetch layer and paints
+// directly into the SVG, so there is no per-mousemove re-render and zero
+// hydration risk.
+(function () {
+  var PRICES = {};
+  var CUR = null;
+  var origFetch = window.fetch;
+  window.fetch = function (input) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    var m = url.match(/\/api\/prices\/([^?]+)/);
+    var p = origFetch.apply(this, arguments);
+    if (m) {
+      var sym = decodeURIComponent(m[1]);
+      p = p.then(function (resp) {
+        try {
+          resp.clone().json().then(function (b) {
+            if (b && Array.isArray(b.series)) { PRICES[sym] = b.series; CUR = sym; }
+          }).catch(function () {});
+        } catch (e) {}
+        return resp;
+      });
+    }
+    return p;
+  };
+
+  var NS = 'http://www.w3.org/2000/svg';
+  function layerFor(svg) {
+    var g = svg.querySelector('g[data-hover-layer]');
+    if (g) return g;
+    g = document.createElementNS(NS, 'g');
+    g.setAttribute('data-hover-layer', '1');
+    g.setAttribute('pointer-events', 'none');
+    var line = document.createElementNS(NS, 'line');
+    line.setAttribute('y1', '18'); line.setAttribute('y2', '228');
+    line.setAttribute('stroke', '#16150F'); line.setAttribute('stroke-width', '1');
+    line.setAttribute('opacity', '0.35');
+    var dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('r', '4'); dot.setAttribute('fill', '#16150F');
+    dot.setAttribute('stroke', '#FAFAF7'); dot.setAttribute('stroke-width', '1.5');
+    var label = document.createElementNS(NS, 'text');
+    label.setAttribute('y', '34');
+    label.setAttribute('style', "font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;fill:#16150F");
+    var sub = document.createElementNS(NS, 'text');
+    sub.setAttribute('y', '50');
+    sub.setAttribute('style', "font-family:'IBM Plex Mono',monospace;font-size:11px;fill:#8A8574");
+    g.appendChild(line); g.appendChild(dot); g.appendChild(label); g.appendChild(sub);
+    svg.appendChild(g);
+    return g;
+  }
+  function hide(svg) {
+    var g = svg && svg.querySelector('g[data-hover-layer]');
+    if (g) g.setAttribute('visibility', 'hidden');
+  }
+
+  document.addEventListener('mousemove', function (ev) {
+    var svg = ev.target && ev.target.closest ? ev.target.closest('svg[viewBox="0 0 720 240"]') : null;
+    var open = document.querySelector('svg[viewBox="0 0 720 240"]');
+    if (!svg) { hide(open); return; }
+    var series = PRICES[CUR];
+    if (!series || series.length < 2) return;
+    var rect = svg.getBoundingClientRect();
+    if (!rect.width) return;
+    var frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+    var n = series.length;
+    var i = Math.round(frac * (n - 1));
+    var closes = [];
+    for (var k = 0; k < n; k++) closes.push(+series[k].close);
+    var mn = Math.min.apply(null, closes), mx = Math.max.apply(null, closes);
+    var pad = (mx - mn) * 0.1 || 1;
+    var x = (i / (n - 1)) * 720;
+    var y = 228 - ((closes[i] - mn + pad) / (mx - mn + 2 * pad)) * 210;
+    var g = layerFor(svg);
+    g.setAttribute('visibility', 'visible');
+    var kids = g.childNodes;
+    kids[0].setAttribute('x1', x.toFixed(1)); kids[0].setAttribute('x2', x.toFixed(1));
+    kids[1].setAttribute('cx', x.toFixed(1)); kids[1].setAttribute('cy', y.toFixed(1));
+    var onRight = x > 500;
+    for (var t2 = 2; t2 < 4; t2++) {
+      kids[t2].setAttribute('x', (onRight ? x - 10 : x + 10).toFixed(1));
+      kids[t2].setAttribute('text-anchor', onRight ? 'end' : 'start');
+    }
+    kids[2].textContent = '$' + closes[i].toFixed(2);
+    kids[3].textContent = series[i].date;
+  });
+})();
+</script>
+</body>
+</html>
