@@ -1237,7 +1237,8 @@ def promises_endpoint(  # NOT `async` -- serves startup-loaded rows
     rows = sorted(rows, key=lambda r: str(r.get("date") or ""), reverse=True)
     categories: dict[str, int] = {}
     for row in rows:
-        categories[row.get("category", "other")] = categories.get(row.get("category", "other"), 0) + 1
+        cat = row.get("category", "other")
+        categories[cat] = categories.get(cat, 0) + 1
     return {"rows": rows[:k], "total": len(rows), "categories": dict(sorted(categories.items()))}
 
 
