@@ -204,9 +204,11 @@ from pydantic import BaseModel, Field
 from onrecord import registry
 from onrecord.analysis import conduct as conduct_mod
 from onrecord.analysis import dodge as dodge_mod
+from onrecord.analysis import mentions as mentions_mod
 from onrecord.index.inverted import InvertedIndex
 from onrecord.ingest.build_corpus import load_corpus_snapshot, read_manifest
 from onrecord.ingest.prices import api_payload
+from onrecord.ingest.prices import fetch_eod as prices_fetch_eod
 from onrecord.rag import answer as answer_mod
 from onrecord.rag import embeddings, retrieve
 from onrecord.rag.chunking import Chunk, chunk_corpus
@@ -546,6 +548,36 @@ def _boot(app: FastAPI) -> None:
         )
     except Exception:
         app.state.promises = []
+
+    # T-033: mention-anchored performance cache. Env-gated
+    # (ONRECORD_MENTIONS_BOOT) because building it fetches live price
+    # series; the frozen suite stays zero-network with it unset. Prod sets
+    # it and pays the cost inside the async boot thread.
+    app.state.mentions_cache = None
+    if os.environ.get("ONRECORD_MENTIONS_BOOT", "").strip() in ("1", "true", "yes"):
+        try:
+            idx = app.state.index
+            if idx is not None:
+                since = (datetime.now(UTC).date() - timedelta(days=365)).isoformat()
+                docs = [idx.get_doc(i) for i in range(idx.doc_count())]
+                mention_docs = [d for d in docs if d.ticker and d.date and d.date >= since]
+                tickers = sorted({d.ticker for d in mention_docs})
+                cache_dir = os.environ.get("ONRECORD_PRICES_CACHE") or None
+                series_by_ticker = {}
+                for tk in tickers:
+                    series = prices_fetch_eod(tk, range_days=400, cache_dir=cache_dir) \
+                        if cache_dir else prices_fetch_eod(tk, range_days=400)
+                    if len(series) > 1:
+                        series_by_ticker[tk] = series
+                app.state.mentions_cache = mentions_mod.mention_rows(
+                    mention_docs, series_by_ticker, since=since,
+                    now_date=datetime.now(UTC).date().isoformat(),
+                )
+                logger.info("mentions cache: %d rows over %d tickers",
+                            len(app.state.mentions_cache), len(series_by_ticker))
+        except Exception:
+            logger.exception("mentions cache build failed; endpoint degrades to 503")
+            app.state.mentions_cache = None
 
     dodge_floor_raw = os.environ.get("ONRECORD_DODGE_MIN_DOCS", "").strip()
     app.state.dodge_min_docs = int(dodge_floor_raw) if dodge_floor_raw.isdigit() else 200
@@ -1259,6 +1291,27 @@ def answer(request: AnswerRequest, http_request: Request):  # NOT `async` -- see
 # --------------------------------------------------------------------------
 # GET /api/tickers
 # --------------------------------------------------------------------------
+
+
+@app.get("/api/mentions")
+def mentions_endpoint(  # NOT `async` -- serves the startup-computed cache
+    window: int = Query(default=90, ge=1, le=365),
+    k: int = Query(default=25, ge=1, le=200),
+):
+    """T-033: the record's calls. Mentions (ticker-attributed docs) with
+    entry price anchored to the mention date's close, ranked by return
+    since. Daily-close grain; `co_mentions` counts the trailing-365d set."""
+    rows = getattr(app.state, "mentions_cache", None)
+    if rows is None:
+        return _flat_error(
+            503,
+            "mention performance is not computed -- set ONRECORD_MENTIONS_BOOT=1 "
+            "(build happens at startup from the price cache)",
+        )
+    cutoff = (datetime.now(UTC).date() - timedelta(days=window)).isoformat()
+    windowed = [r for r in rows if r["date"] >= cutoff]
+    return {"rows": windowed[:k], "total": len(windowed), "window_days": window,
+            "grain": "daily-close"}
 
 
 @app.get("/api/promises")

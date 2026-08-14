@@ -3122,3 +3122,73 @@ def test_a_400_names_the_batch_index_and_first_chunk_id_through_embed_corpus(tmp
         f"bisecting 289K chunks, which is the failure this ticket exists to fix. "
         f"Got {message!r}"
     )
+
+
+# ==========================================================================
+# AMENDMENT — T-031 (2026-08-14): token-aware request packing + Retry-After.
+# Operational history: 512-count batches tripped OpenAI's ~300K-token
+# aggregate request cap (embed run 2), and 429s were retried on blind
+# exponential backoff against a tier-limited key (run 3). Packing bounds
+# each request by BOTH the 512-count cap AND an estimated token budget
+# (chars/4); the 429 branch honors a Retry-After header when present.
+# Additive: small fixtures never hit the budget, so every frozen test
+# above sees identical request shapes.
+# ==========================================================================
+
+
+def test_embed_packs_requests_under_the_token_budget(monkeypatch):
+    from onrecord.rag import embeddings as emb
+
+    seen_batches = []
+
+    def handler(request):
+        import json as _json
+        batch = _json.loads(request.content)["input"]
+        seen_batches.append(batch)
+        data = [{"index": i, "embedding": [0.0] * 1536} for i in range(len(batch))]
+        return httpx.Response(200, json={"data": data})
+
+    provider = emb.OpenAIEmbeddingProvider.__new__(emb.OpenAIEmbeddingProvider)
+    provider.model = "text-embedding-3-small"
+    provider.dim = 1536
+    provider.batch_size = emb._OPENAI_BATCH_SIZE
+    provider._api_key = "test-key"
+    provider._transport = httpx.MockTransport(handler)
+
+    # 40 texts of ~40K estimated tokens each (160K chars): budget 250K
+    # tokens -> at most 6 per request, far below the 512 count cap.
+    texts = ["x" * 160_000 for _ in range(40)]
+    out = provider.embed(texts)
+
+    assert out.shape == (40, 1536)
+    assert len(seen_batches) > 1, "the token budget must split what count alone would not"
+    per_text = 160_000 / 4
+    for batch in seen_batches:
+        assert len(batch) * per_text <= emb._OPENAI_REQUEST_TOKEN_BUDGET or len(batch) == 1
+
+
+def test_embed_429_honors_retry_after(monkeypatch):
+    from onrecord.rag import embeddings as emb
+
+    calls = {"n": 0}
+    sleeps = []
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "7"}, json={})
+        data = [{"index": 0, "embedding": [0.0] * 1536}]
+        return httpx.Response(200, json={"data": data})
+
+    monkeypatch.setattr(emb.time, "sleep", lambda s: sleeps.append(s))
+
+    provider = emb.OpenAIEmbeddingProvider.__new__(emb.OpenAIEmbeddingProvider)
+    provider.model = "text-embedding-3-small"
+    provider.dim = 1536
+    provider.batch_size = emb._OPENAI_BATCH_SIZE
+    provider._api_key = "test-key"
+    provider._transport = httpx.MockTransport(handler)
+
+    out = provider.embed(["hello"])
+    assert out.shape == (1, 1536)
+    assert sleeps and sleeps[0] == 7.0, f"Retry-After: 7 must drive the delay, got {sleeps}"
