@@ -71,9 +71,12 @@ numbers reordered the leaderboard (below).
   NDCG@10 **0.4614 → 0.5505 (+19.3%)**, hybrid **0.4245 → 0.4708
   (+10.9%)**, semantic R@50 0.574 → 0.752. The old-pool reading of
   3-large was 0.330 — Finding 2's mechanism, a +0.22 swing from judging
-  the model's own arm. Consequence: the deployed 3-small config's best
-  mode is 0.4614 on the honest pool, so the deployed-scope gate reads
-  red until the owner-gated 3-large swap (corpus-v3 lane) deploys.
+  the model's own arm. **Deployed 2026-08-14 (T-055, owner go)**: prod now
+  serves the 3-large store; its rows were promoted to the deployed history
+  and the deployed-scope gate reads **PASS at 0.5505**. Measured prod
+  latency after the swap: semantic ~5.5s, hybrid ~6.0–6.5s (up from
+  ~3–4s — the 2× wider matrix; within the 8s UI budget; Matryoshka
+  truncation to 1536 is the documented latency lever if ever needed).
   Full table: `tickets/T-054.md`; histories:
   `evalsets/modes-scoreboard{,-3large}.jsonl`.
 
