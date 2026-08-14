@@ -1293,3 +1293,69 @@ def test_dodge_endpoint_startup_computed_rows(tmp_path, monkeypatch):
     assert isinstance(body["markers"], list) and "no comment" in body["markers"]
     for row in body["rows"]:
         assert set(row) == {"jurisdiction", "docs", "markers", "per_1000", "sample_receipts"}
+
+
+# ==========================================================================
+# AMENDMENT — T-040 Promise Ledger endpoint (2026-08-14): GET /api/promises
+# serves the extraction artifact (env seam ONRECORD_PROMISES), date-desc,
+# filterable by jurisdiction/ticker/category, with category counts. Absent
+# artifact -> flat 503 naming the condition.
+# ==========================================================================
+
+
+def _promises_fixture(tmp_path):
+    import json as _json
+    rows = [
+        {"promise_id": "d1#p1", "doc_id": "d1", "deep_link": "https://youtube.com/watch?v=a&t=10s",
+         "date": "2026-01-05", "jurisdiction": "Alpha County, VA", "ticker": None,
+         "source_type": "county_meeting", "venue_type": "sworn",
+         "quote": "we will create 300 jobs by 2027", "category": "jobs",
+         "quantified": True, "value_text": "300 jobs"},
+        {"promise_id": "d2#p1", "doc_id": "d2", "deep_link": "https://sec.gov/x",
+         "date": "2026-03-01", "jurisdiction": None, "ticker": "VST",
+         "source_type": "filing", "venue_type": "sworn",
+         "quote": "committed to invest $2 billion", "category": "investment",
+         "quantified": True, "value_text": "$2 billion"},
+    ]
+    path = tmp_path / "promises.jsonl"
+    path.write_text("\n".join(_json.dumps(r) for r in rows) + "\n")
+    return path
+
+
+def test_promises_endpoint_serves_date_desc_with_counts(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/promises")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert [r["promise_id"] for r in body["rows"]] == ["d2#p1", "d1#p1"]  # date desc
+    assert body["categories"] == {"investment": 1, "jobs": 1}
+
+
+def test_promises_endpoint_filters(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(_promises_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        by_cat = client.get("/api/promises", params={"category": "jobs"}).json()
+        by_jur = client.get("/api/promises", params={"jurisdiction": "Alpha County, VA"}).json()
+        by_ticker = client.get("/api/promises", params={"ticker": "VST"}).json()
+        capped = client.get("/api/promises", params={"k": 1}).json()
+    assert by_cat["total"] == 1 and by_cat["rows"][0]["category"] == "jobs"
+    assert by_jur["total"] == 1 and by_jur["rows"][0]["jurisdiction"] == "Alpha County, VA"
+    assert by_ticker["total"] == 1 and by_ticker["rows"][0]["ticker"] == "VST"
+    assert capped["total"] == 2 and len(capped["rows"]) == 1
+
+
+def test_promises_endpoint_503_when_absent(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_PROMISES", str(tmp_path / "missing.jsonl"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/promises")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert set(body) == {"error"} and "promise" in body["error"].lower()

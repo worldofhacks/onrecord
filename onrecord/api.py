@@ -535,6 +535,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     except Exception:
         app.state.form4_rows = []
+    # T-040: the Promise Ledger artifact (env seam ONRECORD_PROMISES).
+    # Best-effort at startup; absent/unreadable -> empty list -> the
+    # endpoint's flat 503.
+    try:
+        promises_path = Path(os.environ.get("ONRECORD_PROMISES", "evalsets/promises.jsonl"))
+        app.state.promises = (
+            [json.loads(line) for line in promises_path.open(encoding="utf-8") if line.strip()]
+            if promises_path.exists()
+            else []
+        )
+    except Exception:
+        app.state.promises = []
+
     dodge_floor_raw = os.environ.get("ONRECORD_DODGE_MIN_DOCS", "").strip()
     app.state.dodge_min_docs = int(dodge_floor_raw) if dodge_floor_raw.isdigit() else 200
     try:
@@ -1196,6 +1209,37 @@ def answer(request: AnswerRequest, http_request: Request):  # NOT `async` -- see
 # --------------------------------------------------------------------------
 # GET /api/tickers
 # --------------------------------------------------------------------------
+
+
+@app.get("/api/promises")
+def promises_endpoint(  # NOT `async` -- serves startup-loaded rows
+    jurisdiction: str | None = None,
+    ticker: str | None = None,
+    category: str | None = None,
+    k: int = Query(default=50, ge=1, le=500),
+):
+    """T-040: the Promise Ledger. Verbatim-pinned extracted commitments,
+    date descending, filterable. `total`/`categories` describe the FILTERED
+    set before the `k` truncation."""
+    rows = getattr(app.state, "promises", [])
+    if not rows:
+        return _flat_error(
+            503,
+            "the promise ledger is not extracted -- run the T-040 extraction "
+            "to produce evalsets/promises.jsonl",
+        )
+    if jurisdiction is not None:
+        rows = [r for r in rows if r.get("jurisdiction") == jurisdiction]
+    if ticker is not None:
+        rows = [r for r in rows if r.get("ticker") == ticker]
+    if category is not None:
+        rows = [r for r in rows if r.get("category") == category]
+    rows = sorted(rows, key=lambda r: str(r.get("date") or ""), reverse=True)
+    categories: dict[str, int] = {}
+    for row in rows:
+        cat = row.get("category", "other")
+        categories[cat] = categories.get(cat, 0) + 1
+    return {"rows": rows[:k], "total": len(rows), "categories": dict(sorted(categories.items()))}
 
 
 @app.get("/api/conduct/{ticker}")

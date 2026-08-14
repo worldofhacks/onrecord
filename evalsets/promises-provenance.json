@@ -1,0 +1,11 @@
+{
+  "model": "claude-opus-5",
+  "date": "2026-08-14",
+  "docs_scanned": 289536,
+  "candidates": 954,
+  "promises": 1527,
+  "dropped_nonverbatim": 14,
+  "tokens_in": 758276,
+  "tokens_out": 298404,
+  "verbatim_pin": "quote must be an exact substring of doc.text; violations dropped, never repaired"
+}
