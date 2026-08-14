@@ -19,7 +19,8 @@ in the project, the measured replacement and the delta are both shown.*
 | 1 (hand) | 5 | 65 | owner | criterion-first, blind pooled |
 | 2 | +10 (=15) | +190 | gpt-5.2 (owner-directed) | q1–q5 re-pooled against v2 |
 | 3 | +85 (=100) | +1,105 | gpt-5.6-sol (owner-directed) | zero parse failures; session pack committed pre-pooling |
-| 4 (repair) | =100 | +886 (=**2,246**) | gpt-5.6-sol | the semantic pooling arm (below) |
+| 4 (repair) | =100 | +886 (=2,246) | gpt-5.6-sol | the semantic pooling arm (below) |
+| 5 (T-054) | =100 | +1,390 (=**3,636**) | gpt-5.6-sol | the 3-large arm; zero parse failures |
 
 Provenance: `evalsets/judgment-session-{2,3}-provenance.json`,
 `judgment-session-4-provenance.json`. Grade distribution: 519×2, 413×1,
@@ -63,6 +64,18 @@ numbers reordered the leaderboard (below).
   semantic clears it — the gate was calibrated against the BM25-biased
   pool; its re-scope is an open owner decision (T-047), deliberately not
   made silently.
+- **Embedding upgrade eval (T-054, 2026-08-14)**: `text-embedding-3-large`
+  @ 3072 re-embed ($≈9.50) scored against a fifth pooling arm (its own
+  semantic top-20, 1,390 novel pairs labeled by gpt-5.6-sol, zero
+  failures; pool 2,246 → 3,636 rows). Same-pool comparison: semantic
+  NDCG@10 **0.4614 → 0.5505 (+19.3%)**, hybrid **0.4245 → 0.4708
+  (+10.9%)**, semantic R@50 0.574 → 0.752. The old-pool reading of
+  3-large was 0.330 — Finding 2's mechanism, a +0.22 swing from judging
+  the model's own arm. Consequence: the deployed 3-small config's best
+  mode is 0.4614 on the honest pool, so the deployed-scope gate reads
+  red until the owner-gated 3-large swap (corpus-v3 lane) deploys.
+  Full table: `tickets/T-054.md`; histories:
+  `evalsets/modes-scoreboard{,-3large}.jsonl`.
 
 ## 4. Grounding and the judge
 
