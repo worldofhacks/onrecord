@@ -854,3 +854,37 @@ def test_health_stays_responsive_while_slow_prices_request_is_in_flight(
         f"the prices handler is blocking the event loop instead of running in the "
         f"threadpool (T-032). A responsive loop answers /health in milliseconds."
     )
+
+
+# ==========================================================================
+# AMENDMENT — T-048 (2026-08-14): env-gated async boot. Default is the
+# synchronous pre-T-048 behavior (every test above unchanged); with
+# ONRECORD_ASYNC_BOOT truthy the port serves immediately while `_boot`
+# runs in a daemon thread — /health answers during warm-up and data
+# endpoints recover once boot lands.
+# ==========================================================================
+
+
+def test_async_boot_serves_health_immediately_and_recovers(tmp_path, monkeypatch):
+    import time as _time
+
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, SEARCH_DOCS)
+    monkeypatch.setenv("ONRECORD_ASYNC_BOOT", "1")
+    with _client(api_module, monkeypatch, index_dir=index_dir) as client:
+        assert client.get("/health").status_code == 200  # immediately, mid-boot
+        deadline = _time.monotonic() + 10
+        while _time.monotonic() < deadline:
+            if client.get("/api/search", params={"q": "substation"}).status_code == 200:
+                break
+            _time.sleep(0.1)
+        assert client.get("/api/search", params={"q": "substation"}).status_code == 200
+
+
+def test_sync_boot_remains_the_default(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, SEARCH_DOCS)
+    monkeypatch.delenv("ONRECORD_ASYNC_BOOT", raising=False)
+    with _client(api_module, monkeypatch, index_dir=index_dir) as client:
+        # No polling needed: the sync path is ready the moment the context opens.
+        assert client.get("/api/search", params={"q": "substation"}).status_code == 200
