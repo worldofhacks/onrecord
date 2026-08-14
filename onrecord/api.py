@@ -187,12 +187,15 @@ import mimetypes
 import os
 import re
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from datetime import time as dt_time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -469,6 +472,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # `/api/prices` always has a default corpus path, per the ticket.
     app.state.corpus_path = os.environ.get("ONRECORD_CORPUS", DEFAULT_CORPUS_PATH)
     app.state.prices_cache_dir = os.environ.get("ONRECORD_PRICES_CACHE", DEFAULT_PRICES_CACHE_DIR)
+
+    # Answer rate limiting (2026-08-13, gap-analysis B-4). Env-gated and OFF
+    # by default: with neither cap set, `_answer_rate_limited` returns None
+    # unconditionally and no state is ever touched. Caps are read at startup
+    # (per-test env swapping via TestClient re-entry, same seam convention
+    # as every other env read in this function); counters live here so each
+    # ASGI startup begins at zero.
+    def _cap(name: str) -> int | None:
+        raw = os.environ.get(name, "").strip()
+        return int(raw) if raw.isdigit() and int(raw) > 0 else None
+
+    app.state.answer_rate = {
+        "lock": threading.Lock(),
+        "daily_cap": _cap("ONRECORD_ANSWER_DAILY_CAP"),
+        "ip_hourly_cap": _cap("ONRECORD_ANSWER_IP_HOURLY_CAP"),
+        "day": None,
+        "day_count": 0,
+        "ip_hits": {},
+    }
 
     try:
         app.state.index = InvertedIndex.load(index_dir)
@@ -1033,8 +1055,63 @@ def _retrieve_for_answer(
     return chunks, scores
 
 
+def _answer_rate_limited(http_request: Request) -> JSONResponse | None:
+    """Return a flat 429 (with Retry-After) when a configured cap is
+    exhausted, else record the hit and return None. Runs BEFORE the
+    availability ladder: a rate-limited caller gets 429 even where an
+    unkeyed deploy would 503 — the limiter protects the box and the owner's
+    provider budget, not just successful generations. No caps configured
+    (the default, and every keyless/test context) -> pure no-op."""
+    state = getattr(app.state, "answer_rate", None)
+    if state is None or (state["daily_cap"] is None and state["ip_hourly_cap"] is None):
+        return None
+
+    now = time.time()
+    today = datetime.now(UTC).date()
+    forwarded = http_request.headers.get("x-forwarded-for", "")
+    client_ip = (
+        forwarded.split(",")[0].strip()
+        if forwarded.strip()
+        else (http_request.client.host if http_request.client else "unknown")
+    )
+
+    with state["lock"]:
+        if state["day"] != today:
+            state["day"] = today
+            state["day_count"] = 0
+
+        if state["daily_cap"] is not None and state["day_count"] >= state["daily_cap"]:
+            midnight = datetime.combine(
+                today + timedelta(days=1), dt_time.min, tzinfo=UTC
+            )
+            retry_after = max(1, int((midnight - datetime.now(UTC)).total_seconds()))
+            response = _flat_error(
+                429, "rate limited: the daily answer budget is spent; resets at midnight UTC"
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+
+        hits = state["ip_hits"].setdefault(client_ip, [])
+        hits[:] = [t for t in hits if now - t < 3600.0]
+        if state["ip_hourly_cap"] is not None and len(hits) >= state["ip_hourly_cap"]:
+            retry_after = max(1, int(3600.0 - (now - hits[0])))
+            response = _flat_error(
+                429, "rate limited: hourly per-client answer budget reached; slow down"
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+
+        state["day_count"] += 1
+        hits.append(now)
+    return None
+
+
 @app.post("/api/answer")
-def answer(request: AnswerRequest):  # NOT `async` -- see the module docstring
+def answer(request: AnswerRequest, http_request: Request):  # NOT `async` -- see module docstring
+    limited = _answer_rate_limited(http_request)
+    if limited is not None:
+        return limited
+
     index = _require_index()
     if index is None:
         # Index BEFORE everything else (cheapest check, and the honest one):

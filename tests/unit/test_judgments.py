@@ -907,3 +907,64 @@ def test_cli_criterion_captured_before_any_candidate_text_displayed(tmp_path, mo
     assert criterion_idx < min(candidate_positions), (
         "the criterion prompt must be written to stdout before any candidate text"
     )
+
+
+# ==========================================================================
+# AMENDMENT — pooling-bias repair (2026-08-13, owner-directed): the pool had
+# grep + bm25 + random arms but NO semantic arm, so semantic retrieval's
+# unique finds were never judged and scored as non-relevant (semantic
+# NDCG@10 read 0.135 on the 100-query set — structurally unfair). Additive
+# only: `semantic_fn=None` (every call above) is pinned bit-identical to
+# the frozen T-009 algorithm; the new kwarg injects doc ids from a caller-
+# supplied retriever with zero embedding dependencies in this module.
+# ==========================================================================
+
+
+def test_pool_candidates_semantic_none_is_bit_identical_to_frozen_path(pooling_corpus_path):
+    pooling_mod = _import_pooling_module()
+    baseline = pooling_mod.pool_candidates(_QUERY, str(pooling_corpus_path), _K_SMALL, _SEED_A)
+    with_none = pooling_mod.pool_candidates(
+        _QUERY, str(pooling_corpus_path), _K_SMALL, _SEED_A, semantic_fn=None
+    )
+    assert [d.id for d in baseline] == [d.id for d in with_none]
+
+
+def test_pool_candidates_semantic_arm_adds_docs_and_ignores_unknown_ids(pooling_corpus_path):
+    pooling_mod = _import_pooling_module()
+    seen_calls = []
+
+    def fake_semantic(query, k):
+        seen_calls.append((query, k))
+        return ["d14", "d99-not-a-doc", "d15"]
+
+    pooled = pooling_mod.pool_candidates(
+        _QUERY, str(pooling_corpus_path), _K_SMALL, _SEED_A, semantic_fn=fake_semantic
+    )
+    pooled_ids = {d.id for d in pooled}
+
+    assert seen_calls == [(_QUERY, _K_SMALL)], (
+        "semantic_fn must be called once with (query, k_per_source)"
+    )
+    assert "d14" in pooled_ids and "d15" in pooled_ids, (
+        f"semantic-arm docs must join the pool: {sorted(pooled_ids)}"
+    )
+    assert "d99-not-a-doc" not in pooled_ids, "unknown ids must be silently ignored"
+
+
+def test_pool_candidates_semantic_arm_dedupes_and_still_shuffles_reproducibly(
+    pooling_corpus_path,
+):
+    pooling_mod = _import_pooling_module()
+
+    def overlap_semantic(query, k):
+        return ["d01", "d15"]  # d01 overlaps the grep/bm25 arms; first occurrence wins
+
+    a = pooling_mod.pool_candidates(
+        _QUERY, str(pooling_corpus_path), _K_SMALL, _SEED_A, semantic_fn=overlap_semantic
+    )
+    b = pooling_mod.pool_candidates(
+        _QUERY, str(pooling_corpus_path), _K_SMALL, _SEED_A, semantic_fn=overlap_semantic
+    )
+    ids_a = [d.id for d in a]
+    assert ids_a == [d.id for d in b], "same seed + same semantic_fn must be reproducible"
+    assert len(ids_a) == len(set(ids_a)), f"dedupe must hold across all four arms: {ids_a}"
