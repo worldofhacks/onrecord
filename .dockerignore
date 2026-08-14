@@ -48,3 +48,4 @@ tests/
 
 # OS cruft.
 .DS_Store
+!artifacts/livestreams.json
