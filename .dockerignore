@@ -29,6 +29,9 @@ __pycache__/
 # Runtime artifacts (saved index, price cache) -- built fresh at container
 # startup (lifespan bootstrap), never baked into the image.
 artifacts/
+# ...except the Form 4 artifact, which ships with the repo (T-039)
+!artifacts/form4/
+!artifacts/form4/**
 
 # Raw (pre-merge) adapter output, if present -- corpus/v1/corpus.jsonl.gz
 # (the merged snapshot the app actually reads for /api/prices + index
