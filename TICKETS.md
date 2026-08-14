@@ -98,22 +98,22 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 |----|-------|--------|--------|
 | T-029 | qa_eval real-seam test full-suite order dependence | done (merged wave-9 repair) | wave-9 integration |
 | T-030 | embed input-limit guard (33 filing sections > 8K tokens) | done (merged wave-9 repair) | operational embed run 1 |
-| T-031 | token-aware embedding request packing + Retry-After honoring | backlog | operational embed runs 2–3 |
+| T-031 | token-aware embedding request packing + Retry-After honoring | done | operational embed runs 2–3 |
 | T-032 | /api/prices + /api/tickers async-def-sync-body (T-024 I-1 class) | done | T-024 fix round |
-| T-033 | Mention-anchored ticker performance (paste.trade reference) | backlog | — | T-032, T-034 | standard |
+| T-033 | Mention-anchored ticker performance (paste.trade reference) | done | — | T-032, T-034 | standard |
 | T-034 | Price source repair — yahoo keyless primary (stooq bot-walled) | done | repair | — | standard |
 | T-035 | Remove ALL demo data from UI (search corpus + Ask illustrative) | done | repair | T-032 | standard |
 | T-037 | Bounded fusion depth — hybrid 4x, differential evidence | done | repair | — | capable |
-| T-038 | Form 4 ingestion (EDGAR insider transactions) | in-progress | final-A | — | standard |
-| T-039 | Confidence-vs-Conduct (insider net-flow join + UI) | backlog | final-A | T-038 | standard |
-| T-040 | Promise Ledger (LLM-extracted commitments, Ledger tab live) | backlog | final-A | — | capable |
-| T-041 | Dodge Index (deterministic evasion scoring) | backlog | final-A | — | cheap |
-| T-042 | Judged-eval headline run (faithfulness + refusal rates) | in-progress | final-A | — | standard |
-| T-043 | Metrics report consolidation | backlog | final-B | T-042 | capable |
-| T-044 | Self-eval vs rubric | backlog | final-B | T-043 | capable |
-| T-045 | AI-LOG final pass | backlog | final-B | — | capable |
-| T-046 | Pre-Search transcript re-export | backlog | final-B | — | cheap |
-| T-047 | Eval-gate re-scope (owner decision) | backlog | final-B | — | cheap |
-| T-048 | UX: warming page + rate-limit messaging | backlog | final-C | — | standard |
-| T-049 | Chart polish: ranges + insider dots | backlog | final-C | T-038 | standard |
-| T-050 | Search date filter + sort | backlog | final-C | — | standard |
+| T-038 | Form 4 ingestion (EDGAR insider transactions) | done | final-A | — | standard |
+| T-039 | Confidence-vs-Conduct (insider net-flow join + UI) | done | final-A | T-038 | standard |
+| T-040 | Promise Ledger (LLM-extracted commitments, Ledger tab live) | done | final-A | — | capable |
+| T-041 | Dodge Index (deterministic evasion scoring) | done | final-A | — | cheap |
+| T-042 | Judged-eval headline run (faithfulness + refusal rates) | done | final-A | — | standard |
+| T-043 | Metrics report consolidation | done | final-B | T-042 | capable |
+| T-044 | Self-eval vs rubric | done | final-B | T-043 | capable |
+| T-045 | AI-LOG final pass | done | final-B | — | capable |
+| T-046 | Pre-Search transcript re-export | done | final-B | — | cheap |
+| T-047 | Eval-gate re-scope (owner decision) | done | final-B | — | cheap |
+| T-048 | UX: warming page + rate-limit messaging | done | final-C | — | standard |
+| T-049 | Chart polish: ranges + insider dots | done | final-C | T-038 | standard |
+| T-050 | Search date filter + sort | done | final-C | — | standard |
