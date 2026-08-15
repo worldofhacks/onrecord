@@ -238,3 +238,260 @@ def test_mapping_file_honest():
         # keys look like "County, ST" and never cross state lines
         assert ", " in key and len(key.rsplit(", ", 1)[1]) == 2, f"bad key {key!r}"
         assert key.rsplit(", ", 1)[1] == value.rsplit(", ", 1)[1], f"state mismatch {key!r}"
+
+
+# ===========================================================================
+# T-059 AMENDMENT (2026-08-15) -- ERCOT + CAISO xlsx feeds.
+# openpyxl became a project dependency, un-trimming the two xlsx sources.
+# Everything ABOVE this banner is the frozen T-059 suite and is unchanged;
+# everything below is append-only.
+#
+# ``parse_ercot(xlsx_bytes: bytes) -> list[dict]`` (pure) -- the ERCOT GIS
+# Report workbook, sheet "Project Details - Large Gen" (header row 31 under
+# a notes preamble; VERIFIED against GIS_Report_July2026, DocID 1258020955).
+# state is always "TX"; withdrawn always False (the sheet holds active
+# projects only); status = "GIM Study Phase"; queue_date = "Projected COD"
+# (the sheet has no request-received date). ERCOT rows ALONE carry three
+# additive keys -- air_permit, ghg_permit, water_availability -- verbatim
+# strings, "" when blank, YYYY-MM-DD when the cell is a date.
+#
+# ``parse_caiso(xlsx_bytes: bytes) -> list[dict]`` (pure) -- CAISO
+# PublicQueueReport.xlsx, sheet "Grid GenerationQueue" (header row 4 under
+# the report banner; VERIFIED against the 2026-08-14 capture). queue_id =
+# "Queue Position" (ints and strings like "643R" both appear); mw = "Net
+# MWs to Grid" falling back to "MW-1" when blank; queue_date = "Queue Date"
+# (a real filing date); the feed spans CA/NV/AZ/MX and counties come
+# UPPERCASE; legend/footer rows carry no Queue Position and are skipped.
+#
+# ``_ercot_newest_doc_id(json_text: str) -> str`` (pure) -- the MIS listing
+# for reportTypeId=15933 mixes Co-located Battery reports into the same
+# list, so the picker filters to FriendlyName "GIS_Report*" before taking
+# the newest PublishDate. Malformed listing -> "".
+#
+# Fixture cell values are taken from the real 2026-08 workbook captures;
+# whole files are NOT copied in.
+# ===========================================================================
+
+ERCOT_EXTRA_KEYS = {"air_permit", "ghg_permit", "water_availability"}
+
+
+def _xlsx_bytes(sheet_name, grid):
+    """In-memory single-sheet workbook -> bytes."""
+    import io
+
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = sheet_name
+    for row in grid:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def _ercot_xlsx():
+    """Sheet mirrors the real GIS Report layout: 30 preamble/notes rows,
+    header at row 31, wrapped-header continuation rows with a blank INR,
+    then data rows carrying real July-2026 values."""
+    from datetime import datetime
+
+    header = [
+        "INR", "Project Name", "GIM Study Phase", "Interconnecting Entity", "County",
+        "Projected COD", "Fuel", "Technology", "Capacity (MW)", "IA Signed",
+        "Air Permit", "GHG Permit", "Water Availability",
+    ]
+    pad = (
+        [[None]] * 6
+        + [["GIM Project Details - Large Gen"]]
+        + [[None]] * 22
+        + [["Project Attributes"]]
+    )
+    continuation = [
+        [None] * 9 + ["Financial Security "],
+        [None] * 9 + ["and Notice to "],
+        [None],
+    ]
+    data = [
+        ["15INR0064b", "Harald (BearKat Wind B)", "SS Completed, FIS Completed, IA",
+         "McCrae Wind Energy II, LLC", "Glasscock", datetime(2026, 12, 3), "WIN", "WT",
+         162.1, datetime(2018, 5, 30), "Not Required", "Not Required", "Not Required"],
+        ["18INR0009", "Eagle Pines Gas", "SS Completed, FIS Started, No IA", "FGE Power",
+         "Cherokee", datetime(2028, 10, 30), "GAS", "CC", 1173.5, None,
+         datetime(2017, 2, 14), datetime(2015, 11, 4), None],
+        ["21INR0280", "Edgewater Storage", "SS Completed, FIS Started, No IA",
+         "Edgewater Battery Storage LLC", "Ellis", datetime(2028, 2, 29), "OTH", "BA",
+         50, None, "Not Required", "Not Required", None],
+    ]
+    return _xlsx_bytes("Project Details - Large Gen", pad + [header] + continuation + data)
+
+
+def _caiso_xlsx():
+    """Sheet mirrors the real PublicQueueReport layout: 3 banner rows,
+    header at row 4, real data rows, then the legend/footer block."""
+    from datetime import datetime
+
+    header = [
+        "Project Name", "Queue Position", "Interconnection Request\nReceive Date",
+        "Queue Date", "Application Status", "Study\nProcess", "Fuel-1", "Fuel-2",
+        "MW-1", "MW-2", "MW-3", "Net MWs to Grid", "County", "State",
+        "Interconnection Agreement \nStatus",
+    ]
+    banner = [
+        [None] * 14 + ["Report Run Date: 08/14/2026"],
+        [None, None, None, None, None, "The California ISO Controlled Grid"],
+        [None, None, None, None, None, None, "Generating Facility", None, "MWs",
+         None, None, None, "Location"],
+    ]
+    data = [
+        ["MONTEZUMA (HIGH WINDS III)", 22, datetime(2003, 11, 18),
+         datetime(2003, 11, 18, 8, 0), "ACTIVE", "AMEND 39", "Wind Turbine", "Battery",
+         38, 38, None, 38, "SOLANO", "CA", "Executed"],
+        ["TULE WIND", 32, datetime(2004, 5, 12), datetime(2004, 5, 24, 7, 0),
+         "ACTIVE", "Serial LGIP", "Wind Turbine", "Battery", 127.6, 131.6, None, 193.8,
+         "SAN DIEGO", "CA", "Executed"],
+        ["NORTH ROSAMOND SOLAR", "643R", datetime(2010, 7, 30),
+         datetime(2010, 7, 31, 7, 0), "ACTIVE", "C03", "Solar", "Battery",
+         153, 100, None, 153, "KERN", "CA", "Executed"],
+        ["AGUA CALIENTE SOLAR 2", 1222, datetime(2016, 3, 1), datetime(2016, 3, 8, 8, 0),
+         "ACTIVE", "ISP", "Solar", None, 20, None, None, 20, "MARICOPA", "AZ", None],
+        # synthetic twin of TULE WIND with "Net MWs to Grid" blanked: pins the MW-1 fallback
+        ["TULE WIND (NET BLANKED)", 9032, datetime(2004, 5, 12), datetime(2004, 5, 24, 7, 0),
+         "ACTIVE", "Serial LGIP", "Wind Turbine", "Battery", 127.6, 131.6, None, None,
+         "SAN DIEGO", "CA", "Executed"],
+        # legend/footer rows from the real sheet bottom: no Queue Position -> skipped
+        [None],
+        [None, None, "Legend:",
+         "● Study Process Key:  Active=project is in study through Construction phases; "
+         "Complete=project is in Commercial Operation, Withdrawn=project is withdrawn"],
+        ["The contents of these pages are subject to change."],
+    ]
+    return _xlsx_bytes("Grid GenerationQueue", banner + [header] + data)
+
+
+def test_parse_ercot_normalized_rows():
+    rows = _attr("parse_ercot")(_ercot_xlsx())
+    assert len(rows) == 3  # preamble, continuation, and blank rows all skipped
+    assert rows[0] == {
+        "iso": "ERCOT", "queue_id": "15INR0064b", "county": "Glasscock", "state": "TX",
+        "mw": 162.1, "fuel": "WIN", "status": "SS Completed, FIS Completed, IA",
+        "queue_date": "2026-12-03", "withdrawn": False,
+        "air_permit": "Not Required", "ghg_permit": "Not Required",
+        "water_availability": "Not Required",
+    }
+    by_id = {r["queue_id"]: r for r in rows}
+    assert by_id["21INR0280"]["county"] == "Ellis"
+    assert by_id["21INR0280"]["mw"] == 50.0  # int capacity cell -> float
+    assert all(r["state"] == "TX" for r in rows)
+    assert all(r["withdrawn"] is False for r in rows)  # active-projects sheet
+
+
+def test_parse_ercot_permit_extras():
+    rows = _attr("parse_ercot")(_ercot_xlsx())
+    eagle = {r["queue_id"]: r for r in rows}["18INR0009"]
+    assert eagle["air_permit"] == "2017-02-14"  # date cells -> YYYY-MM-DD
+    assert eagle["ghg_permit"] == "2015-11-04"
+    assert eagle["water_availability"] == ""  # blank cell -> ""
+    assert eagle["queue_date"] == "2028-10-30"  # Projected COD (sheet has no filing date)
+    assert eagle["status"] == "SS Completed, FIS Started, No IA"
+
+
+def test_parse_ercot_malformed():
+    parse = _attr("parse_ercot")
+    assert parse(b"this is not a workbook") == []
+    assert parse(_xlsx_bytes("Summary", [["nothing", "here"]])) == []  # sheet absent
+    headerless = _xlsx_bytes("Project Details - Large Gen", [["no", "header"], ["at", "all"]])
+    assert parse(headerless) == []
+
+
+def test_parse_caiso_normalized_rows():
+    rows = _attr("parse_caiso")(_caiso_xlsx())
+    assert len(rows) == 5  # banner + legend/footer rows carry no Queue Position
+    assert rows[0] == {
+        "iso": "CAISO", "queue_id": "22", "county": "SOLANO", "state": "CA",
+        "mw": 38.0, "fuel": "Wind Turbine", "status": "ACTIVE",
+        "queue_date": "2003-11-18", "withdrawn": False,
+    }
+    by_id = {r["queue_id"]: r for r in rows}
+    assert by_id["643R"]["queue_date"] == "2010-07-31"  # string queue positions survive
+    assert by_id["1222"] == {
+        "iso": "CAISO", "queue_id": "1222", "county": "MARICOPA", "state": "AZ",
+        "mw": 20.0, "fuel": "Solar", "status": "ACTIVE",
+        "queue_date": "2016-03-08", "withdrawn": False,
+    }  # the feed is NOT CA-only: NV/AZ/MX counties appear
+
+
+def test_parse_caiso_mw_prefers_net_then_mw1():
+    rows = _attr("parse_caiso")(_caiso_xlsx())
+    by_id = {r["queue_id"]: r for r in rows}
+    assert by_id["32"]["mw"] == 193.8  # "Net MWs to Grid" wins over MW-1 (127.6)
+    assert by_id["9032"]["mw"] == 127.6  # Net blank -> MW-1 fallback
+
+
+def test_parse_caiso_malformed():
+    parse = _attr("parse_caiso")
+    assert parse(b"\x00\x01 garbage") == []
+    assert parse(_xlsx_bytes("Wrong Sheet", [["x"]])) == []
+    assert parse(_xlsx_bytes("Grid GenerationQueue", [["no", "queue", "position"]])) == []
+
+
+def test_row_shape_new_isos():
+    ercot_rows = _attr("parse_ercot")(_ercot_xlsx())
+    caiso_rows = _attr("parse_caiso")(_caiso_xlsx())
+    assert ercot_rows and caiso_rows
+    for row in caiso_rows:
+        assert set(row) == ROW_KEYS  # no additive keys outside ERCOT
+    for row in ercot_rows:
+        assert set(row) == ROW_KEYS | ERCOT_EXTRA_KEYS
+        for key in ERCOT_EXTRA_KEYS:
+            assert isinstance(row[key], str)
+    for row in ercot_rows + caiso_rows:
+        assert isinstance(row["mw"], float)
+        assert isinstance(row["withdrawn"], bool)
+        for key in ROW_KEYS - {"mw", "withdrawn"}:
+            assert isinstance(row[key], str)
+
+
+# Entry shapes below mirror the real IceDocListJsonWS response (fetched
+# 2026-08-15); the GIS_Report_July2026 DocID and PublishDate are verbatim.
+ERCOT_LISTING = json.dumps({
+    "ListDocsByRptTypeRes": {"DocumentList": [
+        {"Document": {"DocID": "1260020000", "PublishDate": "2026-08-10T08:37:03-05:00",
+                      "FriendlyName": "Co-located_Battery_Identification_Report_July_2026",
+                      "Extension": "xlsx"}},
+        {"Document": {"DocID": "1258020955", "PublishDate": "2026-08-03T15:39:49-05:00",
+                      "FriendlyName": "GIS_Report_July2026", "Extension": "xlsx"}},
+        {"Document": {"DocID": "1245010000", "PublishDate": "2026-07-02T15:02:11-05:00",
+                      "FriendlyName": "GIS_Report_June2026", "Extension": "xlsx"}},
+        {"NotADocument": True},
+    ]}
+})
+
+
+def test_ercot_newest_doc_id_filters_to_gis_report():
+    newest = _attr("_ercot_newest_doc_id")
+    # 15933 mixes Co-located Battery reports into the listing; the newest
+    # GIS_Report must win, NOT the newest document overall
+    assert newest(ERCOT_LISTING) == "1258020955"
+    assert newest("{not json") == ""
+    assert newest(json.dumps({"ListDocsByRptTypeRes": {"DocumentList": []}})) == ""
+    assert newest(json.dumps([1, 2])) == ""
+
+
+def test_join_carries_ercot_permit_keys_through():
+    row = dict(_mk("Ellis", "TX"), iso="ERCOT", air_permit="Not Required",
+               ghg_permit="", water_availability="2019-12-05")
+    hits, misses = _attr("join_jurisdictions")([row], {"Ellis, TX": "Ellis County, TX"})
+    assert misses == []
+    assert hits[0]["jurisdiction"] == "Ellis County, TX"
+    assert hits[0]["air_permit"] == "Not Required"
+    assert hits[0]["water_availability"] == "2019-12-05"
+
+
+def test_mapping_covers_new_feed_counties():
+    root = Path(__file__).resolve().parents[3]
+    mapping = json.loads((root / "data" / "iso_jurisdictions.json").read_text())
+    # observed spellings: ERCOT writes bare county names, CAISO writes UPPERCASE
+    assert mapping.get("Ellis, TX") == "Ellis County, TX"
+    assert mapping.get("MARICOPA, AZ") == "Maricopa County, AZ"
