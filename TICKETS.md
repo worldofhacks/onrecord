@@ -124,11 +124,11 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-055 | Deploy 3-large store to production (owner go) | done | living | T-054 | standard |
 | T-056 | Quantified promises (MW/gallons/jobs/$ extraction) | done | enrich-A | T-040 | standard |
 | T-057 | Promise -> outcome tracking (follow-up trails) | done | enrich-A | T-056 | standard |
-| T-058 | LLC shell resolution v1 (curated, receipted) | planned | enrich-B | T-033 | capable |
-| T-059 | Grid interconnection queues (iso_queue source) | planned | enrich-B | T-057, research | standard |
+| T-058 | LLC shell resolution v1 (curated, receipted) | done | enrich-B | T-033 | capable |
+| T-059 | Grid interconnection queues (iso_queue source) | done | enrich-B | T-057, research | standard |
 | T-060 | 8-K event typing (material-events feed) | done | enrich-A | T-052 | standard |
-| T-061 | Legistar hearing coverage (agendas/minutes) | planned | enrich-C | — | standard |
-| T-062 | EDGAR full-text discovery lane | planned | enrich-C | T-052 | standard |
+| T-061 | Legistar hearing coverage (agendas/minutes) | done | enrich-C | — | standard |
+| T-062 | EDGAR full-text discovery lane | done | enrich-C | T-052 | standard |
 | T-063 | EIA-860M county join | planned | enrich-C | T-059 | cheap |
 | T-064 | Take Action: evidence-backed letters (Lob) | planned (owner-blocked: keys) | act | T-057 | capable |
 | T-065 | Portfolio lens: holdings x record (SnapTrade read-only) | planned (owner-blocked: keys) | act | T-060 | standard |

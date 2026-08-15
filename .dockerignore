@@ -50,3 +50,4 @@ tests/
 .DS_Store
 !artifacts/livestreams.json
 !artifacts/promise_outcomes.json
+!artifacts/iso_queues.json

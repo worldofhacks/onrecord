@@ -527,6 +527,7 @@ input::placeholder{color:#B5B0A1}
         <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#075C32;background:#E4F3E9;border-radius:99px;padding:5px 13px">{{ promTotal }} COMMITMENTS · VERBATIM</span>
         <sc-if value="{{ hasPromised }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#5B4A12;background:#F5EEDA;border-radius:99px;padding:5px 13px">{{ promisedLine }}</span></sc-if>
+        <sc-if value="{{ hasGrid }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#2E4A66;background:#E6EDF4;border-radius:99px;padding:5px 13px">{{ gridLine }}</span></sc-if>
       </div>
       <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Commitments made on the record, extracted as verbatim quotes — every extraction is enforced to be an exact substring of its source document, and every row links to its receipt. Follow-up trails show where the later record echoed a promise, and where it has gone quiet. The record observes; it never adjudicates.</p>
     </section>
@@ -753,6 +754,7 @@ class Component extends DCLogic {
     this.loadMentions();
     this.loadLive();
     this.loadPromised();
+    this.loadGrid();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -885,6 +887,11 @@ class Component extends DCLogic {
   loadLive() {
     this.fetchJson('/api/live').then(r => {
       if (r.ok && r.body && Array.isArray(r.body.live)) this.setState({ liveData: r.body });
+    });
+  }
+  loadGrid() {
+    this.fetchJson('/api/grid').then(r => {
+      if (r.ok && r.body && r.body.by_jurisdiction) this.setState({ grid: r.body });
     });
   }
   loadPromised() {
@@ -1257,6 +1264,17 @@ class Component extends DCLogic {
         codes: r.items.join(', '),
       })),
       eventsTotal: s.events ? s.events.total : 0,
+      // T-059: filed with grid operators — deliberately a SEPARATE line
+      // from promised MW; filed and promised are different acts.
+      hasGrid: !!(s.grid && Object.keys(s.grid.by_jurisdiction).length),
+      gridLine: (() => {
+        if (!s.grid || !s.grid.by_jurisdiction) return '';
+        const tops = Object.entries(s.grid.by_jurisdiction)
+          .sort((a, b) => b[1].queued_mw - a[1].queued_mw).slice(0, 4)
+          .filter(([, b]) => b.queued_mw > 0)
+          .map(([j, b]) => j + ' ' + Math.round(b.queued_mw).toLocaleString() + ' MW');
+        return tops.length ? 'IN THE GRID QUEUE · ' + tops.join(' · ') + ' · ' + (s.grid.sources || []).join('+').toUpperCase() + ' · FILED, NOT PROMISED' : '';
+      })(),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
       // T-056: the ledger in numbers — client-side sum of the boot-computed
