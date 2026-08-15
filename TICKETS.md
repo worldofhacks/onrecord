@@ -132,3 +132,4 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-063 | EIA-860M county join | planned | enrich-C | T-059 | cheap |
 | T-064 | Take Action: evidence-backed letters (Lob) | planned (owner-blocked: keys) | act | T-057 | capable |
 | T-065 | Portfolio lens: holdings x record (SnapTrade read-only) | planned (owner-blocked: keys) | act | T-060 | standard |
+| T-066 | EPA ECHO water permits (county-joined) | planned | enrich-C | T-059 | standard |
