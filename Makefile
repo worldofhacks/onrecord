@@ -43,3 +43,6 @@ refresh: refresh-live refresh-form4
 refresh-outcomes:
 	uv run python scripts/build_outcomes.py
 
+refresh-grid:
+	uv run python scripts/build_grid.py
+

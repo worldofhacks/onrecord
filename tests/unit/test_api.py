@@ -1648,3 +1648,69 @@ def test_events_503_when_no_filings(tmp_path, monkeypatch):
         resp = client.get("/api/events")
     assert resp.status_code == 503
     assert "8-k" in resp.json()["error"].lower()
+
+
+# ==========================================================================
+# AMENDMENT — T-058/T-059 serve layer (2026-08-15): GET /api/grid serves
+# the jurisdiction-joined ISO-queue artifact (env seam ONRECORD_GRID);
+# GET /api/shells serves curated shell links (validated at boot) plus
+# candidate counts. Absent artifacts -> flat 503 (grid) / empty-but-200
+# (shells, since the curated table legitimately starts empty).
+# ==========================================================================
+
+
+def _grid_fixture(tmp_path):
+    import json as _json
+    payload = {
+        "fetched_at": "2026-08-15T01:00+00:00",
+        "sources": ["miso", "spp"],
+        "rows": [
+            {"iso": "miso", "queue_id": "J1001", "county": "Madison", "state": "MS",
+             "mw": 300.0, "fuel": "Solar", "status": "Active", "queue_date": "2025-04-01",
+             "withdrawn": False, "jurisdiction": "Madison County, MS"},
+            {"iso": "spp", "queue_id": "GEN-2024-050", "county": "Sarpy", "state": "NE",
+             "mw": 150.0, "fuel": "Battery", "status": "Active", "queue_date": "2024-11-01",
+             "withdrawn": True, "jurisdiction": "Sarpy County, NE"},
+        ],
+        "misses_count": 4752,
+    }
+    path = tmp_path / "iso_queues.json"
+    path.write_text(_json.dumps(payload))
+    return path
+
+
+def test_grid_endpoint_serves_jurisdiction_rows(tmp_path, monkeypatch):
+    """spec(T-059:AC-4) — active rows only in MW sums; withdrawn excluded."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_GRID", str(_grid_fixture(tmp_path)))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/grid").json()
+        one = client.get("/api/grid", params={"jurisdiction": "Madison County, MS"}).json()
+    assert body["by_jurisdiction"]["Madison County, MS"]["queued_mw"] == 300.0
+    assert body["by_jurisdiction"]["Sarpy County, NE"]["queued_mw"] == 0.0  # withdrawn
+    assert body["by_jurisdiction"]["Sarpy County, NE"]["withdrawn_mw"] == 150.0
+    assert body["sources"] == ["miso", "spp"]
+    assert one["rows"][0]["queue_id"] == "J1001" and len(one["rows"]) == 1
+
+
+def test_grid_503_when_absent(tmp_path, monkeypatch):
+    """spec(T-059:AC-4)"""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("ONRECORD_GRID", str(tmp_path / "nope.json"))
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/api/grid")
+    assert resp.status_code == 503
+    assert "refresh-grid" in resp.json()["error"]
+
+
+def test_shells_endpoint_empty_curated_table(tmp_path, monkeypatch):
+    """spec(T-058:AC-3) — empty table -> 200 with empty resolved, never 503
+    (an empty curated table is a legitimate, honest state)."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        body = client.get("/api/shells").json()
+    assert body["resolved"] == []
+    assert body["curated_total"] == 0

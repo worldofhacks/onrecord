@@ -612,6 +612,32 @@ def _boot(app: FastAPI) -> None:
         if status:
             app.state.outcomes_statuses[status] = app.state.outcomes_statuses.get(status, 0) + 1
 
+    # T-059: the ISO-queue artifact (env seam ONRECORD_GRID; built by
+    # `make refresh-grid`). Absent -> /api/grid 503s flat.
+    try:
+        grid_path = Path(os.environ.get("ONRECORD_GRID", "artifacts/iso_queues.json"))
+        app.state.grid = (
+            json.loads(grid_path.read_text(encoding="utf-8")) if grid_path.exists() else {}
+        )
+    except Exception:
+        app.state.grid = {}
+
+    # T-058: curated shell links, validated at load (verbatim receipts) —
+    # a bad row is a boot failure, never a silently-dropped link. The table
+    # legitimately ships empty until the owner curates rows.
+    from onrecord.analysis.shells import load_shell_links
+
+    try:
+        _docs_by_id = (
+            {app.state.index.get_doc(i).id: app.state.index.get_doc(i)
+             for i in range(app.state.index.doc_count())}
+            if app.state.index is not None
+            else {}
+        )
+        app.state.shell_links = load_shell_links("data/shell_links.json", _docs_by_id)
+    except FileNotFoundError:
+        app.state.shell_links = []
+
     # T-033: mention-anchored performance cache. Env-gated
     # (ONRECORD_MENTIONS_BOOT) because building it fetches live price
     # series; the frozen suite stays zero-network with it unset. Prod sets
@@ -1463,6 +1489,50 @@ def promised_endpoint(  # NOT `async` -- serves boot-precomputed rollups
         "rollups": selected,
         "n_quantified_total": sum(b["n_quantified"] for b in selected.values()),
     }
+
+
+@app.get("/api/grid")
+def grid_endpoint(jurisdiction: str | None = None):  # NOT `async` -- boot-loaded
+    """T-059: what's actually FILED with grid operators, joined to our
+    jurisdictions. Queued and withdrawn MW are separate figures, and this
+    data is never summed with promised MW — filed and promised are
+    different acts by different parties."""
+    grid = getattr(app.state, "grid", {})
+    rows = grid.get("rows", [])
+    if not rows:
+        return _flat_error(
+            503,
+            "the ISO queue artifact is not built -- run `make refresh-grid` "
+            "to produce artifacts/iso_queues.json",
+        )
+    if jurisdiction is not None:
+        rows = [r for r in rows if r.get("jurisdiction") == jurisdiction]
+        return {"rows": rows, "total": len(rows), "fetched_at": grid.get("fetched_at", "")}
+    by_jurisdiction: dict[str, dict] = {}
+    for r in grid.get("rows", []):
+        bucket = by_jurisdiction.setdefault(
+            r["jurisdiction"], {"queued_mw": 0.0, "withdrawn_mw": 0.0, "n_projects": 0}
+        )
+        bucket["n_projects"] += 1
+        if r.get("withdrawn"):
+            bucket["withdrawn_mw"] += float(r.get("mw", 0.0))
+        else:
+            bucket["queued_mw"] += float(r.get("mw", 0.0))
+    return {
+        "by_jurisdiction": by_jurisdiction,
+        "sources": grid.get("sources", []),
+        "fetched_at": grid.get("fetched_at", ""),
+        "misses_count": grid.get("misses_count", 0),
+    }
+
+
+@app.get("/api/shells")
+def shells_endpoint():  # NOT `async` -- boot-validated curated table
+    """T-058: who is actually behind the record's project names. Only
+    curated, receipt-validated links resolve; an empty table is an honest
+    state, not an error."""
+    links = getattr(app.state, "shell_links", [])
+    return {"resolved": links, "curated_total": len(links)}
 
 
 @app.get("/api/events")

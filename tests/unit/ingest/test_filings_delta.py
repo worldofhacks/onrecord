@@ -97,3 +97,31 @@ def test_new_filings_filters_dedupes_sorts():
     ]
     out = _attr("new_filings")(entries, {"KNOWN"}, since="2026-07-01")
     assert [e["accession"] for e in out] == ["A1", "A3"]
+
+
+# ==========================================================================
+# AMENDMENT (2026-08-15, T-062 integration): the frozen test above encodes
+# the 3-part id shape `edgar:<accession>:<section>` from T-052's spec, but
+# REAL corpus-v2 ids are 4-part: `edgar:<TICKER>:<accession>:<section>`.
+# Against real ids the original parts[1] extraction returned TICKERS, so
+# the delta dedupe filtered nothing (defect found by T-062's live probe:
+# 946 corpus filing docs -> 0 accessions extracted). Evidence:
+# corpus-v2 sample id `edgar:ACM:0001104659-26-093421:body`. The original
+# test is KEPT (3-part ids remain supported); these rows pin the repair.
+# ==========================================================================
+
+
+def test_corpus_accessions_real_four_part_ids():
+    fn = _attr("corpus_accessions")
+    ids = ["edgar:ACM:0001104659-26-093421:body",
+           "edgar:NVDA:0001045810-26-000060:body",
+           "edgar:NVDA:0001045810-26-000060:item1a",
+           "yt:abc:seg001"]
+    assert fn(ids) == {"0001104659-26-093421", "0001045810-26-000060"}
+
+
+def test_corpus_accessions_mixed_shapes():
+    fn = _attr("corpus_accessions")
+    ids = ["edgar:0000320193-24-000123:item7",          # 3-part (spec shape)
+           "edgar:ACM:0001104659-26-093421:body"]        # 4-part (real shape)
+    assert fn(ids) == {"0000320193-24-000123", "0001104659-26-093421"}

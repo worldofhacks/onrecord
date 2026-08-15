@@ -11,6 +11,7 @@ Pure parts pinned by tests/unit/ingest/test_filings_delta.py.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -73,14 +74,24 @@ def parse_edgar_atom(xml_text: str) -> list[dict]:
     return rows
 
 
+_ACCESSION_RE = re.compile(r"^\d{10}-\d{2}-\d{6}$")
+
+
 def corpus_accessions(doc_ids: list[str]) -> set[str]:
-    """Accessions already in the corpus, from `edgar:<accession>:<section>`
-    ids; everything else ignored."""
+    """Accessions already in the corpus. Both edgar id shapes are
+    supported: the T-052 spec's `edgar:<accession>:<section>` AND the real
+    corpus-v2 shape `edgar:<TICKER>:<accession>:<section>` — the accession
+    is identified by its format (NNNNNNNNNN-NN-NNNNNN), never by position
+    (2026-08-15 repair: positional parts[1] returned TICKERS on real ids,
+    so the delta dedupe filtered nothing; found by T-062's live probe)."""
     out: set[str] = set()
     for doc_id in doc_ids:
         parts = doc_id.split(":")
-        if len(parts) >= 3 and parts[0] == "edgar" and parts[1]:
-            out.add(parts[1])
+        if len(parts) >= 3 and parts[0] == "edgar":
+            for part in parts[1:]:
+                if _ACCESSION_RE.match(part):
+                    out.add(part)
+                    break
     return out
 
 
