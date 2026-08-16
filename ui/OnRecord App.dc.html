@@ -363,6 +363,23 @@ input::placeholder{color:#B5B0A1}
 
   <sc-if value="{{ vTickers }}" hint-placeholder-val="{{ false }}">
   <div style="{{ padXBlock }}">
+    <div style="background:#fff;border:1px solid #E7E4DA;border-radius:14px;padding:16px 20px;margin-top:22px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;color:#8A8574">YOUR HOLDINGS ON THE RECORD</span>
+        <sc-if value="{{ pfConnected }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32;background:#E4F3E9;border-radius:99px;padding:2px 9px">CONNECTED · READ-ONLY</span></sc-if>
+        <sc-if value="{{ pfConnected }}" hint-placeholder-val="{{ true }}"><button onClick="{{ onConnect }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1.5px solid #16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">connect your brokerage · read-only ↗</button></sc-if>
+      </div>
+      <sc-for list="{{ pfRows }}" as="pf" hint-placeholder-count="0">
+        <div style="display:flex;gap:14px;align-items:baseline;padding:8px 0;border-top:1px solid #F6F5EF;font-size:13px;flex-wrap:wrap;cursor:pointer" onClick="{{ pf.onOpen }}">
+          <strong style="font-family:'IBM Plex Mono',monospace">{{ pf.sym }}</strong>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8A8574">{{ pf.qty }} · {{ pf.val }}</span>
+          <span style="color:#3F3D36;font-size:12px">{{ pf.facts }}</span>
+        </div>
+      </sc-for>
+      <p style="margin:10px 0 0;font-size:10.5px;color:#B5B0A1">Facts about what you hold, from the record — never a recommendation. Connected read-only via SnapTrade; disconnect anytime in the portal.</p>
+    </div>
+  </div>
+  <div style="{{ padXBlock }}">
     <section style="padding:36px 0 8px">
       <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The universe.</h1>
       <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:560px;line-height:1.55;text-wrap:pretty">{{ tickerTotal }} tickers across the buildout's supply chain. Receipt counts are documents on the record; click a ticker for the price-and-receipts timeline.</p>
@@ -766,6 +783,7 @@ class Component extends DCLogic {
     this.loadPromised();
     this.loadGrid();
     this.loadOutcomesSum();
+    this.loadPortfolio();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -881,6 +899,17 @@ class Component extends DCLogic {
     });
   }
 
+  loadPortfolio() {
+    this.fetchJson('/api/portfolio').then(r => {
+      if (r.ok && r.body) this.setState({ portfolio: r.body });
+    });
+  }
+  connectBrokerage() {
+    fetch((this.props.apiBase || '') + '/api/portfolio/connect', { method: 'POST' })
+      .then(r => r.json()).then(b => {
+        if (b.portal_url) { window.open(b.portal_url, '_blank', 'noopener'); setTimeout(() => this.loadPortfolio(), 60000); }
+      }).catch(() => {});
+  }
   loadEvents(sym) {
     this.setState({ events: null });
     this.fetchJson('/api/events?ticker=' + encodeURIComponent(sym) + '&k=8').then(r => {
@@ -1317,6 +1346,23 @@ class Component extends DCLogic {
         return st;
       })(),
       hasLedgerStats: !!(s.proms || s.promised || s.outcomesSum || s.grid),
+      // T-065 portfolio lens — facts about what you hold; never advice.
+      pfConnected: !!(s.portfolio && s.portfolio.connected),
+      pfAvailable: !!s.portfolio,
+      pfRows: (s.portfolio && s.portfolio.positions ? s.portfolio.positions : []).map(p => {
+        const r = p.record || {};
+        const money = v => Math.abs(v) >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : '$' + Math.round(v / 1e6) + 'M';
+        const seg = [];
+        if (r.insider_net_value) seg.push('insider net ' + (r.insider_net_value > 0 ? '+' : '−') + money(Math.abs(r.insider_net_value)));
+        if (r.n_events) seg.push(r.n_events + ' material events');
+        if (r.outcomes && (r.outcomes.followed_up || r.outcomes.quiet)) seg.push((r.outcomes.followed_up || 0) + ' followed up · ' + (r.outcomes.quiet || 0) + ' quiet');
+        if (r.n_mentions) seg.push(r.n_mentions + ' record calls');
+        return { sym: p.symbol, qty: Math.round(p.quantity).toLocaleString(),
+          val: '$' + Math.round(p.market_value).toLocaleString(),
+          facts: p.record ? (seg.join(' · ') || 'no record entries') : 'not in the record',
+          onOpen: () => { this.setState({ detSym: p.symbol, mkI: null }); this.loadPrices(p.symbol); this.loadConduct(p.symbol); this.loadEvents(p.symbol); } };
+      }),
+      onConnect: () => this.connectBrokerage(),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
       // T-056: the ledger in numbers — client-side sum of the boot-computed

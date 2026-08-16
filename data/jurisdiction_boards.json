@@ -1,0 +1,102 @@
+[
+  {
+    "jurisdiction": "Loudoun County, VA",
+    "board_name": "Loudoun County Board of Supervisors",
+    "address": {
+      "line1": "P.O. Box 7000",
+      "city": "Leesburg",
+      "state": "VA",
+      "zip": "20177-7000"
+    },
+    "source": "https://www.loudoun.gov/bos",
+    "note": "Published mailing address; physical office is 1 Harrison Street SE, 5th Floor, Leesburg, VA 20175.",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Fairfax County, VA",
+    "board_name": "Fairfax County Board of Supervisors",
+    "address": {
+      "line1": "12000 Government Center Pkwy",
+      "city": "Fairfax",
+      "state": "VA",
+      "zip": "22035"
+    },
+    "source": "https://www.fairfaxcounty.gov/boardofsupervisors/",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Prince William County, VA",
+    "board_name": "Prince William Board of County Supervisors",
+    "address": {
+      "line1": "1 County Complex Ct.",
+      "city": "Prince William",
+      "state": "VA",
+      "zip": "22192"
+    },
+    "source": "https://www.pwcva.gov/department/board-county-supervisors",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Coweta County, GA",
+    "board_name": "Coweta County Board of Commissioners",
+    "address": {
+      "line1": "22 East Broad Street",
+      "city": "Newnan",
+      "state": "GA",
+      "zip": "30263"
+    },
+    "source": "https://www.coweta.ga.us/162/Board-of-Commissioners",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Bartow County, GA",
+    "board_name": "Bartow County Commissioner's Office",
+    "address": {
+      "line1": "135 West Cherokee Avenue",
+      "city": "Cartersville",
+      "state": "GA",
+      "zip": "30120"
+    },
+    "source": "https://www.bartowcountyga.gov/government/county_commissioner.php",
+    "note": "Sole-commissioner county; address is the Frank Moore Administration & Judicial Center.",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "San Antonio, TX",
+    "board_name": "San Antonio City Council",
+    "address": {
+      "line1": "P.O. Box 839966",
+      "city": "San Antonio",
+      "state": "TX",
+      "zip": "78283"
+    },
+    "source": "https://www.sa.gov/Directory/Departments/Mayor-Council/Mayor/Contact",
+    "note": "Published Mayor & City Council mailing address; City Hall is 100 Military Plaza, San Antonio, TX 78205.",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Columbus, OH",
+    "board_name": "Columbus City Council",
+    "address": {
+      "line1": "90 West Broad Street",
+      "city": "Columbus",
+      "state": "OH",
+      "zip": "43215"
+    },
+    "source": "https://www.columbus.gov/Site-Footer/Footer-Widgets/Contact-Us",
+    "note": "City Hall; Council chambers and offices are at this address.",
+    "verified": "2026-08-16"
+  },
+  {
+    "jurisdiction": "Maricopa County, AZ",
+    "board_name": "Maricopa County Board of Supervisors",
+    "address": {
+      "line1": "301 West Jefferson Street",
+      "city": "Phoenix",
+      "state": "AZ",
+      "zip": "85003"
+    },
+    "source": "https://www.maricopa.gov/224/Board-of-Supervisors",
+    "verified": "2026-08-16"
+  }
+]

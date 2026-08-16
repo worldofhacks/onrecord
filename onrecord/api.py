@@ -546,6 +546,19 @@ def _boot(app: FastAPI) -> None:
     except Exception:
         app.state.livestreams = None
 
+    # Hourly in-app refresh (env-gated ONRECORD_LIVE_REFRESH_MINUTES; unset
+    # -> no thread, the frozen suite stays zero-network). Daemon thread per
+    # the async-boot convention; requires yt-dlp in the image.
+    app.state.live_refresh_thread = None
+    _live_minutes = os.environ.get("ONRECORD_LIVE_REFRESH_MINUTES", "").strip()
+    if _live_minutes.isdigit() and int(_live_minutes) > 0:
+        import threading as _threading
+
+        app.state.live_refresh_thread = _threading.Thread(
+            target=_live_refresh_loop, args=(app, int(_live_minutes)), daemon=True
+        )
+        app.state.live_refresh_thread.start()
+
     # T-040: the Promise Ledger artifact (env seam ONRECORD_PROMISES).
     # Best-effort at startup; absent/unreadable -> empty list -> the
     # endpoint's flat 503.
@@ -1489,6 +1502,137 @@ def promised_endpoint(  # NOT `async` -- serves boot-precomputed rollups
         "rollups": selected,
         "n_quantified_total": sum(b["n_quantified"] for b in selected.values()),
     }
+
+
+def _refresh_live_once(application, track_fn) -> None:
+    """Swap the hearings-on-air payload from a tracker callable. Failures
+    leave the previous payload serving (stale-with-checked_at beats empty)."""
+    try:
+        payload = track_fn()
+        if payload and isinstance(payload.get("upcoming"), list):
+            application.state.livestreams = payload
+    except Exception:
+        logger.warning("live refresh cycle failed; keeping previous payload", exc_info=True)
+
+
+def _live_refresh_loop(application, interval_minutes: int) -> None:
+    """Daemon loop: re-run the livestream tracker every interval. The
+    hearings strip is the one surface where daily is not enough — liveness
+    decays in hours, so it refreshes in-process (no commits, no deploys)."""
+    import time as _time
+
+    from onrecord.ingest.build_corpus import load_corpus_snapshot
+    from onrecord.ingest.livestreams import track
+
+    alive_path = Path("evalsets/linkhealth-2026-08-14.jsonl")
+    while True:
+        _time.sleep(max(interval_minutes, 5) * 60)
+
+        def _run():
+            docs = load_corpus_snapshot(
+                os.environ.get("ONRECORD_CORPUS", "corpus/v3/corpus.jsonl.gz")
+            )
+            alive = {
+                json.loads(line)["video_id"]
+                for line in alive_path.open(encoding="utf-8")
+                if line.strip() and json.loads(line)["status"] == "alive"
+            }
+            from datetime import UTC as _UTC
+            from datetime import datetime as _dt
+            return track(docs, alive,
+                         checked_at=_dt.now(_UTC).isoformat(timespec="minutes"))
+
+        _refresh_live_once(application, _run)
+
+
+def _snaptrade_ready() -> tuple[str, str] | None:
+    client_id = os.environ.get("SNAPTRADE_CLIENT_ID", "").strip()
+    consumer_key = os.environ.get("SNAPTRADE_CONSUMER_KEY", "").strip()
+    return (client_id, consumer_key) if client_id and consumer_key else None
+
+
+_SNAPTRADE_503 = (
+    "the portfolio lens is not configured -- set SNAPTRADE_CLIENT_ID and "
+    "SNAPTRADE_CONSUMER_KEY (read-only scope; see tickets/T-065.md)"
+)
+
+
+@app.post("/api/portfolio/connect")
+def portfolio_connect():  # NOT `async` -- short outbound POSTs, threadpool
+    """T-065: create (or reuse) the deployment's single read-only SnapTrade
+    connection and return the hosted portal URL. Credentials never touch
+    this server; the portal handles brokerage auth."""
+    from onrecord.act import portfolio as _portfolio
+
+    creds = _snaptrade_ready()
+    if creds is None:
+        return _flat_error(503, _SNAPTRADE_503)
+    client_id, consumer_key = creds
+    transport = getattr(app.state, "snaptrade_transport", None)
+    state_path = _portfolio.state_path()
+    connection = _portfolio.load_connection(state_path)
+    if connection is None:
+        user_secret = _portfolio.register_user(
+            client_id, consumer_key, "onrecord", transport=transport
+        )
+        _portfolio.save_connection(state_path, "onrecord", user_secret)
+        connection = {"user_id": "onrecord", "user_secret": user_secret}
+    portal = _portfolio.login_url(
+        client_id, consumer_key, connection["user_id"], connection["user_secret"],
+        connection_type="read", transport=transport,
+    )
+    return {"portal_url": portal, "scope": "read"}
+
+
+@app.get("/api/portfolio")
+def portfolio_view():  # NOT `async` -- threadpool; strictly factual join
+    """T-065: the connected account's holdings crossed with the record.
+    Facts only — what you hold, what the record shows. Never advice."""
+    from onrecord.act import portfolio as _portfolio
+
+    creds = _snaptrade_ready()
+    if creds is None:
+        return _flat_error(503, _SNAPTRADE_503)
+    client_id, consumer_key = creds
+    connection = _portfolio.load_connection(_portfolio.state_path())
+    if connection is None:
+        return {"connected": False}
+    transport = getattr(app.state, "snaptrade_transport", None)
+    positions = _portfolio.holdings(
+        client_id, consumer_key, connection["user_id"], connection["user_secret"],
+        transport=transport,
+    )
+    from onrecord.analysis import conduct as conduct_mod
+
+    held = {p["symbol"] for p in positions if p.get("symbol")}
+    form4_rows = getattr(app.state, "form4_rows", [])
+    since = (datetime.now(UTC).date() - timedelta(days=365)).isoformat()
+    conduct_by_ticker = {
+        t: conduct_mod.net_flow(form4_rows, t, since) for t in held
+    } if form4_rows else {}
+    promised = getattr(app.state, "promised_rollups", {}).get("ticker", {})
+    mention_rows = (getattr(app.state, "mentions_cache", {}) or {}).get("rows", [])
+    crossed = _portfolio.cross_with_record(
+        positions,
+        getattr(app.state, "events8k", []),
+        conduct_by_ticker,
+        promised,
+        mention_rows,
+    )
+    # Additive per-ticker outcome counts (followed_up / quiet) — the API-
+    # level join the module's frozen signature doesn't carry.
+    outcome_counts: dict[str, dict[str, int]] = {}
+    for _row in getattr(app.state, "promises", []):
+        t = _row.get("ticker")
+        o = _row.get("outcome")
+        if t in held and o:
+            bucket = outcome_counts.setdefault(t, {})
+            bucket[o["status"]] = bucket.get(o["status"], 0) + 1
+    for pos in crossed:
+        if pos.get("record") is not None:
+            pos["record"]["outcomes"] = outcome_counts.get(pos["symbol"], {})
+    return {"connected": True, "positions": crossed,
+            "disclosure": "read-only via SnapTrade; disconnect anytime in the portal"}
 
 
 @app.get("/api/grid")
