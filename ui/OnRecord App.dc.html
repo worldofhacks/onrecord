@@ -525,11 +525,20 @@ input::placeholder{color:#B5B0A1}
     <section style="padding:36px 0 8px">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <h1 style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(30px,3.6vw,48px);letter-spacing:-0.02em;margin:0">The promise ledger.</h1>
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#075C32;background:#E4F3E9;border-radius:99px;padding:5px 13px">{{ promTotal }} COMMITMENTS · VERBATIM</span>
-        <sc-if value="{{ hasPromised }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#5B4A12;background:#F5EEDA;border-radius:99px;padding:5px 13px">{{ promisedLine }}</span></sc-if>
-        <sc-if value="{{ hasGrid }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:#2E4A66;background:#E6EDF4;border-radius:99px;padding:5px 13px">{{ gridLine }}</span></sc-if>
+
       </div>
       <p style="margin:10px 0 0;font-size:14px;color:#6E6A5E;max-width:600px;line-height:1.55;text-wrap:pretty">Commitments made on the record, extracted as verbatim quotes — every extraction is enforced to be an exact substring of its source document, and every row links to its receipt. Follow-up trails show where the later record echoed a promise, and where it has gone quiet. The record observes; it never adjudicates.</p>
+      <sc-if value="{{ hasLedgerStats }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:18px">
+        <sc-for list="{{ ledgerStats }}" as="ls" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #E7E4DA;border-radius:12px;padding:13px 15px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#8A8574">{{ ls.label }}</div>
+            <div style="font-family:Fraunces,serif;font-weight:560;font-size:clamp(19px,2vw,25px);letter-spacing:-0.01em;margin-top:4px;font-variant-numeric:tabular-nums;color:{{ ls.color }}">{{ ls.val }}</div>
+            <div style="font-size:10.5px;color:#8A8574;margin-top:3px;line-height:1.45">{{ ls.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
     </section>
     <sc-if value="{{ hasDodge }}" hint-placeholder-val="{{ false }}">
     <div style="padding:14px 0 4px">
@@ -755,6 +764,7 @@ class Component extends DCLogic {
     this.loadLive();
     this.loadPromised();
     this.loadGrid();
+    this.loadOutcomesSum();
     this.loadMetrics();
     this.loadStats();
     this.runSearch(true);
@@ -887,6 +897,11 @@ class Component extends DCLogic {
   loadLive() {
     this.fetchJson('/api/live').then(r => {
       if (r.ok && r.body && Array.isArray(r.body.live)) this.setState({ liveData: r.body });
+    });
+  }
+  loadOutcomesSum() {
+    this.fetchJson('/api/outcomes/summary').then(r => {
+      if (r.ok && r.body && r.body.statuses) this.setState({ outcomesSum: r.body });
     });
   }
   loadGrid() {
@@ -1275,6 +1290,32 @@ class Component extends DCLogic {
           .map(([j, b]) => j + ' ' + Math.round(b.queued_mw).toLocaleString() + ' MW');
         return tops.length ? 'IN THE GRID QUEUE · ' + tops.join(' · ') + ' · ' + (s.grid.sources || []).join('+').toUpperCase() + ' · FILED, NOT PROMISED' : '';
       })(),
+      // Ledger stat grid — every number live from its endpoint, nothing static.
+      ledgerStats: (() => {
+        const st = [];
+        if (s.proms) st.push({ label: 'ON THE RECORD', val: s.proms.total.toLocaleString(),
+          sub: 'verbatim commitments', color: '#16150F' });
+        if (s.promised && s.promised.rollups) {
+          const t = { mw: 0, jobs: 0, tot: 0, yr: 0 };
+          Object.values(s.promised.rollups).forEach(b => { t.mw += b.promised_mw; t.jobs += b.promised_jobs; t.tot += b.promised_dollars_total; t.yr += b.promised_dollars_annual; });
+          const money = v => v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : '$' + Math.round(v / 1e6) + 'M';
+          st.push({ label: 'PROMISED', val: Math.round(t.mw).toLocaleString() + ' MW',
+            sub: Math.round(t.jobs).toLocaleString() + ' jobs · ' + money(t.tot) + ' pledged' + (t.yr ? ' · ' + money(t.yr) + '/yr' : ''), color: '#5B4A12' });
+        }
+        if (s.outcomesSum) {
+          const c = s.outcomesSum.statuses;
+          st.push({ label: 'FOLLOWED UP', val: (c.followed_up || 0).toLocaleString(),
+            sub: (c.quiet || 0).toLocaleString() + ' gone quiet · receipts on both ends', color: '#075C32' });
+        }
+        if (s.grid && s.grid.by_jurisdiction) {
+          let mw = 0, n = 0;
+          Object.values(s.grid.by_jurisdiction).forEach(b => { mw += b.queued_mw; n += 1; });
+          st.push({ label: 'IN THE GRID QUEUE', val: Math.round(mw).toLocaleString() + ' MW',
+            sub: n + ' jurisdictions · ' + (s.grid.sources || []).join('+').toUpperCase() + ' · filed, not promised', color: '#2E4A66' });
+        }
+        return st;
+      })(),
+      hasLedgerStats: !!(s.proms || s.promised || s.outcomesSum || s.grid),
       hasDodge: !!(s.dodge && s.dodge.rows.length), dodgeFloor: s.dodge ? s.dodge.min_docs : 200,
       hasProms: !!(s.proms && s.proms.rows.length), promTotal: s.proms ? s.proms.total : 0,
       // T-056: the ledger in numbers — client-side sum of the boot-computed
