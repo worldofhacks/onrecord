@@ -46,3 +46,12 @@ refresh-outcomes:
 refresh-grid:
 	uv run python scripts/build_grid.py
 
+# Living-data refresh automation (daily lane; .github/workflows/refresh-data.yml).
+# refresh-corpus freshens fast-moving artifacts only — the corpus/index/embedding
+# swap stays the T-053 versioned runbook and is never run from here.
+.PHONY: refresh-corpus refresh-all
+refresh-corpus:
+	uv run python scripts/refresh_corpus.py
+
+refresh-all: refresh-corpus refresh-outcomes
+

@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-08-14T19:00Z",
+  "checked_at": "2026-08-16T07:31+00:00",
   "jurisdictions_resolved": 51,
   "live": [],
   "upcoming": [
@@ -191,13 +191,6 @@
       "title": "Memphis City Council Committee Meetings: August 18, 2026",
       "status": "is_upcoming",
       "url": "https://www.youtube.com/watch?v=jdkdnHtoFaQ"
-    },
-    {
-      "jurisdiction": "Temple, TX",
-      "video_id": "JcvcqQN8ayQ",
-      "title": "City of Temple - City Council Meeting",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=JcvcqQN8ayQ"
     }
   ],
   "channels": {

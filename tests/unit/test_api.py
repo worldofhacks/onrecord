@@ -1714,3 +1714,118 @@ def test_shells_endpoint_empty_curated_table(tmp_path, monkeypatch):
         body = client.get("/api/shells").json()
     assert body["resolved"] == []
     assert body["curated_total"] == 0
+
+
+# ==========================================================================
+# AMENDMENT — T-065 portfolio lens serve seam (2026-08-16): POST
+# /api/portfolio/connect (registers the single deployment connection,
+# returns the SnapTrade portal URL), GET /api/portfolio (holdings crossed
+# with the record). Keyless -> flat 503. Transport injectable via
+# app.state.snaptrade_transport (test seam).
+# ==========================================================================
+
+
+def test_portfolio_endpoints_503_keyless(tmp_path, monkeypatch):
+    """spec(T-065) — no keys, no feature; flat 503 names the condition."""
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.delenv("SNAPTRADE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SNAPTRADE_CONSUMER_KEY", raising=False)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        connect = client.post("/api/portfolio/connect")
+        view = client.get("/api/portfolio")
+    assert connect.status_code == 503 and "snaptrade" in connect.json()["error"].lower()
+    assert view.status_code == 503
+
+
+def test_portfolio_connect_returns_portal_url(tmp_path, monkeypatch):
+    """spec(T-065) — mocked SnapTrade: register + login -> portal URL."""
+    import json as _json
+
+    import httpx as _httpx
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "ck-test-secret")
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_STATE", str(tmp_path / "snap.json"))
+
+    def handler(request):
+        if request.url.path.endswith("/registerUser"):
+            return _httpx.Response(200, json={"userId": "onrecord", "userSecret": "us-secret"})
+        if request.url.path.endswith("/login"):
+            return _httpx.Response(200, json={"redirectURI": "https://app.snaptrade.com/portal?x=1"})
+        return _httpx.Response(404)
+
+    with _client(api_module, monkeypatch, index_dir) as client:
+        client.app.state.snaptrade_transport = _httpx.MockTransport(handler)
+        resp = client.post("/api/portfolio/connect")
+    assert resp.status_code == 200
+    assert resp.json()["portal_url"].startswith("https://app.snaptrade.com/")
+    saved = _json.loads((tmp_path / "snap.json").read_text())
+    assert saved["user_secret"] == "us-secret"
+
+
+def test_portfolio_view_crosses_holdings_with_record(tmp_path, monkeypatch):
+    """spec(T-065) — factual join; no recommendation language in response."""
+    import json as _json
+
+    import httpx as _httpx
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "ck-test-secret")
+    state = tmp_path / "snap.json"
+    state.write_text(_json.dumps({"user_id": "onrecord", "user_secret": "us-secret"}))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_STATE", str(state))
+
+    def handler(request):
+        if request.url.path.endswith("/accounts"):
+            return _httpx.Response(200, json=[{"id": "acct-1"}])
+        if "positions" in request.url.path:
+            return _httpx.Response(200, json=[
+                {"symbol": {"symbol": {"symbol": "NVDA"}, "type": {"description": "Equity"}},
+                 "units": 40, "price": 100.0, "currency": {"code": "USD"}}])
+        return _httpx.Response(404)
+
+    with _client(api_module, monkeypatch, index_dir) as client:
+        client.app.state.snaptrade_transport = _httpx.MockTransport(handler)
+        resp = client.get("/api/portfolio")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    assert body["positions"][0]["symbol"] == "NVDA"
+    assert "record" in body["positions"][0]
+    text = _json.dumps(body).lower()
+    for banned in ("recommend", '"buy"', '"sell"', "should"):
+        assert banned not in text
+
+
+# ==========================================================================
+# AMENDMENT — hourly in-app livestream refresh (2026-08-16): env-gated
+# ONRECORD_LIVE_REFRESH_MINUTES daemon loop; _refresh_live_once(app,
+# track_fn) swaps app.state.livestreams from the tracker's payload. Env
+# unset -> no thread (the frozen suite stays zero-network).
+# ==========================================================================
+
+
+def test_live_refresh_disabled_by_default(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.delenv("ONRECORD_LIVE_REFRESH_MINUTES", raising=False)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        assert getattr(client.app.state, "live_refresh_thread", None) is None
+
+
+def test_refresh_live_once_updates_state(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    payload = {"checked_at": "2026-08-16T12:00Z", "jurisdictions_resolved": 2,
+               "live": [], "upcoming": [{"jurisdiction": "X", "video_id": "v",
+                                          "title": "Board Meeting", "status": "is_upcoming",
+                                          "url": "https://youtube.com/watch?v=v"}],
+               "channels": {}}
+    with _client(api_module, monkeypatch, index_dir) as client:
+        api_module._refresh_live_once(client.app, lambda: payload)
+        assert client.app.state.livestreams["checked_at"] == "2026-08-16T12:00Z"
+        resp = client.get("/api/live")
+    assert resp.status_code == 200 and resp.json()["upcoming"][0]["jurisdiction"] == "X"

@@ -1,0 +1,103 @@
+name: refresh-data
+
+# The living platform's daily lane (T-051/T-052/T-053 follow-on): freshen
+# fast-moving ARTIFACTS only, then open-or-update a review PR. A human
+# merges — nothing auto-merges.
+#
+# The corpus/index/embedding swap is deliberately NOT automated here:
+# versioned swaps carry re-pool obligations (delta embed billing, judgment
+# re-pooling, demo-verified state invalidation — see tickets/T-053.md) and
+# run only on owner go via the documented corpus-v3-style runbook.
+
+on:
+  schedule:
+    - cron: "0 11 * * *" # daily 11:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+
+      # livestreams retrack shells out to yt-dlp (pipx bin dir is on PATH
+      # on hosted runners); without it the step self-skips.
+      - run: pipx install yt-dlp
+
+      # The live corpus snapshot is a release asset, not git-tracked
+      # (>100MB) — same fetch as the Dockerfile.
+      - name: fetch corpus-v3 snapshot
+        run: |
+          mkdir -p corpus/v3
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - \
+            -o corpus/v3/corpus.jsonl.gz \
+            https://github.com/worldofhacks/onrecord/releases/download/v3-artifacts/corpus-v3.jsonl.gz
+
+      # Failure-isolated by design: a failed step exits 1 but the report
+      # and the successfully refreshed artifacts are still worth the PR.
+      - name: refresh living artifacts
+        id: refresh
+        continue-on-error: true
+        run: make refresh-corpus
+
+      # The delta JSONLs (filings/fts/legistar) are gitignored inputs to
+      # the MANUAL swap runbook — surfaced as a run artifact, not the PR.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refresh-report
+          path: |
+            artifacts/refresh-report.json
+            artifacts/filings_delta.jsonl
+            artifacts/edgar_fts_candidates.json
+            artifacts/legistar_delta.jsonl
+          if-no-files-found: ignore
+
+      - name: summarize refresh report
+        id: report
+        run: |
+          {
+            echo "summary<<REPORT_EOF"
+            uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("artifacts/refresh-report.json")
+          if not path.exists():
+              print("`artifacts/refresh-report.json` was not written — the refresh crashed before reporting.")
+          else:
+              report = json.loads(path.read_text())
+              print("Daily living-data refresh (`make refresh-corpus`) — artifacts only.\n")
+              print(f"**ran_at:** {report['ran_at']}  \n**corpus:** `{report['corpus']}`\n")
+              print("| step | status | detail |")
+              print("| --- | --- | --- |")
+              for name, entry in report["steps"].items():
+                  status = entry.get("status", "?")
+                  detail = {k: v for k, v in entry.items() if k != "status"}
+                  print(f"| {name} | {status} | `{json.dumps(detail, sort_keys=True)[:220]}` |")
+              failed = report.get("failed_steps") or []
+              print(f"\n**failed steps:** {', '.join(failed) if failed else 'none'}")
+          print()
+          print("Delta JSONLs (filings/fts/legistar) are gitignored swap inputs — see the")
+          print("`refresh-report` run artifact. The corpus swap itself is NOT automated")
+          print("(versioned swaps carry re-pool obligations; tickets/T-053.md). Human review + merge.")
+          PY
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Requires repo setting "Allow GitHub Actions to create and approve
+      # pull requests". Open-or-update semantics via the fixed branch.
+      - uses: peter-evans/create-pull-request@v6
+        with:
+          branch: auto/refresh-data
+          title: "chore(auto): daily data refresh"
+          commit-message: "chore(auto): daily data refresh"
+          body: ${{ steps.report.outputs.summary }}
+          add-paths: |
+            artifacts/
+          delete-branch: true
