@@ -1570,17 +1570,24 @@ def portfolio_connect():  # NOT `async` -- short outbound POSTs, threadpool
     client_id, consumer_key = creds
     transport = getattr(app.state, "snaptrade_transport", None)
     state_path = _portfolio.state_path()
-    connection = _portfolio.load_connection(state_path)
-    if connection is None:
-        user_secret = _portfolio.register_user(
-            client_id, consumer_key, "onrecord", transport=transport
+    # userId is deployment-scoped (env seam) — the same SnapTrade account
+    # serves local dev and prod, and userIds are globally unique per
+    # partner, so each deployment registers its own.
+    user_id = os.environ.get("ONRECORD_SNAPTRADE_USER", "onrecord")
+    try:
+        connection = _portfolio.load_connection(state_path)
+        if connection is None:
+            user_secret = _portfolio.register_user(
+                client_id, consumer_key, user_id, transport=transport
+            )
+            _portfolio.save_connection(state_path, user_id, user_secret)
+            connection = {"user_id": user_id, "user_secret": user_secret}
+        portal = _portfolio.login_url(
+            client_id, consumer_key, connection["user_id"], connection["user_secret"],
+            connection_type="read", transport=transport,
         )
-        _portfolio.save_connection(state_path, "onrecord", user_secret)
-        connection = {"user_id": "onrecord", "user_secret": user_secret}
-    portal = _portfolio.login_url(
-        client_id, consumer_key, connection["user_id"], connection["user_secret"],
-        connection_type="read", transport=transport,
-    )
+    except _portfolio.SnapTradeRequestError as exc:
+        return _flat_error(502, f"snaptrade request failed: {exc}")
     return {"portal_url": portal, "scope": "read"}
 
 
