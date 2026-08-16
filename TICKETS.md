@@ -129,7 +129,7 @@ Plan: `.tdd-swarm/reports/EPIC2-planner.md` (Revision 2 incorporates the adversa
 | T-060 | 8-K event typing (material-events feed) | done | enrich-A | T-052 | standard |
 | T-061 | Legistar hearing coverage (agendas/minutes) | done | enrich-C | — | standard |
 | T-062 | EDGAR full-text discovery lane | done | enrich-C | T-052 | standard |
-| T-063 | EIA-860M county join | planned | enrich-C | T-059 | cheap |
+| T-063 | EIA-860M county join | done | enrich-C | T-059 | cheap |
 | T-064 | Take Action: evidence-backed letters (Lob) | planned (owner-blocked: keys) | act | T-057 | capable |
-| T-065 | Portfolio lens: holdings x record (SnapTrade read-only) | planned (owner-blocked: keys) | act | T-060 | standard |
-| T-066 | EPA ECHO water permits (county-joined) | planned | enrich-C | T-059 | standard |
+| T-065 | Portfolio lens: holdings x record (SnapTrade read-only) | module done; serve+keys pending | act | T-060 | standard |
+| T-066 | EPA ECHO water permits (county-joined) | done | enrich-C | T-059 | standard |
