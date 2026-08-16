@@ -15,7 +15,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev --no-install-project --frozen
 
-# corpus-v2 deploy artifacts, fetched at build time from the repo's public
+# corpus-v3 deploy artifacts (309,662 docs; T-053 swap 2026-08-15), fetched at build time from the repo's public
 # v2-artifacts release: `railway up`'s upload path caps context size well
 # under the ~2.4GB these weigh (Cloudflare 413), and the embedding store
 # cannot be rebuilt in-container without keys and a ~$1.50 re-bill. Single
@@ -28,12 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # survive a mid-stream reset, and one killed the first deploy attempt
 # (curl exit 56 at ~half of the 799MB embeddings asset). The temp file is
 # removed inside the same RUN, so it never lands in a committed layer.
-RUN mkdir -p artifacts corpus/v2 \
- && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/index-v2.tar.gz \
+RUN mkdir -p artifacts corpus/v3 \
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v3-artifacts/index-v3.tar.gz \
  && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
- && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/embeddings-3large.tar.gz \
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o /tmp/a.tgz https://github.com/worldofhacks/onrecord/releases/download/v3-artifacts/embeddings-3large-v3.tar.gz \
  && tar -xzf /tmp/a.tgz -C artifacts && rm /tmp/a.tgz \
- && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o corpus/v2/corpus.jsonl.gz https://github.com/worldofhacks/onrecord/releases/download/v2-artifacts/corpus-v2.jsonl.gz
+ && curl -fSL --retry 5 --retry-delay 5 --retry-all-errors -C - -o corpus/v3/corpus.jsonl.gz https://github.com/worldofhacks/onrecord/releases/download/v3-artifacts/corpus-v3.jsonl.gz
 
 # Now copy the rest of the repo (onrecord/, ui/, corpus/v1/corpus.jsonl.gz,
 # etc.) and do a final sync to install the project itself.
@@ -57,7 +57,7 @@ EXPOSE 8000
 # Important-1 "deploy-trap" — see README.md's Deploy section), so local
 # runs / the frozen test suite are unaffected; override this at deploy
 # time (Railway env var) to point at a different snapshot if ever needed.
-ENV ONRECORD_CORPUS=corpus/v2/corpus.jsonl.gz
+ENV ONRECORD_CORPUS=corpus/v3/corpus.jsonl.gz
 ENV ONRECORD_INDEX=artifacts/index
 # T-054 embedding upgrade: the image ships the text-embedding-3-large @
 # 3072 store (semantic NDCG@10 0.5505 vs 0.4614 on the honest five-arm
