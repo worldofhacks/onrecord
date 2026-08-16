@@ -130,3 +130,16 @@ The Day-1 estimate was $20–50 for dev; landed inside it.
   **0.98%** (108 dead links; `evalsets/linkhealth-2026-08-14.jsonl`). The
   captions remain in the corpus regardless; a 'source removed' UI
   treatment is the documented follow-up (T-036).
+
+## 8. Corpus-v3 (2026-08-15, T-053 swap)
+
+309,662 docs (+20,126: Legistar 18,337 — a new document type; captions
+delta 1,304; filings 485 incl. 759 FTS-discovered accessions). Judgment
+session 6: 1,037 novel v3 pairs (lexical+semantic arms), gpt-5.6-sol,
+zero parse failures — pool 3,636 → 4,673 rows across six sessions.
+Deployed-scope gate on v3: **PASS — semantic 0.521, hybrid 0.500,
+lexical 0.444**. Numbers are not comparable to §3's v2-pool rows (pool
+and corpus both changed; the honest pairing is same-pool-same-corpus).
+Delta-embed cost $0.39; labeling ≈ $2. Provenance:
+`evalsets/judgment-session-6-provenance.json`, build evidence:
+`artifacts/v3/BUILD-REPORT.json`.
