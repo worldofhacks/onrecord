@@ -1862,3 +1862,35 @@ def test_portfolio_upstream_failure_degrades_not_500(tmp_path, monkeypatch):
     body = resp.json()
     assert body["connected"] is False
     assert body["pending_link"] is True
+
+
+# ==========================================================================
+# AMENDMENT — deploy readiness gate (2026-08-16): /health stays the frozen
+# always-200 liveness contract (T-015); /ready reports whether the index is
+# actually loaded. Railway's healthcheck points at /ready so traffic never
+# cuts over to a booting container — the measured 41s readiness gap
+# ("Application startup complete" while /api/* still 503s) was the source
+# of the post-deploy slow/503 window users hit.
+# ==========================================================================
+
+
+def test_ready_503_while_index_absent(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        client.app.state.index = None
+        resp = client.get("/ready")
+        health = client.get("/health")
+    assert resp.status_code == 503
+    assert "load" in resp.json()["error"].lower()
+    assert health.status_code == 200  # frozen liveness contract unchanged
+
+
+def test_ready_200_with_doc_count_when_loaded(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        resp = client.get("/ready")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ready" and body["documents"] == len(AC1_DOCS)
