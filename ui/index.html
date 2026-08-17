@@ -646,7 +646,7 @@ const NAMES = { VST: 'Vistra Corp.', CEG: 'Constellation Energy', OKLO: 'Oklo In
 //   GET  /api/stats          -> {documents, jurisdictions, tickers, sources, corpus_version} (T-017)
 // ---------------------------------------------------------------------------
 const SEARCH_K = 20, DEBOUNCE_MS = 250, ASK_K = 8, ASK_MODE = 'hybrid', PRICE_RANGE = 365, JUR_PROBE_K = 150;
-const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 120000, SEARCH_HEAVY_TIMEOUT_MS = 30000; // semantic/hybrid search measured 3-8s on prod hardware (full-depth fusion, T-037); 8s aborts wins // SLOW: /api/answer generation measured at 12-19s live (opus-5, hybrid); 120s matches the server-side generator timeout
+const REQ_TIMEOUT_MS = 8000, SLOW_TIMEOUT_MS = 120000, SEARCH_HEAVY_TIMEOUT_MS = 45000; // semantic/hybrid search measured 3-8s on prod hardware (full-depth fusion, T-037); 8s aborts wins // SLOW: /api/answer generation measured at 12-19s live (opus-5, hybrid); 120s matches the server-side generator timeout
 const JUR_PROBE_Q = 'data center county city water power substation zoning';
 
 const SOURCE_LABELS = { county_meeting: 'county meeting', filing: 'SEC filing', docket: 'regulatory docket', earnings_call: 'earnings call' };
@@ -757,10 +757,15 @@ class Component extends DCLogic {
   apiBase() { return String(this.props.apiBase ?? '').replace(/\/+$/, ''); }
   fetchJson(path, opts, timeoutMs, ctl) {
     ctl = ctl || new AbortController();
-    const t = setTimeout(() => ctl.abort(), timeoutMs || REQ_TIMEOUT_MS);
+    // `timedOut` separates OUR abort from a real network failure: both land
+    // in .catch() with status 0, and conflating them made a merely SLOW
+    // semantic/hybrid query paint the whole-app 'engine unreachable' banner
+    // while the engine was answering fine (owner-reported 2026-08-16).
+    let timedOut = false;
+    const t = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs || REQ_TIMEOUT_MS);
     return fetch(this.apiBase() + path, Object.assign({ signal: ctl.signal }, opts || {}))
-      .then(r => { clearTimeout(t); return r.json().catch(() => null).then(body => ({ ok: r.ok, status: r.status, body })); })
-      .catch(() => { clearTimeout(t); return { ok: false, status: 0, body: null }; });
+      .then(r => { clearTimeout(t); return r.json().catch(() => null).then(body => ({ ok: r.ok, status: r.status, body, timedOut: false })); })
+      .catch(() => { clearTimeout(t); return { ok: false, status: 0, body: null, timedOut: timedOut }; });
   }
   _scheduleApiRetry() {
     // Auto-recovery (2026-08-14): a transient failure must never leave a
@@ -865,6 +870,13 @@ class Component extends DCLogic {
       // item 5). A true network outage (status 0) or a lexical-mode failure
       // (the keyless-lexical guarantee means that should always work) is the
       // pre-existing whole-app apiDown signal instead.
+      if (r.timedOut) {
+        // Slow, not down. The engine answered other endpoints this second;
+        // say so plainly and offer the fast lane instead of crying outage.
+        this.setState({ hits: [], searchMs: ms, searching: false,
+          modeErr: titleize(s.fMode) + ' search took longer than ' + Math.round((s.fMode === 'lexical' ? REQ_TIMEOUT_MS : SEARCH_HEAVY_TIMEOUT_MS) / 1000) + 's and was cancelled. The engine is up — this query was slow. Try again, narrow the query, or switch to Lexical.' });
+        return;
+      }
       if (s.fMode !== 'lexical' && r.status !== 0) {
         const msg = r.body && typeof r.body.error === 'string' ? r.body.error : null;
         this.setState({ hits: [], searchMs: ms, searching: false, modeErr: msg || (titleize(s.fMode) + ' search is not provisioned yet.') });
