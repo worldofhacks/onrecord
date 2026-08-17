@@ -984,6 +984,24 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready():  # NOT `async` -- trivial, but keeps the T-024 convention
+    """Deploy readiness, distinct from `/health`'s frozen always-200
+    liveness contract (T-015): 200 only once the index is actually loaded.
+
+    Railway's healthcheck points here so traffic never cuts over to a
+    container that is still booting. Measured 2026-08-16: uvicorn logged
+    'Application startup complete' 41s before /api/* stopped 503ing,
+    because the corpus/index load runs on the async-boot daemon thread —
+    that window is what made post-deploy searches 503 or crawl, which the
+    UI then reported as an unreachable engine.
+    """
+    index = getattr(app.state, "index", None)
+    if index is None:
+        return _flat_error(503, "index is still loading -- not ready for traffic")
+    return {"status": "ready", "documents": index.doc_count()}
+
+
 # --------------------------------------------------------------------------
 # GET /api/search
 # --------------------------------------------------------------------------

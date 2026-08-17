@@ -882,8 +882,14 @@ class Component extends DCLogic {
         this.setState({ hits: [], searchMs: ms, searching: false, modeErr: msg || (titleize(s.fMode) + ' search is not provisioned yet.') });
         return;
       }
-      this.setState({ hits: [], searchMs: ms, searching: false, apiLive: false, apiDown: true, modeErr: null });
-      this._scheduleApiRetry();
+      // The search endpoint is NOT the liveness authority (adversarially
+      // verified 2026-08-16): one unlucky heavy query must never condemn the
+      // whole app. Show a scoped error and DELEGATE the up/down verdict to
+      // loadTickers, the designated probe -- it sets apiDown only if the
+      // engine really is gone, and clears it when it isn't.
+      this.setState({ hits: [], searchMs: ms, searching: false,
+        modeErr: titleize(s.fMode) + ' search could not be completed. Checking the engine...' });
+      this.loadTickers();
     });
   }
   // The jurisdiction pill has no dedicated endpoint; harvest the universe from
