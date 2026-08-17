@@ -39,6 +39,11 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 > Three hundred nine thousand documents. County hearing transcripts, city
 > council agendas, and SEC filings across fifty one jurisdictions.
 
+> The retrieval stack is custom end to end. There is no RAG framework here and
+> no vector database service. I wrote the inverted index, the BM25 scorer, the
+> rank fusion, and the evaluation metrics. Two external services do the two
+> jobs I did not write myself, embeddings and generation.
+
 ---
 
 ## 2. Search and receipts (0:25)
@@ -46,7 +51,11 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Type `how much water does a data center use`. Enter. Lexical is selected.
 
 **Say:**
-> Keyword search over an inverted index I built, with BM25 ranking.
+> Keyword search over a positional inverted index I wrote. Postings hold the
+> document, the term frequency, and the term positions in typed arrays. The
+> BM25 scorer is mine, and a differential test checks it against a reference
+> implementation on every committed query. The k1 and b parameters come from a
+> hundred and twenty one point sweep.
 
 **Do:** Click the receipt link on a county result. The hearing video opens at the timestamp.
 
@@ -57,9 +66,16 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Return to the tab. Click Semantic. Then Hybrid.
 
 **Say:**
-> Same question, three retrieval modes. Semantic uses embeddings. Hybrid fuses
-> both rankings. On a long question semantic returns faster than keyword search,
-> because every extra word is another posting list to merge.
+> Same question, three retrieval modes. Semantic embeds the query with text
+> embedding three large and scores cosine similarity against three hundred
+> thousand vectors held in memory. Hybrid fuses the two rankings with reciprocal
+> rank fusion, bounded so the merge stays fast. On a long question semantic
+> returns faster than keyword search, because every extra word is another
+> posting list to merge.
+
+> Every vector is cached under a hash of the model, the dimension, and the text,
+> so growing the corpus only bills the new documents. The last corpus rebuild
+> added twenty thousand documents for thirty nine cents.
 
 ---
 
@@ -98,7 +114,10 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Ask tab. Type `What water commitments have data center operators made in county hearings?` Enter. Wait about 13 seconds.
 
 **Say while it runs:**
-> This retrieves first, then writes an answer that cites what it used.
+> This retrieves first, then writes an answer that cites what it used. The
+> retrieval, the prompt assembly, and the citation checking are all mine. The
+> generator is Claude. The judge that scores it is a different model family on
+> purpose, so nothing grades its own work.
 
 **Do:** Answer appears with numbered citations.
 
@@ -125,8 +144,14 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 
 **Say:**
 > Four thousand six hundred judgments across a hundred queries, six labeling
-> sessions. Each row is scored against its own corpus and judgment pool, so the
-> rows are read one at a time.
+> sessions. Precision, recall, MRR, and NDCG are implemented from scratch and
+> pinned by tests. Each row is scored against its own corpus and judgment pool,
+> so the rows are read one at a time.
+
+> One of those rows dropped when I upgraded the embeddings. The new model was
+> finding documents nobody had labeled yet, and unlabeled counts as wrong. I
+> labeled its results and the score went up nineteen percent. That is the whole
+> reason the pool grew six times.
 
 ---
 
