@@ -367,7 +367,7 @@ input::placeholder{color:#B5B0A1}
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;color:#8A8574">YOUR HOLDINGS ON THE RECORD</span>
         <sc-if value="{{ pfConnected }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32;background:#E4F3E9;border-radius:99px;padding:2px 9px">CONNECTED · READ-ONLY</span></sc-if>
-        <sc-if value="{{ pfNotConnected }}" hint-placeholder-val="{{ true }}"><button onClick="{{ onConnect }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1.5px solid #16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">connect your brokerage · read-only ↗</button></sc-if>
+        <sc-if value="{{ pfNotConnected }}" hint-placeholder-val="{{ true }}"><button onClick="{{ onConnect }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1.5px solid #16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">{{ pfConnectLabel }}</button></sc-if>
       </div>
       <sc-for list="{{ pfRows }}" as="pf" hint-placeholder-count="0">
         <div style="display:flex;gap:14px;align-items:baseline;padding:8px 0;border-top:1px solid #F6F5EF;font-size:13px;flex-wrap:wrap;cursor:pointer" onClick="{{ pf.onOpen }}">
@@ -376,7 +376,9 @@ input::placeholder{color:#B5B0A1}
           <span style="color:#3F3D36;font-size:12px">{{ pf.facts }}</span>
         </div>
       </sc-for>
-      <p style="margin:10px 0 0;font-size:10.5px;color:#B5B0A1">Facts about what you hold, from the record — never a recommendation. Connected read-only via SnapTrade; disconnect anytime in the portal.</p>
+      <sc-if value="{{ pfHasPortal }}" hint-placeholder-val="{{ false }}"><p style="margin:8px 0 0;font-size:11.5px"><a href="{{ pfPortalUrl }}" target="_blank" rel="noopener" style="color:#0A7A43;text-decoration:underline">open the secure portal ↗</a> <span style="color:#8A8574">(your browser blocked the popup)</span></p></sc-if>
+        <sc-if value="{{ pfHasError }}" hint-placeholder-val="{{ false }}"><p style="margin:8px 0 0;font-size:11.5px;color:#B8432C">{{ pfError }}</p></sc-if>
+        <p style="margin:10px 0 0;font-size:10.5px;color:#B5B0A1">Facts about what you hold, from the record — never a recommendation. Connected read-only via SnapTrade; disconnect anytime in the portal.</p>
     </div>
   </div>
   <div style="{{ padXBlock }}">
@@ -923,10 +925,31 @@ class Component extends DCLogic {
     });
   }
   connectBrokerage() {
+    // The tab MUST be opened synchronously inside the click, before the
+    // fetch: a window.open() that runs after an await has lost the user
+    // gesture and browsers block it silently, which made this button look
+    // dead on production (2026-08-17). We open a placeholder now and point
+    // it at the portal when the URL arrives. If the popup was blocked
+    // anyway, fall back to rendering a real link the user can click, and
+    // never swallow the error.
+    const tab = window.open('', '_blank');
+    this.setState({ pfError: null, pfPending: true, pfPortalUrl: null });
     fetch((this.props.apiBase || '') + '/api/portfolio/connect', { method: 'POST' })
-      .then(r => r.json()).then(b => {
-        if (b.portal_url) { window.open(b.portal_url, '_blank', 'noopener'); setTimeout(() => this.loadPortfolio(), 60000); }
-      }).catch(() => {});
+      .then(r => r.json().then(b => ({ ok: r.ok, b })))
+      .then(({ ok, b }) => {
+        if (ok && b.portal_url) {
+          if (tab && !tab.closed) { tab.location.href = b.portal_url; this.setState({ pfPending: false }); }
+          else this.setState({ pfPending: false, pfPortalUrl: b.portal_url });
+          setTimeout(() => this.loadPortfolio(), 45000);
+          return;
+        }
+        if (tab && !tab.closed) tab.close();
+        this.setState({ pfPending: false, pfError: (b && b.error) || 'Could not start the brokerage connection.' });
+      })
+      .catch(() => {
+        if (tab && !tab.closed) tab.close();
+        this.setState({ pfPending: false, pfError: 'Could not reach the connect endpoint.' });
+      });
   }
   loadEvents(sym) {
     this.setState({ events: null });
@@ -1367,6 +1390,10 @@ class Component extends DCLogic {
       // T-065 portfolio lens — facts about what you hold; never advice.
       pfConnected: !!(s.portfolio && s.portfolio.connected),
       pfNotConnected: !(s.portfolio && s.portfolio.connected),
+      pfPending: !!s.pfPending,
+      pfHasError: !!s.pfError, pfError: s.pfError || '',
+      pfHasPortal: !!s.pfPortalUrl, pfPortalUrl: s.pfPortalUrl || '#',
+      pfConnectLabel: s.pfPending ? 'opening the secure portal...' : 'connect your brokerage · read-only ↗',
       pfAvailable: !!s.portfolio,
       pfRows: (s.portfolio && s.portfolio.positions ? s.portfolio.positions : []).map(p => {
         const r = p.record || {};
