@@ -41,8 +41,9 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 
 > The retrieval stack is custom end to end. There is no RAG framework here and
 > no vector database service. I wrote the inverted index, the BM25 scorer, the
-> rank fusion, and the evaluation metrics. Two external services do the two
-> jobs I did not write myself, embeddings and generation.
+> rank fusion, and the evaluation metrics. Two outside models do the two jobs I
+> did not write myself. OpenAI text embedding three large builds the vectors,
+> and Claude Opus writes the answers.
 
 ---
 
@@ -66,16 +67,15 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Return to the tab. Click Semantic. Then Hybrid.
 
 **Say:**
-> Same question, three retrieval modes. Semantic embeds the query with text
-> embedding three large and scores cosine similarity against three hundred
-> thousand vectors held in memory. Hybrid fuses the two rankings with reciprocal
-> rank fusion, bounded so the merge stays fast. On a long question semantic
-> returns faster than keyword search, because every extra word is another
-> posting list to merge.
+> Same question, three retrieval modes. Semantic embeds the query with OpenAI
+> text embedding three large at three thousand seventy two dimensions, then
+> scores cosine similarity against three hundred thousand vectors held in
+> memory. Hybrid fuses the two rankings with reciprocal rank fusion, bounded so
+> the merge stays fast. On a long question semantic returns faster than keyword
+> search, because every extra word is another posting list to merge.
 
-> Every vector is cached under a hash of the model, the dimension, and the text,
-> so growing the corpus only bills the new documents. The last corpus rebuild
-> added twenty thousand documents for thirty nine cents.
+> Every vector is cached under a hash of the model, the dimension, and the text.
+> Growing the corpus only re-embeds the documents that are actually new.
 
 ---
 
@@ -158,19 +158,19 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 ## 6. Close (3:30)
 
 **Say:**
-> Fourteen hundred tests. Thirty three dollars of API spend. Dead source links
-> measured at one percent and published.
+> Fourteen hundred tests behind it. Dead source links measured at one percent
+> and published on the page.
 
 **Say:**
-> Two things it deliberately will not do. It gives no trading advice or signals.
-> It mails nothing to an elected official without an explicit confirmation.
+> All of this is public record already. The work was making it searchable and
+> keeping every claim attached to the moment someone said it.
 
 ---
 
 ## Short version, 90 seconds
 
 Beats 1, 3, and 6. Open on Search with one query and one receipt, spend the
-middle on the Ledger, close on the tests, the cost, and the two limits.
+middle on the Ledger, close on the tests and the measured link rot.
 
 ## If something is slow on camera
 
