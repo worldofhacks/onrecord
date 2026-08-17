@@ -367,7 +367,7 @@ input::placeholder{color:#B5B0A1}
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;color:#8A8574">YOUR HOLDINGS ON THE RECORD</span>
         <sc-if value="{{ pfConnected }}" hint-placeholder-val="{{ false }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#075C32;background:#E4F3E9;border-radius:99px;padding:2px 9px">CONNECTED · READ-ONLY</span></sc-if>
-        <sc-if value="{{ pfConnected }}" hint-placeholder-val="{{ true }}"><button onClick="{{ onConnect }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1.5px solid #16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">connect your brokerage · read-only ↗</button></sc-if>
+        <sc-if value="{{ pfNotConnected }}" hint-placeholder-val="{{ true }}"><button onClick="{{ onConnect }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:11px;border:1.5px solid #16150F;border-radius:99px;padding:5px 13px" style-hover="background:#16150F;color:#FAFAF7">connect your brokerage · read-only ↗</button></sc-if>
       </div>
       <sc-for list="{{ pfRows }}" as="pf" hint-placeholder-count="0">
         <div style="display:flex;gap:14px;align-items:baseline;padding:8px 0;border-top:1px solid #F6F5EF;font-size:13px;flex-wrap:wrap;cursor:pointer" onClick="{{ pf.onOpen }}">
@@ -1366,6 +1366,7 @@ class Component extends DCLogic {
       hasLedgerStats: !!(s.proms || s.promised || s.outcomesSum || s.grid),
       // T-065 portfolio lens — facts about what you hold; never advice.
       pfConnected: !!(s.portfolio && s.portfolio.connected),
+      pfNotConnected: !(s.portfolio && s.portfolio.connected),
       pfAvailable: !!s.portfolio,
       pfRows: (s.portfolio && s.portfolio.positions ? s.portfolio.positions : []).map(p => {
         const r = p.record || {};
