@@ -65,6 +65,8 @@ _BASE_URL = "https://api.snaptrade.com"
 CLIENT_ID_ENV = "SNAPTRADE_CLIENT_ID"
 CONSUMER_KEY_ENV = "SNAPTRADE_CONSUMER_KEY"
 STATE_ENV = "ONRECORD_SNAPTRADE_STATE"
+USER_ENV = "ONRECORD_SNAPTRADE_USER"
+USER_SECRET_ENV = "ONRECORD_SNAPTRADE_USER_SECRET"
 DEFAULT_STATE_PATH = "artifacts/snaptrade_user.json"
 
 _LIBRARY_LOGGER_NAMES = ("httpx", "httpcore")
@@ -372,9 +374,20 @@ def save_connection(path: str | Path | None, user_id: str, user_secret: str) -> 
 
 
 def load_connection(path: str | Path | None = None) -> dict | None:
-    """Read the saved connection ({user_id, user_secret}); None when the
-    file does not exist (not connected yet). path=None resolves via
-    `state_path()`."""
+    """The single connection's {user_id, user_secret}, or None.
+
+    ONRECORD_SNAPTRADE_USER + ONRECORD_SNAPTRADE_USER_SECRET win when BOTH
+    are set, because the state file lives on the container's ephemeral disk
+    and does not survive a redeploy. Losing it is unrecoverable: SnapTrade
+    returns the userSecret exactly once, and re-registering the same userId
+    fails with HTTP 400, which is what killed the connect button on
+    production (2026-08-17). Env is the durable home for a
+    single-connection deployment; the file remains the local-dev path.
+    """
+    env_user = os.environ.get(USER_ENV, "")
+    env_secret = os.environ.get(USER_SECRET_ENV, "")
+    if env_user.strip() and env_secret.strip():
+        return {"user_id": env_user.strip(), "user_secret": env_secret.strip()}
     target = Path(path) if path is not None else state_path()
     if not target.exists():
         return None

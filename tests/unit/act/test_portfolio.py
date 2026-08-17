@@ -531,3 +531,42 @@ def test_credentials_from_env_names_missing_vars_without_values(monkeypatch):
     message = str(excinfo.value)
     assert "SNAPTRADE_CLIENT_ID" in message
     assert CONSUMER_KEY not in message
+
+
+def _attr_mod():
+    from onrecord.act import portfolio as _p
+    return _p
+
+
+# ==========================================================================
+# AMENDMENT — durable connection state (2026-08-17): the JSON state file
+# lives on the container's ephemeral disk, so every redeploy lost the
+# userSecret; re-registering the same userId then fails with SnapTrade
+# HTTP 400 ("user already exists") and the secret is unrecoverable, which
+# left the connect button dead on production. `load_connection` now
+# prefers ONRECORD_SNAPTRADE_USER + ONRECORD_SNAPTRADE_USER_SECRET, which
+# survive deploys.
+# ==========================================================================
+
+
+def test_load_connection_prefers_env_over_file(tmp_path, monkeypatch):
+    import json as _json
+    mod = _attr_mod()
+    state = tmp_path / "snap.json"
+    state.write_text(_json.dumps({"user_id": "from-file", "user_secret": "file-secret"}))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_STATE", str(state))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_USER", "from-env")
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_USER_SECRET", "env-secret")
+    got = mod.load_connection(state)
+    assert got == {"user_id": "from-env", "user_secret": "env-secret"}
+
+
+def test_load_connection_falls_back_to_file_when_env_incomplete(tmp_path, monkeypatch):
+    import json as _json
+    mod = _attr_mod()
+    state = tmp_path / "snap.json"
+    state.write_text(_json.dumps({"user_id": "from-file", "user_secret": "file-secret"}))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_USER", "from-env")
+    monkeypatch.delenv("ONRECORD_SNAPTRADE_USER_SECRET", raising=False)
+    got = mod.load_connection(state)
+    assert got == {"user_id": "from-file", "user_secret": "file-secret"}
