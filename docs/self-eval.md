@@ -12,8 +12,8 @@ in §4. Reproduce the harness with one command: `make harness`.*
 | Demo video (3–5 min) | 🟡 owner recording | script prepared; platform verified demo-ready |
 | Pre-Search document | ✅ | `docs/presearch.md` + full transcript `docs/presearch-transcript.md` (re-exported from the original session) |
 | AI Development Log | ✅ | `docs/AI-LOG.md` — all 7 template sections + final-week addendum (11 oracle-catch entries) |
-| AI Cost Analysis | ✅ | `docs/cost-analysis.md` — measured spend (~$35–40) + 100/1K/10K/100K projections with stated assumptions |
-| Evaluation harness, one command | ✅ | `make harness`: 1,240 tests (incl. 31 differential, 89 property/robustness) + IR scoreboard + deployed-scope gate |
+| AI Cost Analysis | ✅ | `docs/cost-analysis.md` — measured spend (≈$33, itemized) + 100/1K/10K/100K projections with stated assumptions |
+| Evaluation harness, one command | ✅ | `make harness`: 1,472 tests (incl. 31 differential, 89 property/robustness) + IR scoreboard + deployed-scope gate |
 | Metrics report | ✅ | `docs/metrics.md` (consolidated) + README tables — reproducible commands inline |
 | Self-eval report | ✅ | this document |
 | RAG pipeline (QA set + faithfulness/relevancy/refusal scripts, reported numbers) | ✅ | `evalsets/qa.jsonl` + `unanswerable.jsonl`; `scripts/judged_eval.py`; numbers below |
@@ -26,7 +26,7 @@ in §4. Reproduce the harness with one command: `make harness`.*
 
 | Rubric line | Requirement | Delivered |
 |---|---|---|
-| Judgment set | ≥15 queries | **100 queries / 2,246 blind pooled judgments**, 4 sessions, provenance sidecars |
+| Judgment set | ≥15 queries | **100 queries / 4,673 blind pooled judgments**, 6 sessions, provenance sidecars |
 | IR metrics | P@k, R@k, MRR, NDCG | full harness + 8-row committed history; honest pooling-bias story documented |
 | BM25 + defended k1/b | required | 121-cell sweep artifact; plateau; kept 1.5/0.75 |
 | Differential | match reference within tolerance | 31 frozen tests vs `rank_bm25`, identical token stream — green |
@@ -56,7 +56,7 @@ CI, 26 merged PRs across 5 days.
 
 ## 3. Harness pass rates
 
-- Test suite: **1,240 / 1,240** (unit + integration + property + robustness + differential), `make test`
+- Test suite: **1,472 / 1,472** (unit + integration + property + robustness + differential), `make test`
 - Differential: 31/31 · Property/robustness: 89/89
 - IR gate (deployed scope): **PASS** · legacy lexical gate: red, documented
 - Judged eval: faithfulness 0.930 · refusal 1.00 · false-refusal 0.00

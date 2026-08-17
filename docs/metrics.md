@@ -11,6 +11,7 @@ in the project, the measured replacement and the delta are both shown.*
 |---|---|---|---|---|
 | v1 (MVP, 2026-08-11) | 24,115 | 28 | 958 filings + 23,157 meeting segments | `corpus/v1/corpus.jsonl.gz` (tracked) |
 | v2 (Early, 2026-08-13) | **289,536** | **51** | 958 filings + 288,578 meeting segments | `v2-artifacts` release asset, sha256 in `corpus/v2/manifest.json` |
+| v3 (Final, 2026-08-15, **deployed**) | **309,662** | **51** | 1,443 filings + 289,882 meeting segments + **18,337 Legistar** | `v3-artifacts` release asset, sha256 in `corpus/v3/manifest.json` |
 
 ## 2. The judgment set — and what it taught us
 
@@ -40,6 +41,8 @@ bit-identical) and judged its 886 previously-unseen pairs. The repaired
 numbers reordered the leaderboard (below).
 
 ## 3. Retrieval
+
+*The table below was measured on **corpus-v2** against the four-arm pool. The deployed corpus-v3 numbers, measured against the six-session pool, are in section 8; readings from different corpus/pool pairs are not comparable.*
 
 | Configuration (corpus-v2) | P@5 | P@10 | R@10 | R@50 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
@@ -105,15 +108,21 @@ numbers reordered the leaderboard (below).
   quotes enforced verbatim in code — 14 model outputs (0.9%) dropped for
   violating the substring pin (`evalsets/promises.jsonl` +
   `promises-provenance.json`). Measured spend ≈ $11.25.
-- **Dodge Index**: 43 jurisdictions scored deterministically (frozen
-  lexicon, per-1,000-docs rate, min 200 docs), full corpus scan 2.5s.
+- **Dodge Index**: **45** jurisdictions scored deterministically on
+  corpus-v3 (frozen lexicon, per-1,000-docs rate, min 200 docs); the 43
+  figure above this line's revision was measured on corpus-v2, and the
+  larger corpus lifted two more jurisdictions over the 200-doc floor.
+- **8-K material events** (T-060): 1,169 typed filing docs across the
+  complete Reg-S-K item taxonomy; unknown item codes fail the build
+  loudly rather than dropping rows.
 
 ## 6. Costs
 
-Measured, not estimated — see `docs/cost-analysis.md`. Total external AI
-spend through the final checkpoint ≈ **$35–40** (embedding $1.47; labeling
-sessions ≈ $4; promise extraction $11.25; answers/judging/evals the rest).
-The Day-1 estimate was $20–50 for dev; landed inside it.
+Measured, not estimated — the itemized authority is
+`docs/cost-analysis.md`. Total external AI spend through final submission
+≈ **$33**: embeddings ≈$11.4 (3-small $1.47, 3-large upgrade $9.50, v3 delta
+$0.39), promise extraction $11.25, six labeling sessions ≈$9, answers and
+judging under $1. The Day-1 estimate was $20–50 for development; it held.
 
 ## 7. Honest limits
 
@@ -126,6 +135,12 @@ The Day-1 estimate was $20–50 for dev; landed inside it.
 - Verbatim promise quotes inherit caption dysfluencies ("the the the
   bonds…") — by design: the ledger quotes what the record says, exactly.
 - Prices are daily closes (stooq/yahoo keyless chain).
+- Answer citations point at the correct chunk with a working deep link, but
+  the previewed `snippet` is the chunk's first 160 characters rather than the
+  passage supporting the claim, so a preview can read as off-topic even when
+  the receipt is right. Found in the final-submission audit; deferred rather
+  than patched under deadline because the derivation is a frozen pin
+  (`tickets/T-067.md`).
 - Receipt link-rot, measured by full census (11,004 videos, 2026-08-14):
   **0.98%** (108 dead links; `evalsets/linkhealth-2026-08-14.jsonl`). The
   captions remain in the corpus regardless; a 'source removed' UI

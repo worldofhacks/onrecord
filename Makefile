@@ -33,7 +33,7 @@ gate:
 # swap itself (corpus-v3) is a documented runbook in tickets/T-053.md and
 # runs only on owner go (it invalidates the demo-verified state).
 refresh-live:
-	uv run python -c "import json; from onrecord.ingest.build_corpus import load_corpus_snapshot; from onrecord.ingest.livestreams import track; from datetime import datetime, UTC; alive = {json.loads(l)['video_id'] for l in open('evalsets/linkhealth-2026-08-14.jsonl') if json.loads(l)['status']=='alive'}; track(load_corpus_snapshot('corpus/v2/corpus.jsonl.gz'), alive, checked_at=datetime.now(UTC).isoformat(timespec='minutes'))"
+	uv run python -c "import json, os; from onrecord.ingest.build_corpus import load_corpus_snapshot; from onrecord.ingest.livestreams import track; from datetime import datetime, UTC; alive = {json.loads(l)['video_id'] for l in open('evalsets/linkhealth-2026-08-14.jsonl') if json.loads(l)['status']=='alive'}; track(load_corpus_snapshot(os.environ.get('ONRECORD_CORPUS','corpus/v3/corpus.jsonl.gz')), alive, checked_at=datetime.now(UTC).isoformat(timespec='minutes'))"
 
 refresh-form4:
 	uv run python -c "from onrecord import registry; from onrecord.ingest.form4 import pull_form4; pull_form4([t['symbol'] for t in registry.load()['tickers']])"
