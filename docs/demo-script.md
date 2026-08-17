@@ -52,11 +52,11 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Type `how much water does a data center use`. Enter. Lexical is selected.
 
 **Say:**
-> Keyword search over a positional inverted index I wrote. Postings hold the
-> document, the term frequency, and the term positions in typed arrays. The
-> BM25 scorer is mine, and a differential test checks it against a reference
-> implementation on every committed query. The k1 and b parameters come from a
-> hundred and twenty one point sweep.
+> This is keyword search over an inverted index I wrote from scratch. For every
+> term it keeps the documents it appears in, how often, and where in the text.
+> The BM25 ranking is mine as well, and the test suite checks it against a
+> reference implementation on every query. The tuning came out of a hundred and
+> twenty one point sweep instead of the library defaults.
 
 **Do:** Click the receipt link on a county result. The hearing video opens at the timestamp.
 
@@ -67,15 +67,16 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Return to the tab. Click Semantic. Then Hybrid.
 
 **Say:**
-> Same question, three retrieval modes. Semantic embeds the query with OpenAI
-> text embedding three large at three thousand seventy two dimensions, then
-> scores cosine similarity against three hundred thousand vectors held in
-> memory. Hybrid fuses the two rankings with reciprocal rank fusion, bounded so
-> the merge stays fast. On a long question semantic returns faster than keyword
-> search, because every extra word is another posting list to merge.
+> Same question, three different retrieval modes. Semantic turns the query into
+> a vector using OpenAI's text embedding three large model, then compares it
+> against three hundred thousand document vectors held in memory. Hybrid takes
+> both rankings and merges them by rank position.
 
-> Every vector is cached under a hash of the model, the dimension, and the text.
-> Growing the corpus only re-embeds the documents that are actually new.
+> Watch the timing here. On a long question like this one, semantic comes back
+> faster than keyword search, because every extra word gives the keyword engine
+> another posting list to merge. Vectors are cached by a hash of the model, the
+> dimensions, and the text itself, so when the corpus grows only the genuinely
+> new documents get embedded again.
 
 ---
 
@@ -114,10 +115,10 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 **Do:** Ask tab. Type `What water commitments have data center operators made in county hearings?` Enter. Wait about 13 seconds.
 
 **Say while it runs:**
-> This retrieves first, then writes an answer that cites what it used. The
-> retrieval, the prompt assembly, and the citation checking are all mine. The
-> generator is Claude. The judge that scores it is a different model family on
-> purpose, so nothing grades its own work.
+> It retrieves first, then writes an answer that cites what it used. The
+> retrieval, the prompt assembly, and the citation checking are all mine, Claude
+> writes the prose, and the judge that scores the result comes from a different
+> model family on purpose, so nothing grades its own work.
 
 **Do:** Answer appears with numbered citations.
 
@@ -148,10 +149,11 @@ Timings to expect: lexical 0.6s on one word and 7s on a long question, semantic
 > pinned by tests. Each row is scored against its own corpus and judgment pool,
 > so the rows are read one at a time.
 
-> One of those rows dropped when I upgraded the embeddings. The new model was
-> finding documents nobody had labeled yet, and unlabeled counts as wrong. I
-> labeled its results and the score went up nineteen percent. That is the whole
-> reason the pool grew six times.
+> One of those rows actually dropped when I upgraded the embedding model. The
+> better model was surfacing documents nobody had labeled yet, and anything
+> unlabeled scores as wrong, so a genuine improvement showed up as a
+> regression. Once I labeled what it found, the score came back nineteen
+> percent higher. That is why the judgment pool grew six times over.
 
 ---
 
