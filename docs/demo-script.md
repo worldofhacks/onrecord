@@ -62,9 +62,19 @@ curl -s -X POST "$B/api/answer" -H 'content-type: application/json' \
   -d '{"question":"What will Nvidia stock be worth in 2027?"}' -o /dev/null
 ```
 
-Expected warm timings, measured today: lexical about 2 seconds, semantic about
-4 to 5 seconds, hybrid about 5 to 6 seconds, a grounded answer about 13
-seconds, a refusal about 4 seconds.
+Expected warm timings, measured today. Lexical speed depends on how BROAD the
+query is, because every extra term is another posting list to merge across
+309,662 documents:
+
+| Query | lexical | semantic | hybrid |
+|---|---|---|---|
+| "water" (one term) | 0.6s | ~4.5s | ~5s |
+| "how much water does a data center use" (the opening query) | **7.2s** | 4.5s | 5.5s |
+
+On the opening query semantic is FASTER than lexical. That is worth saying out
+loud if you notice it on camera, and it is a true thing about term-matching
+over a large corpus. A grounded answer takes about 13 seconds, a refusal about
+4 seconds.
 
 ### Step 3: open the tab and click through once
 
@@ -139,7 +149,8 @@ retype the query.
 > "Three retrieval modes, all live. Lexical is my own inverted index with BM25
 > scoring, written from scratch. Semantic is dense vector retrieval over the
 > whole corpus. Hybrid fuses the two with reciprocal rank fusion. Lexical comes
-> back in about two seconds. Semantic and hybrid take four to six. That is the
+> back in well under a second on a single term, though a long question makes it
+> merge more of the index. Semantic and hybrid take four to six. That is the
 > real cost of vector search at this scale, and I am showing it to you rather
 > than hiding it."
 
