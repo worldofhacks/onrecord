@@ -1829,3 +1829,36 @@ def test_refresh_live_once_updates_state(tmp_path, monkeypatch):
         assert client.app.state.livestreams["checked_at"] == "2026-08-16T12:00Z"
         resp = client.get("/api/live")
     assert resp.status_code == 200 and resp.json()["upcoming"][0]["jurisdiction"] == "X"
+
+
+# ==========================================================================
+# AMENDMENT — /api/portfolio upstream-failure hygiene (2026-08-16): a
+# registered SnapTrade user with NO brokerage linked yet made holdings()
+# raise, and the handler had no guard -> bare HTTP 500 on every page load
+# (observed on prod). The endpoint must degrade to an honest
+# not-linked-yet payload; only a configuration gap 503s.
+# ==========================================================================
+
+
+def test_portfolio_upstream_failure_degrades_not_500(tmp_path, monkeypatch):
+    import json as _json
+
+    import httpx as _httpx
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "ck-test-secret")
+    state = tmp_path / "snap.json"
+    state.write_text(_json.dumps({"user_id": "onrecord", "user_secret": "us-secret"}))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_STATE", str(state))
+
+    def handler(request):  # upstream rejects: user registered, no brokerage linked
+        return _httpx.Response(500, json={"detail": "no accounts"})
+
+    with _client(api_module, monkeypatch, index_dir) as client:
+        client.app.state.snaptrade_transport = _httpx.MockTransport(handler)
+        resp = client.get("/api/portfolio")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is False
+    assert body["pending_link"] is True

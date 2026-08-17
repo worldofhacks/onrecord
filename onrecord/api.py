@@ -1605,10 +1605,17 @@ def portfolio_view():  # NOT `async` -- threadpool; strictly factual join
     if connection is None:
         return {"connected": False}
     transport = getattr(app.state, "snaptrade_transport", None)
-    positions = _portfolio.holdings(
-        client_id, consumer_key, connection["user_id"], connection["user_secret"],
-        transport=transport,
-    )
+    try:
+        positions = _portfolio.holdings(
+            client_id, consumer_key, connection["user_id"], connection["user_secret"],
+            transport=transport,
+        )
+    except _portfolio.SnapTradeRequestError:
+        # Registered but no brokerage linked yet (the usual case between
+        # /connect and the user finishing the portal), or an upstream blip.
+        # This runs on EVERY page load — it must never be a 500.
+        logger.info("snaptrade holdings unavailable; reporting pending link")
+        return {"connected": False, "pending_link": True}
     from onrecord.analysis import conduct as conduct_mod
 
     held = {p["symbol"] for p in positions if p.get("symbol")}
