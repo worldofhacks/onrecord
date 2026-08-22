@@ -1,8 +1,15 @@
 {
-  "checked_at": "2026-08-16T07:31+00:00",
+  "checked_at": "2026-08-22T11:11+00:00",
   "jurisdictions_resolved": 51,
   "live": [],
   "upcoming": [
+    {
+      "jurisdiction": "Altoona, IA",
+      "video_id": "PzA2Bclq3O8",
+      "title": "8-24-26 City Council",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=PzA2Bclq3O8"
+    },
     {
       "jurisdiction": "Columbus, OH",
       "video_id": "CGDCaENUb8c",
@@ -30,48 +37,6 @@
       "title": "Special Meeting: Downtown Commission (08/25/26)",
       "status": "is_upcoming",
       "url": "https://www.youtube.com/watch?v=sZssvd87Ric"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "wc6ls_VjMIk",
-      "title": "Special Meeting: Rocky Fork-Blacklick Accord Advisory Panel (08/20/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=wc6ls_VjMIk"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "h8TyFnJhWHU",
-      "title": "Special Meeting: Historic Resources Commission (08/20/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=h8TyFnJhWHU"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "iw5XKKVHQco",
-      "title": "Special Meeting: Art Commission (08/19/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=iw5XKKVHQco"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "vL-vS0BHHHc",
-      "title": "Special Meeting: Skilled Trades Review Board (08/19/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=vL-vS0BHHHc"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "0sVNe4nq3-Q",
-      "title": "Special Meeting: Graphics Commission (08/18/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=0sVNe4nq3-Q"
-    },
-    {
-      "jurisdiction": "Columbus, OH",
-      "video_id": "sUBtLwHfoTg",
-      "title": "Special Meeting: Building Commission (08/18/26)",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=sUBtLwHfoTg"
     },
     {
       "jurisdiction": "Louisa County, VA",
@@ -145,10 +110,10 @@
     },
     {
       "jurisdiction": "Madison County, MS",
-      "video_id": "4ICNffBaHj0",
-      "title": "August 17, 2026 Board of Supervisors Meeting",
+      "video_id": "9BAMgQ7YJnE",
+      "title": "September 8, 2026 Board of Supervisors Meeting",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=4ICNffBaHj0"
+      "url": "https://www.youtube.com/watch?v=9BAMgQ7YJnE"
     },
     {
       "jurisdiction": "Maricopa County, AZ",
@@ -172,25 +137,18 @@
       "url": "https://www.youtube.com/watch?v=5dX9xuIyDNA"
     },
     {
-      "jurisdiction": "Maricopa County, AZ",
-      "video_id": "XdSqytirWwM",
-      "title": "2026-08-17 Stadium District Board Meeting",
+      "jurisdiction": "Sarpy County, NE",
+      "video_id": "oHYZcYV3uW0",
+      "title": "Board Meetings - Aug 25 2026 Budget",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=XdSqytirWwM"
+      "url": "https://www.youtube.com/watch?v=oHYZcYV3uW0"
     },
     {
-      "jurisdiction": "Memphis, TN",
-      "video_id": "PpsrhJP-7Sw",
-      "title": "Memphis City Council: August 18, 2026",
+      "jurisdiction": "Temple, TX",
+      "video_id": "i4H4zCVBbY4",
+      "title": "City of Temple - Special Called City Council Meeting",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=PpsrhJP-7Sw"
-    },
-    {
-      "jurisdiction": "Memphis, TN",
-      "video_id": "jdkdnHtoFaQ",
-      "title": "Memphis City Council Committee Meetings: August 18, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=jdkdnHtoFaQ"
+      "url": "https://www.youtube.com/watch?v=i4H4zCVBbY4"
     }
   ],
   "channels": {
