@@ -30,6 +30,19 @@ def _entry_close(series: list[dict], date: str) -> float | None:
     return float(series[idx]["close"])
 
 
+def filter_to_universe(docs: list[Doc], universe: set[str]) -> list[Doc]:
+    """Keep only docs attributed to a ticker in `universe`.
+
+    Corpus-v3's full-text filing discovery attributed docs to ~190 tickers
+    outside the curated registry. Those microcaps then led the leaderboard
+    while being invisible in the Tickers view, and they are where
+    corporate-action noise concentrates (2026-09-11 audit: 46 of 82 board
+    tickers uncurated; 4 of the 5 false returns among them). The board must
+    be a subset of the universe the product shows.
+    """
+    return [doc for doc in docs if doc.ticker and doc.ticker in universe]
+
+
 def mention_rows(
     docs: list[Doc],
     series_by_ticker: dict[str, list[dict]],

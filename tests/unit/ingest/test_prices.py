@@ -1305,3 +1305,97 @@ def test_fetch_eod_falls_through_nonjson_yahoo_body_to_stooq(tmp_path, monkeypat
     )
     assert calls["query1.finance.yahoo.com"] >= 1
     assert calls["stooq.com"] >= 1, "stooq must be attempted after a yahoo parse failure"
+
+
+# ==========================================================================
+# AMENDMENT — split adjustment (2026-09-11): a mention-anchored return
+# computed across a corporate action without adjustment is false data.
+# Observed on prod: CSAI 1:30 reverse split on 2026-07-31; the series held
+# the PRE-split raw close for the mention date (0.30) and a post-split
+# latest (5.71) -> "+1816%" on a stock that was actually down ~50%. Yahoo
+# lags its own adjustments on microcaps, so we request split events and
+# detect the discontinuity ourselves. parse shape is unchanged.
+# ==========================================================================
+
+
+def _payload_with_splits(dates_closes, splits):
+    from datetime import datetime as _dt
+    ts = [int(_dt.fromisoformat(d + "T14:30:00+00:00").timestamp()) for d, _ in dates_closes]
+    ev = {}
+    for d, num, den in splits:
+        t = int(_dt.fromisoformat(d + "T13:30:00+00:00").timestamp())
+        ev[str(t)] = {"date": t, "numerator": num, "denominator": den,
+                      "splitRatio": f"{num}:{den}"}
+    payload = {"chart": {"result": [{
+        "meta": {"symbol": "X"},
+        "timestamp": ts,
+        "indicators": {"quote": [{"close": [c for _, c in dates_closes]}]},
+    }], "error": None}}
+    if ev:
+        payload["chart"]["result"][0]["events"] = {"splits": ev}
+    return payload
+
+
+def test_adjust_for_splits_unadjusted_reverse_split_is_lifted():
+    adjust = _callable_or_fail("adjust_for_splits")
+    series = [{"date": "2026-07-29", "close": 0.30}, {"date": "2026-07-30", "close": 0.31},
+              {"date": "2026-07-31", "close": 9.10}, {"date": "2026-08-03", "close": 8.80}]
+    out = adjust(series, [{"date": "2026-07-31", "numerator": 1, "denominator": 30}])
+    assert [r["close"] for r in out] == [9.0, 9.3, 9.10, 8.80]
+    assert [r["close"] for r in series] == [0.30, 0.31, 9.10, 8.80]  # input untouched
+
+
+def test_adjust_for_splits_already_adjusted_series_is_left_alone():
+    adjust = _callable_or_fail("adjust_for_splits")
+    series = [{"date": "2026-07-29", "close": 8.94}, {"date": "2026-07-30", "close": 9.05},
+              {"date": "2026-07-31", "close": 9.10}, {"date": "2026-08-03", "close": 8.80}]
+    out = adjust(series, [{"date": "2026-07-31", "numerator": 1, "denominator": 30}])
+    assert [r["close"] for r in out] == [8.94, 9.05, 9.10, 8.80]
+
+
+def test_adjust_for_splits_unadjusted_forward_split_is_scaled_down():
+    adjust = _callable_or_fail("adjust_for_splits")
+    series = [{"date": "2026-03-02", "close": 100.0}, {"date": "2026-03-03", "close": 102.0},
+              {"date": "2026-03-04", "close": 51.0}, {"date": "2026-03-05", "close": 50.0}]
+    out = adjust(series, [{"date": "2026-03-04", "numerator": 2, "denominator": 1}])
+    assert [r["close"] for r in out] == [50.0, 51.0, 51.0, 50.0]
+
+
+def test_adjust_for_splits_multiple_splits_apply_in_order():
+    adjust = _callable_or_fail("adjust_for_splits")
+    # 1:8 then 1:9 (IPW's real pattern), both unadjusted in the raw series
+    series = [{"date": "2026-01-05", "close": 1.0}, {"date": "2026-02-02", "close": 8.0},
+              {"date": "2026-02-03", "close": 8.2}, {"date": "2026-03-02", "close": 72.0}]
+    out = adjust(series, [{"date": "2026-02-02", "numerator": 1, "denominator": 8},
+                          {"date": "2026-03-02", "numerator": 1, "denominator": 9}])
+    assert [round(r["close"], 2) for r in out] == [72.0, 72.0, 73.8, 72.0]
+
+
+def test_adjust_for_splits_no_events_is_identity():
+    adjust = _callable_or_fail("adjust_for_splits")
+    series = [{"date": "2026-01-05", "close": 1.0}, {"date": "2026-01-06", "close": 1.1}]
+    assert adjust(series, []) == series
+
+
+def test_parse_yahoo_chart_applies_split_events_from_payload():
+    parse_yahoo_chart = _callable_or_fail("parse_yahoo_chart")
+    payload = _payload_with_splits(
+        [("2026-07-29", 0.30), ("2026-07-30", 0.31), ("2026-07-31", 9.10), ("2026-08-03", 8.80)],
+        [("2026-07-31", 1, 30)],
+    )
+    out = parse_yahoo_chart(payload)
+    assert [r["close"] for r in out] == [9.0, 9.3, 9.10, 8.80]
+    assert [r["date"] for r in out] == ["2026-07-29", "2026-07-30", "2026-07-31", "2026-08-03"]
+
+
+def test_fetch_eod_requests_split_events_from_yahoo(tmp_path, monkeypatch):
+    fetch_eod = _callable_or_fail("fetch_eod")
+    seen = {}
+
+    def handler(req):
+        seen["url"] = str(req.url)
+        return httpx.Response(200, json=YAHOO_CHART_PAYLOAD)
+
+    transport, _calls = _make_transport({"query1.finance.yahoo.com": handler})
+    _call_or_fail(fetch_eod, "VST", range_days=365, transport=transport, cache_dir=tmp_path)
+    assert "events=split" in seen["url"], seen
