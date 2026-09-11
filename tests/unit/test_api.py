@@ -1927,3 +1927,42 @@ def test_refresh_mentions_once_swaps_rows_and_stamps_as_of(tmp_path, monkeypatch
     body = resp.json()
     assert body["rows"][0]["ticker"] == "NVDA"
     assert body["as_of"], "as_of must be stamped on a fresh build"
+
+
+# ==========================================================================
+# AMENDMENT — portfolio view with a populated mentions cache (2026-09-11):
+# app.state.mentions_cache is a LIST of rows, but portfolio_view called
+# .get("rows") on it. The suite never caught it because the test client
+# has no cache (None -> {} -> fine); prod crashed with AttributeError the
+# first time a brokerage was actually linked.
+# ==========================================================================
+
+
+def test_portfolio_view_works_with_populated_mentions_cache(tmp_path, monkeypatch):
+    import json as _json
+
+    import httpx as _httpx
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "ck-test-secret")
+    state = tmp_path / "snap.json"
+    state.write_text(_json.dumps({"user_id": "onrecord", "user_secret": "us-secret"}))
+    monkeypatch.setenv("ONRECORD_SNAPTRADE_STATE", str(state))
+
+    def handler(request):
+        if request.url.path.endswith("/accounts"):
+            return _httpx.Response(200, json=[{"id": "acct-1"}])
+        if "positions" in request.url.path:
+            return _httpx.Response(200, json=[
+                {"symbol": {"symbol": {"symbol": "NVDA"}, "type": {"description": "Equity"}},
+                 "units": 40, "price": 100.0, "currency": {"code": "USD"}}])
+        return _httpx.Response(404)
+
+    with _client(api_module, monkeypatch, index_dir) as client:
+        client.app.state.snaptrade_transport = _httpx.MockTransport(handler)
+        client.app.state.mentions_cache = [  # the real shape: a list of rows
+            {"ticker": "NVDA", "doc_id": "d1", "date": "2026-08-01", "return_pct": 5.0}]
+        resp = client.get("/api/portfolio")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["positions"][0]["record"]["n_mentions"] == 1
