@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 from datetime import UTC, date, datetime, timedelta
@@ -44,7 +45,7 @@ _FMP_URL_TEMPLATE = "https://financialmodelingprep.com/api/v3/historical-price-f
 # BRK-B). range=2y comfortably covers the UI's 365-day window; fetch_eod's
 # _trim_to_range still applies the caller's range_days.
 _YAHOO_URL_TEMPLATE = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-_YAHOO_PARAMS = {"range": "2y", "interval": "1d"}
+_YAHOO_PARAMS = {"range": "2y", "interval": "1d", "events": "split"}
 # Deliberately the MINIMAL browser UA: yahoo 429s a full spoofed Chrome UA
 # (browser-UA-without-browser-fingerprint reads as a bot) while accepting the
 # generic "Mozilla/5.0" (measured live 2026-08-13: chrome-UA -> 429,
@@ -250,6 +251,52 @@ def _trim_to_range(series: list[dict], range_days: int) -> list[dict]:
     ]
 
 
+def adjust_for_splits(series: list[dict], splits: list[dict]) -> list[dict]:
+    """Return a COPY of `series` in post-split terms.
+
+    Yahoo lags its own adjustments on microcaps: CSAI's 1:30 reverse split on
+    2026-07-31 left the mention-date close at the pre-split 0.30 for days while
+    post-split closes were ~5, so the anchored return read "+1816%" on a stock
+    that was down ~50% (found 2026-09-11). We detect the discontinuity
+    ourselves: at each split, the observed jump across the split date is
+    compared, in log space, to the split multiplier and to 1.0 — a jump that
+    looks like the multiplier means the series is unadjusted, so every
+    earlier close is scaled. An already-adjusted series (jump ~ 1.0) is left
+    alone, so this is safe to apply whether or not the provider caught up.
+
+    `splits` rows: {"date": "YYYY-MM-DD", "numerator": N, "denominator": D}
+    (yahoo's splitRatio "N:D"; pre-split closes x D/N == post-split terms).
+    """
+    out = [dict(row) for row in series]
+    if not out or not splits:
+        return out
+    for split in sorted(splits, key=lambda item: str(item.get("date", ""))):
+        try:
+            numerator = float(split.get("numerator") or 0)
+            denominator = float(split.get("denominator") or 0)
+            split_date = str(split["date"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if numerator <= 0 or denominator <= 0:
+            continue
+        multiplier = denominator / numerator
+        if abs(multiplier - 1.0) < 1e-9:
+            continue
+        pre = [row for row in out if row["date"] < split_date]
+        post = [row for row in out if row["date"] >= split_date]
+        if not pre or not post:
+            continue
+        c_pre, c_post = float(pre[-1]["close"]), float(post[0]["close"])
+        if c_pre <= 0 or c_post <= 0:
+            continue
+        observed = math.log(c_post / c_pre)
+        looks_unadjusted = abs(observed - math.log(multiplier)) < abs(observed)
+        if looks_unadjusted:
+            for row in pre:
+                row["close"] = round(float(row["close"]) * multiplier, 6)
+    return out
+
+
 def parse_yahoo_chart(payload) -> list[dict]:
     """Parse one Yahoo v8 chart payload into the pinned ascending
     `[{"date", "close"}]` shape (same as `parse_stooq_csv`). Timestamps are
@@ -276,7 +323,24 @@ def parse_yahoo_chart(payload) -> list[dict]:
         except (TypeError, ValueError, OSError, OverflowError):
             continue
     series.sort(key=lambda row: row["date"])
-    return series
+
+    splits: list[dict] = []
+    raw_splits = (result.get("events") or {}).get("splits") or {}
+    if isinstance(raw_splits, dict):
+        for event in raw_splits.values():
+            try:
+                splits.append(
+                    {
+                        "date": datetime.fromtimestamp(int(event["date"]), UTC).strftime(
+                            "%Y-%m-%d"
+                        ),
+                        "numerator": event["numerator"],
+                        "denominator": event["denominator"],
+                    }
+                )
+            except (KeyError, TypeError, ValueError, OSError, OverflowError):
+                continue
+    return adjust_for_splits(series, splits) if splits else series
 
 
 def _try_yahoo(client: httpx.Client, ticker: str) -> list[dict] | None:

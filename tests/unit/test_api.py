@@ -1894,3 +1894,36 @@ def test_ready_200_with_doc_count_when_loaded(tmp_path, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ready" and body["documents"] == len(AC1_DOCS)
+
+
+# ==========================================================================
+# AMENDMENT — mentions staleness (2026-09-11): the leaderboard was built
+# once at boot and never again; prod served month-old "latest" closes with
+# as_of: None. The build is now a function that stamps as_of, an env-gated
+# daemon re-runs it (ONRECORD_MENTIONS_REFRESH_MINUTES; unset -> no thread),
+# and the endpoint reports as_of so staleness is visible.
+# ==========================================================================
+
+
+def test_mentions_refresh_disabled_by_default(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    monkeypatch.delenv("ONRECORD_MENTIONS_REFRESH_MINUTES", raising=False)
+    with _client(api_module, monkeypatch, index_dir) as client:
+        assert getattr(client.app.state, "mentions_refresh_thread", None) is None
+
+
+def test_refresh_mentions_once_swaps_rows_and_stamps_as_of(tmp_path, monkeypatch):
+    api_module = _api_module()
+    index_dir = _build_index(tmp_path, AC1_DOCS)
+    rows = [{"ticker": "NVDA", "doc_id": "d1", "date": "2026-08-01", "deep_link": "x",
+             "venue_type": "sworn", "source_type": "filing", "snippet": "s",
+             "entry_close": 100.0, "latest_close": 110.0, "return_pct": 10.0,
+             "peak_pct": 12.0, "co_mentions": 0}]
+    with _client(api_module, monkeypatch, index_dir) as client:
+        api_module._refresh_mentions_once(client.app, lambda: rows)
+        resp = client.get("/api/mentions", params={"window": 365, "k": 5})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rows"][0]["ticker"] == "NVDA"
+    assert body["as_of"], "as_of must be stamped on a fresh build"

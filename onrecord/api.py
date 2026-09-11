@@ -656,30 +656,21 @@ def _boot(app: FastAPI) -> None:
     # series; the frozen suite stays zero-network with it unset. Prod sets
     # it and pays the cost inside the async boot thread.
     app.state.mentions_cache = None
+    app.state.mentions_as_of = None
+    app.state.mentions_refresh_thread = None
     if os.environ.get("ONRECORD_MENTIONS_BOOT", "").strip() in ("1", "true", "yes"):
-        try:
-            idx = app.state.index
-            if idx is not None:
-                since = (datetime.now(UTC).date() - timedelta(days=365)).isoformat()
-                docs = [idx.get_doc(i) for i in range(idx.doc_count())]
-                mention_docs = [d for d in docs if d.ticker and d.date and d.date >= since]
-                tickers = sorted({d.ticker for d in mention_docs})
-                cache_dir = os.environ.get("ONRECORD_PRICES_CACHE") or None
-                series_by_ticker = {}
-                for tk in tickers:
-                    series = prices_fetch_eod(tk, range_days=400, cache_dir=cache_dir) \
-                        if cache_dir else prices_fetch_eod(tk, range_days=400)
-                    if len(series) > 1:
-                        series_by_ticker[tk] = series
-                app.state.mentions_cache = mentions_mod.mention_rows(
-                    mention_docs, series_by_ticker, since=since,
-                    now_date=datetime.now(UTC).date().isoformat(),
-                )
-                logger.info("mentions cache: %d rows over %d tickers",
-                            len(app.state.mentions_cache), len(series_by_ticker))
-        except Exception:
-            logger.exception("mentions cache build failed; endpoint degrades to 503")
-            app.state.mentions_cache = None
+        _refresh_mentions_once(app, lambda: _build_mentions_cache(app))
+        # Prices are daily-close grain, so once a day keeps "latest" honest
+        # (prod served a month-old board with as_of None before 2026-09-11).
+        _mentions_minutes = os.environ.get("ONRECORD_MENTIONS_REFRESH_MINUTES", "").strip()
+        if _mentions_minutes.isdigit() and int(_mentions_minutes) > 0:
+            import threading as _threading
+
+            app.state.mentions_refresh_thread = _threading.Thread(
+                target=_mentions_refresh_loop, args=(app, int(_mentions_minutes)),
+                daemon=True,
+            )
+            app.state.mentions_refresh_thread.start()
 
     dodge_floor_raw = os.environ.get("ONRECORD_DODGE_MIN_DOCS", "").strip()
     app.state.dodge_min_docs = int(dodge_floor_raw) if dodge_floor_raw.isdigit() else 200
@@ -1466,7 +1457,7 @@ def mentions_endpoint(  # NOT `async` -- serves the startup-computed cache
     cutoff = (datetime.now(UTC).date() - timedelta(days=window)).isoformat()
     windowed = [r for r in rows if r["date"] >= cutoff]
     return {"rows": windowed[:k], "total": len(windowed), "window_days": window,
-            "grain": "daily-close"}
+            "grain": "daily-close", "as_of": getattr(app.state, "mentions_as_of", None)}
 
 
 @app.get("/api/promises")
@@ -1520,6 +1511,65 @@ def promised_endpoint(  # NOT `async` -- serves boot-precomputed rollups
         "rollups": selected,
         "n_quantified_total": sum(b["n_quantified"] for b in selected.values()),
     }
+
+
+def _build_mentions_cache(application) -> list[dict] | None:
+    """T-033 board: price-anchored mentions, restricted to the curated
+    registry universe (the leaderboard must be a subset of what the Tickers
+    view shows), split-adjusted via prices.fetch_eod. Returns None on any
+    failure so the endpoint degrades to its 503."""
+    from onrecord.registry import load as _load_registry
+
+    try:
+        idx = application.state.index
+        if idx is None:
+            return None
+        universe = {t["symbol"] for t in _load_registry()["tickers"]}
+        since = (datetime.now(UTC).date() - timedelta(days=365)).isoformat()
+        docs = [idx.get_doc(i) for i in range(idx.doc_count())]
+        mention_docs = mentions_mod.filter_to_universe(
+            [d for d in docs if d.ticker and d.date and d.date >= since], universe
+        )
+        tickers = sorted({d.ticker for d in mention_docs})
+        cache_dir = os.environ.get("ONRECORD_PRICES_CACHE") or None
+        series_by_ticker = {}
+        for tk in tickers:
+            series = prices_fetch_eod(tk, range_days=400, cache_dir=cache_dir) \
+                if cache_dir else prices_fetch_eod(tk, range_days=400)
+            if len(series) > 1:
+                series_by_ticker[tk] = series
+        rows = mentions_mod.mention_rows(
+            mention_docs, series_by_ticker, since=since,
+            now_date=datetime.now(UTC).date().isoformat(),
+        )
+        logger.info("mentions cache: %d rows over %d tickers (universe %d)",
+                    len(rows), len(series_by_ticker), len(universe))
+        return rows
+    except Exception:
+        logger.exception("mentions cache build failed; endpoint degrades to 503")
+        return None
+
+
+def _refresh_mentions_once(application, build_fn) -> None:
+    """Swap the board from a builder callable and stamp as_of. A failed
+    build keeps the previous rows serving (stale-with-as_of beats empty)."""
+    try:
+        rows = build_fn()
+    except Exception:
+        logger.warning("mentions refresh failed; keeping previous rows", exc_info=True)
+        return
+    if rows is None:
+        return
+    application.state.mentions_cache = rows
+    application.state.mentions_as_of = datetime.now(UTC).isoformat(timespec="minutes")
+
+
+def _mentions_refresh_loop(application, interval_minutes: int) -> None:
+    import time as _time
+
+    while True:
+        _time.sleep(max(interval_minutes, 30) * 60)
+        _refresh_mentions_once(application, lambda: _build_mentions_cache(application))
 
 
 def _refresh_live_once(application, track_fn) -> None:

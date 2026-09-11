@@ -94,3 +94,26 @@ def test_mention_rows_window_and_missing_series_skips():
 
 def test_mention_rows_empty():
     assert _attr("mention_rows")([], SERIES, since="2026-01-01", now_date="2026-01-08") == []
+
+
+# ==========================================================================
+# AMENDMENT — universe filter (2026-09-11): corpus-v3's full-text filing
+# discovery attributed docs to ~190 tickers outside the curated 102-ticker
+# registry. Those microcaps then led the leaderboard (CSAI, IPW, PALX...)
+# while being absent from the Tickers view, and they are exactly where
+# corporate-action noise concentrates. The leaderboard must be a subset of
+# the universe the product shows.
+# ==========================================================================
+
+
+def test_filter_to_universe_drops_tickers_outside_it():
+    from onrecord.analysis.mentions import filter_to_universe
+    docs = [_doc(1, "NVDA", "2026-07-01"), _doc(2, "CSAI", "2026-07-02"),
+            _doc(3, "VST", "2026-07-03"), _doc(4, None, "2026-07-04")]
+    kept = filter_to_universe(docs, {"NVDA", "VST"})
+    assert [d.ticker for d in kept] == ["NVDA", "VST"]
+
+
+def test_filter_to_universe_empty_universe_keeps_nothing():
+    from onrecord.analysis.mentions import filter_to_universe
+    assert filter_to_universe([_doc(1, "NVDA", "2026-07-01")], set()) == []
