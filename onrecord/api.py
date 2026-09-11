@@ -1693,7 +1693,7 @@ def portfolio_view():  # NOT `async` -- threadpool; strictly factual join
         t: conduct_mod.net_flow(form4_rows, t, since) for t in held
     } if form4_rows else {}
     promised = getattr(app.state, "promised_rollups", {}).get("ticker", {})
-    mention_rows = (getattr(app.state, "mentions_cache", {}) or {}).get("rows", [])
+    mention_rows = getattr(app.state, "mentions_cache", None) or []  # a list of rows
     crossed = _portfolio.cross_with_record(
         positions,
         getattr(app.state, "events8k", []),
