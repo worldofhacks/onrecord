@@ -1,77 +1,84 @@
 {
-  "checked_at": "2026-08-16T07:31+00:00",
+  "checked_at": "2026-09-26T14:50+00:00",
   "jurisdictions_resolved": 51,
   "live": [],
   "upcoming": [
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "CGDCaENUb8c",
-      "title": "Special Meeting: University Impact District Review Board (08/27/26)",
+      "video_id": "kF9QWsSRpdU",
+      "title": "Special Meeting: East Franklinton Review Board (10/28/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=CGDCaENUb8c"
+      "url": "https://www.youtube.com/watch?v=kF9QWsSRpdU"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "WlrMxVxQ0us",
-      "title": "Special Meeting: East Franklinton Review Board (08/26/26)",
+      "video_id": "t2bDjlBo5kA",
+      "title": "Special Meeting: Board of Zoning Adjustment (10/27/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=WlrMxVxQ0us"
+      "url": "https://www.youtube.com/watch?v=t2bDjlBo5kA"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "JBRBCujXzD8",
-      "title": "Special Meeting: Board of Zoning Adjustment (08/25/26)",
+      "video_id": "PULCTYafU4g",
+      "title": "Special Meeting: Downtown Commission (10/27/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=JBRBCujXzD8"
+      "url": "https://www.youtube.com/watch?v=PULCTYafU4g"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "sZssvd87Ric",
-      "title": "Special Meeting: Downtown Commission (08/25/26)",
+      "video_id": "4vzGeZEMwrA",
+      "title": "Special Meeting: University Impact District Review Board (10/22/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=sZssvd87Ric"
+      "url": "https://www.youtube.com/watch?v=4vzGeZEMwrA"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "wc6ls_VjMIk",
-      "title": "Special Meeting: Rocky Fork-Blacklick Accord Advisory Panel (08/20/26)",
+      "video_id": "ciu-mK4oWk8",
+      "title": "Special Meeting: Art Commission (10/21/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=wc6ls_VjMIk"
+      "url": "https://www.youtube.com/watch?v=ciu-mK4oWk8"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "h8TyFnJhWHU",
-      "title": "Special Meeting: Historic Resources Commission (08/20/26)",
+      "video_id": "ShUQzNKxx6k",
+      "title": "Special Meeting: Skilled Trades Review Board (10/21/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=h8TyFnJhWHU"
+      "url": "https://www.youtube.com/watch?v=ShUQzNKxx6k"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "iw5XKKVHQco",
-      "title": "Special Meeting: Art Commission (08/19/26)",
+      "video_id": "b9QSgZrTG9g",
+      "title": "Special Meeting: Graphics Commission (10/20/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=iw5XKKVHQco"
+      "url": "https://www.youtube.com/watch?v=b9QSgZrTG9g"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "vL-vS0BHHHc",
-      "title": "Special Meeting: Skilled Trades Review Board (08/19/26)",
+      "video_id": "nipiEYb-HD4",
+      "title": "Special Meeting: Building Commission (10/20/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=vL-vS0BHHHc"
+      "url": "https://www.youtube.com/watch?v=nipiEYb-HD4"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "0sVNe4nq3-Q",
-      "title": "Special Meeting: Graphics Commission (08/18/26)",
+      "video_id": "Zs9o6_Mzkko",
+      "title": "Special Meeting: Historic Resources Commission (10/15/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=0sVNe4nq3-Q"
+      "url": "https://www.youtube.com/watch?v=Zs9o6_Mzkko"
     },
     {
       "jurisdiction": "Columbus, OH",
-      "video_id": "sUBtLwHfoTg",
-      "title": "Special Meeting: Building Commission (08/18/26)",
+      "video_id": "Lgu5JZqiYtw",
+      "title": "Special Meeting: Rocky Fork-Blacklick Accord Advisory Panel (10/15/2026)",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=sUBtLwHfoTg"
+      "url": "https://www.youtube.com/watch?v=Lgu5JZqiYtw"
+    },
+    {
+      "jurisdiction": "Goodyear, AZ",
+      "video_id": "EUKF3XYmXuo",
+      "title": "City Council Regular Meeting - 09/28/2026",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=EUKF3XYmXuo"
     },
     {
       "jurisdiction": "Louisa County, VA",
@@ -79,6 +86,20 @@
       "title": "Board of Supervisors Regular Meeting, December 21, 2026",
       "status": "is_upcoming",
       "url": "https://www.youtube.com/watch?v=1SOhf3mFeEY"
+    },
+    {
+      "jurisdiction": "Louisa County, VA",
+      "video_id": "pe4UvseYfRw",
+      "title": "Planning Commission Meeting, December 10, 2026",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=pe4UvseYfRw"
+    },
+    {
+      "jurisdiction": "Louisa County, VA",
+      "video_id": "e94Qlqj4yJM",
+      "title": "Planning Commission Worksession, December 10, 2026",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=e94Qlqj4yJM"
     },
     {
       "jurisdiction": "Louisa County, VA",
@@ -96,6 +117,20 @@
     },
     {
       "jurisdiction": "Louisa County, VA",
+      "video_id": "GAdFyfnvZsU",
+      "title": "Planning Commission Meeting, November 12, 2026",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=GAdFyfnvZsU"
+    },
+    {
+      "jurisdiction": "Louisa County, VA",
+      "video_id": "DMRBZR34LXY",
+      "title": "Planning Commission Worksession, November 12, 2026",
+      "status": "is_upcoming",
+      "url": "https://www.youtube.com/watch?v=DMRBZR34LXY"
+    },
+    {
+      "jurisdiction": "Louisa County, VA",
       "video_id": "_WmG--jz5sk",
       "title": "Board of Supervisors Regular Meeting, November 2, 2026",
       "status": "is_upcoming",
@@ -110,45 +145,31 @@
     },
     {
       "jurisdiction": "Louisa County, VA",
-      "video_id": "eWCZGQ_ft4s",
-      "title": "Board of Supervisors Regular Meeting, October 5, 2026",
+      "video_id": "q2TEV98gI2k",
+      "title": "Planning Commission Meeting, October 8, 2026",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=eWCZGQ_ft4s"
-    },
-    {
-      "jurisdiction": "Louisa County, VA",
-      "video_id": "3ORq-8_G-lY",
-      "title": "Board of Supervisors Regular Meeting, September 21, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=3ORq-8_G-lY"
-    },
-    {
-      "jurisdiction": "Louisa County, VA",
-      "video_id": "IsWOHWcNkDw",
-      "title": "Board of Supervisors Regular Meeting, September 8, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=IsWOHWcNkDw"
+      "url": "https://www.youtube.com/watch?v=q2TEV98gI2k"
     },
     {
       "jurisdiction": "Madison County, MS",
-      "video_id": "HA8GjkHKO_w",
-      "title": "September 14, 2026 Election Commission Meeting",
+      "video_id": "Q0XlGg8EUlI",
+      "title": "October 15, 2026 Planning and Zoning Meeting",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=HA8GjkHKO_w"
+      "url": "https://www.youtube.com/watch?v=Q0XlGg8EUlI"
     },
     {
       "jurisdiction": "Madison County, MS",
-      "video_id": "GvrjGf3N8NI",
-      "title": "September 10, 2026 Planning and Zoning Meeting",
+      "video_id": "bdO79nBCl6w",
+      "title": "October 14, 2026 Election Commission Meeting",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=GvrjGf3N8NI"
+      "url": "https://www.youtube.com/watch?v=bdO79nBCl6w"
     },
     {
       "jurisdiction": "Madison County, MS",
-      "video_id": "4ICNffBaHj0",
-      "title": "August 17, 2026 Board of Supervisors Meeting",
+      "video_id": "Ob8rPFqYIg8",
+      "title": "September 30, 2026 Board of Supervisors Meeting",
       "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=4ICNffBaHj0"
+      "url": "https://www.youtube.com/watch?v=Ob8rPFqYIg8"
     },
     {
       "jurisdiction": "Maricopa County, AZ",
@@ -156,41 +177,6 @@
       "title": "Stadium District Board Meeting October 2, 2026",
       "status": "is_upcoming",
       "url": "https://www.youtube.com/watch?v=16nrGu1oiyg"
-    },
-    {
-      "jurisdiction": "Maricopa County, AZ",
-      "video_id": "_hsDhnFAhEM",
-      "title": "Stadium District Board Meeting September 18, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=_hsDhnFAhEM"
-    },
-    {
-      "jurisdiction": "Maricopa County, AZ",
-      "video_id": "5dX9xuIyDNA",
-      "title": "Stadium District Board Meeting September 4, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=5dX9xuIyDNA"
-    },
-    {
-      "jurisdiction": "Maricopa County, AZ",
-      "video_id": "XdSqytirWwM",
-      "title": "2026-08-17 Stadium District Board Meeting",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=XdSqytirWwM"
-    },
-    {
-      "jurisdiction": "Memphis, TN",
-      "video_id": "PpsrhJP-7Sw",
-      "title": "Memphis City Council: August 18, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=PpsrhJP-7Sw"
-    },
-    {
-      "jurisdiction": "Memphis, TN",
-      "video_id": "jdkdnHtoFaQ",
-      "title": "Memphis City Council Committee Meetings: August 18, 2026",
-      "status": "is_upcoming",
-      "url": "https://www.youtube.com/watch?v=jdkdnHtoFaQ"
     }
   ],
   "channels": {
